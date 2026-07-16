@@ -1,0 +1,30 @@
+import { createHash } from 'node:crypto';
+import type { TestTask } from './types.ts';
+
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => [key, canonicalize(item)]));
+  return value;
+}
+
+/** Hash only the user-reviewed execution contract, never mutable run metadata. */
+export function testPlanHash(task: TestTask): string {
+  const contract = {
+    id: task.metadata.id, moduleId: task.metadata.moduleId, name: task.metadata.name,
+    description: task.description, objectives: task.objectives, scope: task.scope, preconditions: task.preconditions, memoryRefs: task.memoryRefs,
+    scenarios: task.scenarios.map(scenario => ({ id: scenario.id, title: scenario.title, input: scenario.input, preconditions: scenario.preconditions, intent: scenario.intent, expected: scenario.expected, evidence: scenario.evidence, cleanup: scenario.cleanup, risk: scenario.risk, execution: scenario.execution, visualAssertions: scenario.visualAssertions })),
+    requiredSkills: task.requiredSkills, capabilities: task.capabilities, safety: task.safety, evidence: task.evidence, regression: task.regression,
+  };
+  return createHash('sha256').update(JSON.stringify(canonicalize(contract))).digest('hex');
+}
+
+export function approvalIsCurrent(task: TestTask): boolean {
+  return Boolean(task.metadata.approval?.planHash && task.metadata.approval.planHash === testPlanHash(task));
+}
+
+export function invalidateApproval(task: TestTask): boolean {
+  if (!task.metadata.approval) return false;
+  delete task.metadata.approval;
+  task.metadata.status = 'needs_review';
+  return true;
+}

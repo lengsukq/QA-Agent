@@ -1,0 +1,20 @@
+{
+  "name": "qa-agent-skill",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-first QA agent skill MVP",
+  "bin": {
+    "qa-agent": "./bin/qa-agent.mjs"
+  },
+  "scripts": {
+    "qa-agent": "node --experimental-strip-types src/cli.ts",
+    "test": "node --experimental-strip-types --test tests/*.test.ts"
+  },
+  "engines": {
+    "node": ">=22.6"
+  },
+  "dependencies": {
+    "playwright": "1.61.1"
+  }
+}

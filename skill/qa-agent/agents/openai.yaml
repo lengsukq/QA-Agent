@@ -1,0 +1,4 @@
+interface:
+  display_name: "QA Agent"
+  short_description: "Project-aware QA planning and safe execution"
+  default_prompt: "Use $qa-agent to automatically execute and report a safe project QA run."
