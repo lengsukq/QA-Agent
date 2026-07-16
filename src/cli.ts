@@ -8,7 +8,7 @@ import { createTaskSkeleton, planModule, taskPlan } from './planning.ts';
 import { createModule, findProjectRoot, initializeProject, modulePath, qaPath, readModule, readTask, requireProjectRoot, saveTask } from './project.ts';
 import { readProject } from './project.ts';
 import { assertSafeId, now, readJson, writeJsonAtomic } from './store.ts';
-import type { ProjectMemory, RunStatus } from './types.ts';
+import type { Locator, PermissionStatus, ProjectMemory, RunStatus } from './types.ts';
 import { validateProject, validateSkill } from './validation.ts';
 import { createMemoryCandidate, reviewMemory } from './memory.ts';
 import { diagnoseSource, searchSource } from './source-verifier.ts';
@@ -26,7 +26,7 @@ Commands:
   install-host <codex|claude|cursor|opencode|copilot|gemini|agents> [--scope project|user] [--project PROJECT_DIRECTORY] [--path SKILLS_DIRECTORY] [--force]
   doctor | validate | index rebuild
   capability list | capability declare NAME | capability remove NAME
-  mcp list | mcp add ID --capabilities CAPABILITY[,CAPABILITY...] [--readonly] | mcp activate ID | mcp doctor
+  mcp list | mcp add ID --capabilities CAPABILITY[,CAPABILITY...] [--readonly] [--version VERSION] | mcp activate ID [--permissions verified|missing|unknown] | mcp doctor
   mobile doctor --platform android|ios
   context module MODULE
   module list | module create ID --name NAME [--description TEXT] [--platforms web,android,ios] | module update ID [--name NAME] [--description TEXT] [--risk LEVEL] | module archive ID | module plan ID | module coverage ID
@@ -34,10 +34,10 @@ Commands:
   memory list | memory search TEXT | memory add ID --module MODULE --title TEXT --content TEXT | memory review ID --module MODULE --approve|--reject
   adapter playwright --base-url URL
   source search TEXT | source diagnose --module MODULE --query TEXT
-  run start TASK --module MODULE [--environment ENV] [--platform PLATFORM] [--role ROLE] [--operation OPERATION_ID]
-  run replay TASK --module MODULE --operation OPERATION_ID [--environment ENV] [--platform PLATFORM] [--role ROLE]
-  run step RUN --action TEXT --detail TEXT --screenshot PATH [--status passed|failed|paused|blocked|adapted] [--visual-inspection performed|not-required|skipped] [--operation-step STEP]
-  run recover RUN --action TEXT --reason TEXT --detail TEXT --outcome continued|blocked|paused|failed
+  run start TASK --module MODULE [--scenario SCENARIO] [--environment ENV] [--platform PLATFORM] [--role ROLE] [--device DEVICE] [--device-model MODEL] [--os-version VERSION] [--app-version VERSION] [--web-build BUILD] [--test-data-fingerprint FINGERPRINT] [--operation OPERATION_ID]
+  run replay TASK --module MODULE --operation OPERATION_ID [--environment ENV] [--platform PLATFORM] [--role ROLE] [--scenario SCENARIO] [--device DEVICE] [--device-model MODEL] [--os-version VERSION] [--app-version VERSION] [--web-build BUILD] [--test-data-fingerprint FINGERPRINT]
+  run step RUN --action TEXT --detail TEXT --screenshot PATH [--operation-action launch|navigate|click|input|fill|swipe|back|wait|assert|screenshot|reset|restart-app] [--safety-action ACTION] [--scenario SCENARIO] [--status passed|failed|paused|blocked|adapted] [--visual-inspection performed|not-required|skipped] [--operation-step STEP] [--locator-strategy STRATEGY] [--locator-value VALUE] [--actual-locator-strategy STRATEGY] [--actual-locator-value VALUE] [--adaptation TEXT]
+  run recover RUN --action wait|refresh|back|restart-app|reset-sandbox-data|reconnect-mcp|fallback-locator|resume-checkpoint --reason TEXT --detail TEXT --outcome continued|blocked|paused|failed [--failed-step STEP]
   run observe RUN --scenario ID --assertion ID --expected TEXT --actual TEXT --status passed|failed|paused|blocked [--screenshot PATH]
   run complete RUN | run show RUN | run report RUN | run retry RUN
   skill list | skill validate
@@ -47,6 +47,12 @@ function flag(name: string): string | undefined { const position = args.indexOf(
 function requiredFlag(name: string): string { const value = flag(name); if (!value || value.startsWith('--')) throw new Error(`${name} is required.`); return value; }
 function listFlag(name: string): string[] | undefined { const value = flag(name); return value ? [...new Set(value.split(',').map(item => item.trim()).filter(Boolean))] : undefined; }
 function output(value: unknown): void { console.log(typeof value === 'string' ? value : JSON.stringify(value, null, 2)); }
+function locatorFromFlags(prefix = ''): Locator | undefined {
+  const strategy = flag(`--${prefix}locator-strategy`); const value = flag(`--${prefix}locator-value`);
+  if (!strategy && !value) return undefined;
+  if (!strategy) throw new Error(`--${prefix}locator-strategy is required when a locator value is supplied.`);
+  return { strategy: strategy as Locator['strategy'], value };
+}
 
 function addMemory(root: string, id: string, moduleId: string, title: string, content: string): ProjectMemory {
   assertSafeId(id, 'memory id');
@@ -99,19 +105,20 @@ async function main(): Promise<void> {
   }
   if (group === 'mcp') {
     const projectRoot = root(); const path = qaPath(projectRoot, 'mcp.json');
-    const config = readJson<{ version: number; connections: Array<{ id: string; capabilities: string[]; scope: string; status: string; readOnly: boolean }> }>(path);
+    const config = readJson<{ version: number; connections: Array<{ id: string; capabilities: string[]; scope: string; status: string; readOnly: boolean; permissionStatus?: PermissionStatus; version?: string }> }>(path);
     if (action === 'list') { output(config.connections); return; }
     if (action === 'doctor') {
-      const checks = config.connections.map(connection => ({ id: connection.id, status: connection.status, healthy: connection.status === 'connected' && connection.capabilities.length > 0, issue: connection.status !== 'connected' ? 'not connected' : connection.capabilities.length ? undefined : 'no capabilities declared' }));
+      const checks = config.connections.map(connection => ({ id: connection.id, status: connection.status, permissionStatus: connection.permissionStatus ?? 'unknown', healthy: connection.status === 'connected' && connection.capabilities.length > 0 && connection.permissionStatus === 'verified', issue: connection.status !== 'connected' ? 'not connected' : !connection.capabilities.length ? 'no capabilities declared' : connection.permissionStatus !== 'verified' ? 'macOS/MCP permissions are not verified' : undefined }));
       output({ healthy: checks.every(check => check.healthy), connections: checks }); return;
     }
     if (!subject) throw new Error('MCP id is required.');
     if (action === 'add') {
       assertSafeId(subject, 'MCP id'); if (config.connections.some(connection => connection.id === subject)) throw new Error(`MCP ${subject} already exists.`);
       const capabilities = requiredFlag('--capabilities').split(',').map(item => item.trim()).filter(Boolean); if (!capabilities.length) throw new Error('At least one capability is required.');
-      config.connections.push({ id: subject, capabilities, scope: 'project', status: 'configured', readOnly: args.includes('--readonly') });
+      config.connections.push({ id: subject, capabilities, scope: 'project', status: 'configured', readOnly: args.includes('--readonly'), permissionStatus: 'unknown', version: flag('--version') });
     } else if (action === 'activate') {
       const connection = config.connections.find(item => item.id === subject); if (!connection) throw new Error(`MCP ${subject} was not found.`); connection.status = 'connected';
+      const permissions = flag('--permissions'); if (permissions && !['verified', 'missing', 'unknown'].includes(permissions)) throw new Error('--permissions must be verified, missing, or unknown.'); if (permissions) connection.permissionStatus = permissions as PermissionStatus;
     } else throw new Error('Unsupported MCP command.');
     writeJsonAtomic(path, config); output(config); return;
   }
@@ -203,7 +210,7 @@ async function main(): Promise<void> {
     if (action === 'archive') {
       task.metadata.status = 'archived'; task.metadata.version += 1; task.updatedAt = now(); saveTask(projectRoot, task); rebuildIndexes(projectRoot); output(task); return;
     }
-    if (action === 'run') { const run = await executeTask(projectRoot, task, { environment: flag('--environment'), platform: flag('--platform'), role: flag('--role') }); rebuildIndexes(projectRoot); output(run); return; }
+    if (action === 'run') { const run = await executeTask(projectRoot, task, { environment: flag('--environment'), platform: flag('--platform'), role: flag('--role'), scenarioId: flag('--scenario'), device: flag('--device'), deviceModel: flag('--device-model'), osVersion: flag('--os-version'), appVersion: flag('--app-version'), webBuild: flag('--web-build'), testDataFingerprint: flag('--test-data-fingerprint') }); rebuildIndexes(projectRoot); output(run); return; }
   }
   if (group === 'memory') {
     const projectRoot = root();
@@ -236,27 +243,27 @@ async function main(): Promise<void> {
     if (!subject) throw new Error('run id or task id is required.');
     if (action === 'replay') {
       const task = readTask(projectRoot, requiredFlag('--module'), subject);
-      const started = beginAgentGuidedRun(projectRoot, task, { environment: flag('--environment'), platform: flag('--platform'), role: flag('--role'), operationId: requiredFlag('--operation'), device: flag('--device'), appVersion: flag('--app-version') });
+      const started = beginAgentGuidedRun(projectRoot, task, { environment: flag('--environment'), platform: flag('--platform'), role: flag('--role'), scenarioId: flag('--scenario'), operationId: requiredFlag('--operation'), device: flag('--device'), deviceModel: flag('--device-model'), osVersion: flag('--os-version'), appVersion: flag('--app-version'), webBuild: flag('--web-build'), testDataFingerprint: flag('--test-data-fingerprint') });
       rebuildIndexes(projectRoot); output(started); return;
     }
     if (action === 'start') {
       const task = readTask(projectRoot, requiredFlag('--module'), subject);
-      const started = beginAgentGuidedRun(projectRoot, task, { environment: flag('--environment'), platform: flag('--platform'), role: flag('--role'), operationId: flag('--operation'), device: flag('--device'), appVersion: flag('--app-version') });
+      const started = beginAgentGuidedRun(projectRoot, task, { environment: flag('--environment'), platform: flag('--platform'), role: flag('--role'), scenarioId: flag('--scenario'), operationId: flag('--operation'), device: flag('--device'), deviceModel: flag('--device-model'), osVersion: flag('--os-version'), appVersion: flag('--app-version'), webBuild: flag('--web-build'), testDataFingerprint: flag('--test-data-fingerprint') });
       rebuildIndexes(projectRoot); output(started); return;
     }
     const run = readJson(qaPath(projectRoot, 'runs', `${subject}.json`));
     if (action === 'show') return output(run);
     if (action === 'report') return output(qaPath(projectRoot, 'reports', `${subject}.md`));
     if (action === 'step') {
-      const updated = recordAgentStep(projectRoot, subject, { action: requiredFlag('--action'), detail: requiredFlag('--detail'), screenshotPath: requiredFlag('--screenshot'), status: (flag('--status') as RunStatus | undefined) ?? 'passed', visualInspection: (flag('--visual-inspection') as 'performed' | 'not-required' | 'not-applicable' | 'skipped' | undefined) ?? 'not-required', operationStepId: flag('--operation-step') });
+      const updated = recordAgentStep(projectRoot, subject, { action: requiredFlag('--action'), operationAction: flag('--operation-action') as 'launch' | 'navigate' | 'click' | 'input' | 'fill' | 'swipe' | 'back' | 'wait' | 'assert' | 'screenshot' | 'reset' | 'restart-app' | undefined, safetyAction: flag('--safety-action'), detail: requiredFlag('--detail'), screenshotPath: requiredFlag('--screenshot'), status: (flag('--status') as RunStatus | undefined) ?? 'passed', visualInspection: (flag('--visual-inspection') as 'performed' | 'not-required' | 'not-applicable' | 'skipped' | undefined) ?? 'not-required', operationStepId: flag('--operation-step'), scenarioId: flag('--scenario'), locator: locatorFromFlags(), actualLocator: locatorFromFlags('actual-'), adaptation: flag('--adaptation') });
       output(updated); return;
     }
     if (action === 'recover') {
-      const updated = recordRecoveryAttempt(projectRoot, subject, { action: requiredFlag('--action'), reason: requiredFlag('--reason'), detail: requiredFlag('--detail'), outcome: requiredFlag('--outcome') as 'continued' | 'blocked' | 'paused' | 'failed' });
+      const updated = recordRecoveryAttempt(projectRoot, subject, { action: requiredFlag('--action'), reason: requiredFlag('--reason'), detail: requiredFlag('--detail'), outcome: requiredFlag('--outcome') as 'continued' | 'blocked' | 'paused' | 'failed', failedStepId: flag('--failed-step') });
       output(updated); return;
     }
     if (action === 'observe') {
-      const updated = recordVisualFinding(projectRoot, subject, { scenarioId: requiredFlag('--scenario'), assertionId: requiredFlag('--assertion'), expected: requiredFlag('--expected'), actual: requiredFlag('--actual'), status: requiredFlag('--status') as RunStatus, screenshotPath: flag('--screenshot') });
+      const updated = recordVisualFinding(projectRoot, subject, { scenarioId: requiredFlag('--scenario'), assertionId: requiredFlag('--assertion'), expected: requiredFlag('--expected'), actual: requiredFlag('--actual'), status: requiredFlag('--status') as RunStatus, screenshotPath: flag('--screenshot'), inspectionProvider: flag('--inspection-provider') });
       output(updated); return;
     }
     if (action === 'complete') {

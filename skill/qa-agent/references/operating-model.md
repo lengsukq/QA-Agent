@@ -40,11 +40,11 @@ Do not call a tool merely because a task says it might be useful. Use only the l
 
 ## Fast regression replay
 
-Replay is allowed only when the Task approval and plan hash are current, the Operation JSON is active and derived from that hash, the platform/environment/role/device/app version and test data are compatible, and required MCP capabilities plus macOS permissions have been validated. Load the Task business logic and expected results, check preconditions, then execute the Operation JSON in order. Replay skips rediscovery, not business assertions.
+Replay uses the `qa-agent/v2` contract and is allowed only when the Task approval and plan hash are current, the Scenario-specific OperationPlan is active and derived from that hash, the platform/environment/role/device/app version and test-data fingerprint are compatible, and required MCP capabilities plus macOS permissions are `verified`. Load the Task business logic and expected results, check preconditions, then execute the structured OperationPlan steps in order. Replay skips rediscovery, not business assertions.
 
 After every real UI action, capture a screenshot for the report. Invoke visual recognition adaptively for key assertions, amounts, permissions, state/result changes, unexpected screens, locator adaptations, failures, and the final state. Reports must distinguish `Screenshot captured`, `Visual inspection performed`, and `Visual inspection not required`.
 
-If a step fails, inspect the current state and use only safe recovery: wait, refresh/back, restart the app, reset sandbox data, reconnect the MCP, use a semantic/accessibility fallback locator, or resume from a checkpoint. Never modify source code, bypass permissions, operate production, or fabricate a result. Record original failure → diagnosis → recovery action → outcome → business conclusion. A semantically successful locator adaptation yields `ADAPTED` and a candidate Operation JSON; a material flow or business-rule change yields `NEEDS_CONFIRMATION`.
+If a step fails, inspect the current state and use only safe recovery within the Task limits: wait, refresh/back, restart the app, reset sandbox data when allowed, reconnect the MCP, use a semantic/accessibility fallback locator, or resume from a checkpoint. Never modify source code, bypass permissions, operate production, or fabricate a result. Record original failure → diagnosis → recovery action → outcome → business conclusion. A semantically successful locator adaptation yields `ADAPTED` and a versioned candidate OperationPlan; a material flow or business-rule change yields `NEEDS_CONFIRMATION`.
 
 ## Visual verification protocol
 

@@ -197,7 +197,7 @@ qa-agent task run checkout-basic-flow --module checkout
 
 ### 3. 使用 Agent-guided 真实业务验证
 
-这是推荐的业务 QA 方式。宿主 Agent 应自行打开真实页面/模拟器，观察当前界面后决定下一步；每个真实 UI 操作后都保存截图，但只在关键业务断言、金额/权限/状态变化、异常页面、定位器适配和最终状态调用视觉识别。报告会明确区分“Screenshot captured”“Visual inspection performed”“Visual inspection not required”。不要让用户手工点击、截图、判定结果或整理报告。
+这是推荐的业务 QA 方式。运行时使用 `qa-agent/v2` 数据协议。宿主 Agent 应自行打开真实页面/模拟器，观察当前界面后决定下一步；每个真实 UI 操作后都保存截图，但只在关键业务断言、金额/权限/状态变化、异常页面、定位器适配和最终状态调用视觉识别。报告会明确区分“Screenshot captured”“Visual inspection performed”“Visual inspection not required”。不要让用户手工点击、截图、判定结果或整理报告。
 
 Agent 在后台通过以下命令持久化真实执行轨迹：
 
@@ -219,16 +219,18 @@ qa-agent run complete <run-id>
 
 ### 4. 快速回归执行模式
 
-首次成功运行后，Agent 会在任务目录生成候选 Operation JSON：`.qa-agent/modules/<module>/tasks/<task>/operations/`。审核后可快速回放同一业务流程：
+首次成功运行后，Agent 会在任务目录生成候选 OperationPlan：`.qa-agent/modules/<module>/tasks/<task>/operations/`。审核后可快速回放同一业务流程：
 
 ```bash
 qa-agent task operation list checkout-basic-flow --module checkout
 qa-agent task operation review checkout-basic-flow --module checkout --operation OPERATION_ID --approve
 qa-agent run replay checkout-basic-flow --module checkout --operation OPERATION_ID
-qa-agent run recover <run-id> --reason "元素尚未出现" --action "等待网络" --detail "元素出现后继续" --outcome continued
+qa-agent run recover <run-id> --reason "元素尚未出现" --action wait --detail "元素出现后继续" --outcome continued
 ```
 
-只有 Task 计划哈希、用户确认、Operation JSON、平台/设备/App 或 Web 版本、环境/角色、测试数据、所需 MCP 和 macOS 权限都兼容时才会回放；否则回到计划确认或能力接入。回放不跳过业务断言，只跳过重复探索。结果为 `PASS`、`FAIL`、`ADAPTED`、`BLOCKED` 或 `NEEDS_CONFIRMATION`。安全恢复只能等待、刷新/返回、重启 App、重置沙箱数据、重连 MCP、使用备用无障碍/语义定位或从 checkpoint 继续，不能改代码、绕过权限或伪造结果。
+只有 Task 计划哈希、用户确认、active OperationPlan、平台/设备/App 或 Web 版本、环境/角色、测试数据、所需 MCP 和 macOS 权限都兼容时才会回放；否则回到计划确认或能力接入。回放不跳过业务断言，只跳过重复探索。结果为 `PASS`、`FAIL`、`ADAPTED`、`BLOCKED` 或 `NEEDS_CONFIRMATION`。安全恢复只能使用 `wait`、`refresh`、`back`、`restart-app`、`reset-sandbox-data`、`reconnect-mcp`、`fallback-locator` 或 `resume-checkpoint`，不能改代码、绕过权限或伪造结果。
+
+OperationPlan 按 Scenario 独立保存，步骤包含操作类型、主/备用定位器、输入引用、前置条件、预期状态、断言引用、截图策略、视觉识别策略、风险动作和 checkpoint。回放时每个 `run step` 必须引用下一个 `operationStepId`，不能跳步或重复提交。
 
 ### APP / 模拟器测试
 
@@ -247,7 +249,7 @@ qa-agent module create checkout --name "结算" --platforms android
 
 ```bash
 qa-agent mcp add android-emulator --capabilities android.adb,android.screenshot --readonly
-qa-agent mcp activate android-emulator
+qa-agent mcp activate android-emulator --permissions verified
 qa-agent mobile doctor --platform android
 ```
 

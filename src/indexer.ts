@@ -18,7 +18,9 @@ function rebuildIndexesUnlocked(root: string): { modules: number; tasks: number;
   });
   const tasks = listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\.json$/.test(path)).map(path => {
     const item = readJson<TestTask>(path);
-    return { id: item.metadata.id, moduleId: item.metadata.moduleId, name: item.metadata.name, priority: item.metadata.priority, status: item.metadata.status, executionStatus: 'never_run', path: relative(qaPath(root), path), scenarioCount: item.scenarios.length, tags: item.metadata.tags, updatedAt: item.updatedAt };
+    const operationRoot = join(path, '..', item.metadata.id, 'operations');
+    const operationCount = listFiles(operationRoot, operation => operation.endsWith('.json')).length;
+    return { id: item.metadata.id, moduleId: item.metadata.moduleId, name: item.metadata.name, priority: item.metadata.priority, status: item.metadata.status, executionStatus: 'never_run', path: relative(qaPath(root), path), scenarioCount: item.scenarios.length, operationCount, operationPlanRefs: item.operationPlanRefs, tags: item.metadata.tags, updatedAt: item.updatedAt };
   });
   const memoryFiles = [
     ...listFiles(qaPath(root, 'modules'), path => /\/memory\/[^/]+\.json$/.test(path)),

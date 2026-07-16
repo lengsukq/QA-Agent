@@ -3,7 +3,7 @@ import { join, relative } from 'node:path';
 import { approvalIsCurrent, testPlanHash } from './approval.ts';
 import { qaPath, saveTask } from './project.ts';
 import { assertSafeId, hasSecrets, listFiles, now, readJson, writeJsonAtomic } from './store.ts';
-import type { OperationPlan, OperationStep, TestRun, TestTask } from './types.ts';
+import type { ExecutionSnapshot, OperationAction, OperationPlan, OperationStep, TestRun, TestScenario, TestTask } from './types.ts';
 
 export function operationsPath(root: string, moduleId: string, taskId: string): string {
   assertSafeId(moduleId, 'module id'); assertSafeId(taskId, 'task id');
@@ -29,41 +29,71 @@ export function reviewOperation(root: string, task: TestTask, id: string, decisi
     if (!approvalIsCurrent(task)) throw new Error('The Task plan is not currently approved; confirm the Task before approving an Operation JSON.');
     if (plan.planHash !== testPlanHash(task)) throw new Error('Operation JSON was generated from a different Task plan hash. Regenerate it before approval.');
     plan.status = 'active';
+    if (plan.supersedes) {
+      const oldPath = join(operationsPath(root, task.metadata.moduleId, task.metadata.id), `${plan.supersedes}.json`);
+      if (existsSync(oldPath)) { const old = readJson<OperationPlan>(oldPath); old.status = 'superseded'; old.updatedAt = now(); writeJsonAtomic(oldPath, old); }
+    }
     task.operationPlanRefs ??= []; if (!task.operationPlanRefs.includes(plan.id)) task.operationPlanRefs.push(plan.id); task.updatedAt = now(); saveTask(root, task);
   } else plan.status = 'deprecated';
   plan.updatedAt = now(); saveOperation(root, plan); return plan;
 }
 
-export function createOperationCandidate(root: string, task: TestTask, run: TestRun): string[] {
-  if (!['passed', 'adapted'].includes(run.status) || !run.steps.some(step => step.source === 'ui' || step.source === 'operation-replay')) return [];
-  const scenario = task.scenarios[0]; if (!scenario) return [];
-  const id = `${task.metadata.id}-${scenario.id}-op-${run.id.slice(-8)}`.slice(0, 63);
-  const steps: OperationStep[] = run.steps.filter(step => step.source === 'ui' || step.source === 'operation-replay').map((step, index) => ({
-    id: step.operationStepId ?? `op-step-${index + 1}`, action: step.action, intent: step.detail, preconditions: [],
-    expectedState: step.detail, screenshot: 'after-action', visualInspection: step.visualInspection === 'performed' ? 'required' : 'adaptive',
-  }));
-  if (hasSecrets(steps)) return [];
-  const plan: OperationPlan = {
-    $schema: '../../../schemas/operation.schema.json', apiVersion: 'qa-agent/v1', kind: 'OperationPlan', id, version: 1, status: 'candidate',
-    taskId: task.metadata.id, moduleId: task.metadata.moduleId, scenarioId: scenario.id, platform: run.context.platform, environment: run.context.environment,
-    planHash: testPlanHash(task), steps, preconditions: [...task.preconditions, ...scenario.preconditions], cleanup: scenario.cleanup, capabilities: task.capabilities.required,
-    sourceRunId: run.id, successfulRuns: 1, createdAt: now(), updatedAt: now(),
+const operationActions = new Set<OperationAction>(['launch', 'navigate', 'click', 'input', 'fill', 'swipe', 'back', 'wait', 'assert', 'screenshot', 'reset', 'restart-app']);
+
+function scenarioRunStatus(run: TestRun, scenarioId: string): string | undefined { return run.scenarioResults.find(item => item.scenarioId === scenarioId)?.status; }
+
+function buildStep(task: TestTask, scenario: TestScenario, run: TestRun, step: TestRun['steps'][number], index: number): OperationStep {
+  const action = step.operationAction ?? (step.action.toLowerCase().includes('tap') || step.action.toLowerCase().includes('click') ? 'click' : step.action.toLowerCase().includes('input') || step.action.toLowerCase().includes('fill') ? 'input' : step.action.toLowerCase().includes('wait') ? 'wait' : step.action.toLowerCase().includes('back') ? 'back' : step.action.toLowerCase().includes('launch') ? 'launch' : 'assert') as OperationAction;
+  if (!operationActions.has(action)) throw new Error(`Unsupported operation action generated from step ${step.id}: ${action}`);
+  return {
+    id: step.operationStepId ?? `op-step-${index + 1}`, scenarioId: scenario.id, action, intent: step.detail, preconditions: [...scenario.preconditions],
+    locator: step.locator, fallbackLocators: step.locator?.fallbacks, inputRefs: step.inputRefs,
+    expectedState: step.expectedState ?? step.actualState ?? step.detail, assertionRefs: scenario.visualAssertions?.map(item => item.id),
+    screenshotPolicy: 'after-action', visualInspectionPolicy: step.visualInspection === 'performed' ? 'required' : 'adaptive',
+    safetyAction: step.safetyAction, checkpoint: Boolean(step.operationStepId?.includes('checkpoint')),
   };
-  saveOperation(root, plan); return [relative(qaPath(root), join(operationsPath(root, plan.moduleId, plan.taskId), `${id}.json`))];
 }
 
-export function approvedOperationForReplay(root: string, task: TestTask, id: string, context: { platform: string; environment: string; device?: string; appVersion?: string }): OperationPlan {
+export function createOperationCandidates(root: string, task: TestTask, run: TestRun): string[] {
+  if (run.replayStatus === 'replayed') return [];
+  const candidates: string[] = [];
+  for (const scenario of task.scenarios) {
+    const status = scenarioRunStatus(run, scenario.id);
+    const scenarioSteps = run.steps.filter(step => step.scenarioId === scenario.id && (step.source === 'ui' || step.source === 'operation-replay'));
+    if (!['passed', 'adapted'].includes(status ?? '') || !scenarioSteps.length) continue;
+    const previous = run.operationPlanId ? listOperations(root, task).find(item => item.id === run.operationPlanId && item.scenarioId === scenario.id) : listOperations(root, task).filter(item => item.scenarioId === scenario.id && item.status === 'active').sort((a, b) => b.version - a.version)[0];
+    const version = previous ? previous.version + 1 : 1;
+    const id = `${task.metadata.id}-${scenario.id}-op-v${version}-${run.id.slice(-8)}`.slice(0, 63);
+    const steps = scenarioSteps.map((step, index) => buildStep(task, scenario, run, step, index));
+    const plan: OperationPlan = {
+      $schema: '../../../schemas/operation.schema.json', apiVersion: 'qa-agent/v2', kind: 'OperationPlan', id, version, status: 'candidate',
+      taskId: task.metadata.id, moduleId: task.metadata.moduleId, scenarioId: scenario.id, executionSnapshot: run.context,
+      planHash: testPlanHash(task), steps, preconditions: [...task.preconditions, ...scenario.preconditions], cleanup: scenario.cleanup, capabilities: task.capabilities.required,
+      sourceRunId: run.id, successfulRuns: 1, supersedes: run.replayStatus === 'adapted' ? previous?.id : undefined,
+      adaptationHistory: run.replayStatus === 'adapted' ? [{ runId: run.id, detail: 'Semantic/accessibility locator adaptation preserved the business meaning.', at: now() }] : [], createdAt: now(), updatedAt: now(),
+    };
+    if (hasSecrets(plan)) continue;
+    saveOperation(root, plan); candidates.push(relative(qaPath(root), join(operationsPath(root, plan.moduleId, plan.taskId), `${id}.json`)));
+  }
+  return candidates;
+}
+
+export function approvedOperationForReplay(root: string, task: TestTask, id: string, context: ExecutionSnapshot): OperationPlan {
   const plan = readOperation(root, task, id);
   if (plan.status !== 'active') throw new Error(`Operation ${id} is not approved; review it with task operation review --approve.`);
   if (!approvalIsCurrent(task) || plan.planHash !== testPlanHash(task)) throw new Error('Task approval or plan hash changed; return to test-plan confirmation before replay.');
   if (plan.taskId !== task.metadata.id || plan.moduleId !== task.metadata.moduleId) throw new Error('Operation JSON does not belong to this Task.');
-  if (plan.platform !== context.platform) throw new Error(`Operation platform ${plan.platform} is incompatible with requested platform ${context.platform}.`);
-  if (plan.environment && plan.environment !== context.environment) throw new Error(`Operation environment ${plan.environment} is incompatible with requested environment ${context.environment}.`);
-  if (plan.device && context.device && plan.device !== context.device) throw new Error(`Operation device ${plan.device} is incompatible with requested device ${context.device}.`);
-  if (plan.appVersion && context.appVersion && plan.appVersion !== context.appVersion) throw new Error(`Operation app version ${plan.appVersion} is incompatible with requested version ${context.appVersion}.`);
+  if (plan.scenarioId !== context.scenarioId && context.scenarioId) throw new Error(`Operation scenario ${plan.scenarioId} is incompatible with requested scenario ${context.scenarioId}.`);
+  const expected = plan.executionSnapshot;
+  const compare = (label: string, expectedValue: string | undefined, actualValue: string | undefined): void => { if (expectedValue && expectedValue !== actualValue) throw new Error(`Operation ${label} ${expectedValue} is incompatible with current ${actualValue ?? 'unknown'}.`); };
+  compare('platform', expected.platform, context.platform); compare('environment', expected.environment, context.environment); compare('role', expected.role, context.role);
+  compare('device', expected.device, context.device); compare('device model', expected.deviceModel, context.deviceModel); compare('OS version', expected.osVersion, context.osVersion); compare('app version', expected.appVersion, context.appVersion); compare('Web build', expected.webBuild, context.webBuild); compare('test data', expected.testDataFingerprint, context.testDataFingerprint);
+  if (context.permissionSnapshot.status !== 'verified') throw new Error('Required macOS/MCP permissions are not verified; run mobile doctor and grant the listed permissions before replay.');
+  const capabilitiesSatisfied = plan.capabilities.every(capability => context.mcpSnapshot.some(item => item.status === 'connected' && item.permissionStatus === 'verified' && item.capabilities.includes(capability)));
+  if (!capabilitiesSatisfied) throw new Error('Required MCP health or permission verification is incomplete; reconnect and verify the host MCP before replay.');
   return plan;
 }
 
 export function operationSummary(root: string, task: TestTask): unknown[] {
-  return listOperations(root, task).map(plan => ({ id: plan.id, version: plan.version, status: plan.status, scenarioId: plan.scenarioId, platform: plan.platform, planHash: plan.planHash, path: relative(qaPath(root), operationPath(root, task, plan.id)) }));
+  return listOperations(root, task).map(plan => ({ id: plan.id, version: plan.version, status: plan.status, scenarioId: plan.scenarioId, platform: plan.executionSnapshot.platform, planHash: plan.planHash, path: relative(qaPath(root), operationPath(root, task, plan.id)) }));
 }

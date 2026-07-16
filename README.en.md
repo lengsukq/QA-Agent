@@ -182,7 +182,7 @@ qa-agent task run checkout-basic-flow --module checkout
 
 ### 4. Agent-guided real UI QA
 
-This is the preferred business-QA mode. The host Agent opens the real browser or simulator and observes the current screen before selecting an action. It captures a screenshot after every real UI action, but invokes visual recognition adaptively at key business assertions, amounts, permissions, state/result changes, unexpected screens, locator adaptations, failures, and the final state. Reports distinguish `Screenshot captured`, `Visual inspection performed`, and `Visual inspection not required`. It must not ask the user to click, capture screenshots, or create the report.
+This is the preferred business-QA mode. The runtime uses the `qa-agent/v2` data contract. The host Agent opens the real browser or simulator and observes the current screen before selecting an action. It captures a screenshot after every real UI action, but invokes visual recognition adaptively at key business assertions, amounts, permissions, state/result changes, unexpected screens, locator adaptations, failures, and the final state. Reports distinguish `Screenshot captured`, `Visual inspection performed`, and `Visual inspection not required`. It must not ask the user to click, capture screenshots, or create the report.
 
 ```bash
 qa-agent context module checkout
@@ -202,16 +202,18 @@ The report is written to `.qa-agent/reports/<run-id>.md`. Passed and failed visu
 
 ### 5. Fast regression replay
 
-After a successful run, the Agent creates a candidate Operation JSON under `.qa-agent/modules/<module>/tasks/<task>/operations/`. Review it before reuse:
+After a successful run, the Agent creates a candidate OperationPlan under `.qa-agent/modules/<module>/tasks/<task>/operations/`. Review it before reuse:
 
 ```bash
 qa-agent task operation list checkout-basic-flow --module checkout
 qa-agent task operation review checkout-basic-flow --module checkout --operation OPERATION_ID --approve
 qa-agent run replay checkout-basic-flow --module checkout --operation OPERATION_ID
-qa-agent run recover <run-id> --reason "Element was not ready" --action "Wait for network" --detail "Element appeared; resume from checkpoint" --outcome continued
+qa-agent run recover <run-id> --reason "Element was not ready" --action wait --detail "Element appeared; resume from checkpoint" --outcome continued
 ```
 
-Replay is permitted only when the Task plan hash and user approval, Operation JSON, platform/device/app or Web version, environment/role, test data, required MCPs, and macOS permissions are compatible. It skips rediscovery, not business assertions. Outcomes are `PASS`, `FAIL`, `ADAPTED`, `BLOCKED`, or `NEEDS_CONFIRMATION`. Recovery is limited to waiting, refresh/back, app restart, sandbox data reset, MCP reconnect, safe semantic/accessibility fallback locators, and checkpoint resume; never modify source code, bypass permissions, or fabricate results.
+Replay is permitted only when the Task plan hash and user approval, an active OperationPlan, platform/device/app or Web version, environment/role, test data, required MCPs, and verified macOS permissions are compatible. It skips rediscovery, not business assertions. Outcomes are `PASS`, `FAIL`, `ADAPTED`, `BLOCKED`, or `NEEDS_CONFIRMATION`. Recovery is limited to `wait`, `refresh`, `back`, `restart-app`, `reset-sandbox-data`, `reconnect-mcp`, `fallback-locator`, and `resume-checkpoint`; never modify source code, bypass permissions, or fabricate results.
+
+OperationPlans are Scenario-specific. Each step stores an operation action, primary and fallback locators, redacted input references, preconditions, expected state, assertion references, screenshot and visual-inspection policies, safety action, and checkpoint. During replay every `run step` must reference the next `operationStepId`; steps cannot be skipped or duplicated.
 
 ## APP and simulator QA
 
@@ -236,7 +238,7 @@ After approval and connection, declare and activate the project MCP:
 
 ```bash
 qa-agent mcp add android-emulator --capabilities android.adb,android.screenshot --readonly
-qa-agent mcp activate android-emulator
+qa-agent mcp activate android-emulator --permissions verified
 qa-agent mobile doctor --platform android
 ```
 

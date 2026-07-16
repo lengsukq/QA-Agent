@@ -31,7 +31,7 @@ export function createTaskSkeleton(module: QaModule, id: string, name?: string):
     visualAssertions: [{ id: 'business-outcome', expected: businessRules.length ? `${module.name} 符合已知业务规则：${businessRules.join('；')}` : `${module.name} 的核心业务结果、关键状态和可见反馈符合预期。`, importance: module.riskLevel }],
   };
   return {
-    $schema: '../../../schemas/task.schema.json', apiVersion: 'qa-agent/v1', kind: 'TestTask',
+    $schema: '../../../schemas/task.schema.json', apiVersion: 'qa-agent/v2', kind: 'TestTask',
     metadata: { id, name: name ?? `${module.name} 核心流程`, moduleId: module.id, version: 1, status: 'draft', priority: module.riskLevel === 'critical' ? 'p0' : 'p1', tags: [module.id, 'regression'] },
     description: `验证 ${module.name} 的核心业务目标。`, objectives: businessObjectives.length ? businessObjectives : [`完成 ${module.name} 核心业务流程`],
     scope: { platforms: module.platforms, environments: ['local'], roles: module.roles }, preconditions: module.entryPoints?.length ? [`Entry points: ${module.entryPoints.join(', ')}`] : [], memoryRefs: [], scenarios: [scenario],
@@ -44,7 +44,7 @@ export function createTaskSkeleton(module: QaModule, id: string, name?: string):
 
 export function taskPlan(task: TestTask): object {
   return {
-    taskId: task.metadata.id, planHash: testPlanHash(task), businessLogic: { description: task.description, objectives: task.objectives, memoryRefs: task.memoryRefs }, approvalRequired: !task.metadata.approval || task.metadata.approval.planHash !== testPlanHash(task), approval: task.metadata.approval,
+    apiVersion: 'qa-agent/v2', taskId: task.metadata.id, planHash: testPlanHash(task), businessLogic: { description: task.description, objectives: task.objectives, memoryRefs: task.memoryRefs }, approvalRequired: !task.metadata.approval || task.metadata.approval.planHash !== testPlanHash(task), approval: task.metadata.approval,
     preconditions: task.preconditions, scenarios: task.scenarios.map(scenario => ({ id: scenario.id, title: scenario.title, intent: scenario.intent, preconditions: scenario.preconditions, input: scenario.input, expected: scenario.expected, visualAssertions: scenario.visualAssertions ?? [], evidence: scenario.evidence })),
     requiredSkills: task.requiredSkills, requiredCapabilities: task.capabilities, safety: task.safety, stopConditions: task.safety.stopBefore, cleanup: task.scenarios.flatMap(scenario => scenario.cleanup), evidencePolicy: task.evidencePolicy, operationPlanRefs: task.operationPlanRefs, recoveryPolicy: task.recoveryPolicy,
   };

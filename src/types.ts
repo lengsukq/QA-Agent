@@ -3,8 +3,35 @@ export type TaskStatus = 'draft' | 'ready' | 'active' | 'blocked' | 'needs_revie
 export type RunStatus = 'pending' | 'running' | 'passed' | 'failed' | 'blocked' | 'paused' | 'inconclusive' | 'not_applicable' | 'needs_confirmation' | 'adapted';
 export type ReplayStatus = 'not_replay' | 'replayed' | 'adapted';
 export type VisualInspectionStatus = 'performed' | 'not-required' | 'not-applicable' | 'skipped';
+export type ReplayStage = 'idle' | 'ready' | 'preflight_passed' | 'step_pending' | 'executing' | 'screenshot_captured' | 'visual_check_optional' | 'assertion_checked' | 'next_step' | 'completed' | 'blocked' | 'needs_confirmation';
 export type KnowledgeLevel = 'confirmed' | 'observed' | 'inferred' | 'suspected' | 'deprecated';
 export type BrowserAction = 'navigate' | 'click' | 'fill' | 'assert-visible' | 'assert-hidden' | 'assert-text' | 'assert-url' | 'wait-for' | 'screenshot';
+export type OperationAction = 'launch' | 'navigate' | 'click' | 'input' | 'fill' | 'swipe' | 'back' | 'wait' | 'assert' | 'screenshot' | 'reset' | 'restart-app';
+export type LocatorStrategy = 'test-id' | 'accessibility' | 'role' | 'label' | 'text' | 'css' | 'xpath' | 'coordinate' | 'semantic' | 'none';
+export type ScreenshotPolicy = 'after-action' | 'on-state-change' | 'none';
+export type VisualInspectionPolicy = 'required' | 'adaptive' | 'not-required';
+export type PermissionStatus = 'verified' | 'missing' | 'unknown';
+
+export interface Locator {
+  strategy: LocatorStrategy;
+  value?: string;
+  fallbacks?: Locator[];
+}
+
+export interface ExecutionSnapshot {
+  environment: string;
+  platform: string;
+  role: string;
+  scenarioId?: string;
+  device?: string;
+  deviceModel?: string;
+  osVersion?: string;
+  appVersion?: string;
+  webBuild?: string;
+  testDataFingerprint?: string;
+  mcpSnapshot: Array<{ id: string; status: string; capabilities: string[]; version?: string; permissionStatus: PermissionStatus }>;
+  permissionSnapshot: { status: PermissionStatus; permissions: Array<{ name: string; status: PermissionStatus; detail?: string }> };
+}
 
 export interface BrowserStep {
   id: string;
@@ -32,30 +59,32 @@ export interface EvidencePolicy {
 
 export interface OperationStep {
   id: string;
-  action: string;
+  scenarioId: string;
+  action: OperationAction;
   intent: string;
   preconditions: string[];
-  locator?: { strategy: string; value?: string; fallbacks?: string[] };
+  locator?: Locator;
+  fallbackLocators?: Locator[];
+  inputRefs?: Record<string, string>;
   expectedState?: string;
-  screenshot: 'after-action' | 'on-state-change' | 'none';
-  visualInspection: 'required' | 'adaptive' | 'not-required';
+  assertionRefs?: string[];
+  screenshotPolicy: ScreenshotPolicy;
+  visualInspectionPolicy: VisualInspectionPolicy;
   safetyAction?: string;
+  checkpoint?: boolean;
 }
 
 export interface OperationPlan {
   $schema: string;
-  apiVersion: 'qa-agent/v1';
+  apiVersion: 'qa-agent/v2';
   kind: 'OperationPlan';
   id: string;
   version: number;
-  status: 'candidate' | 'active' | 'deprecated';
+  status: 'candidate' | 'active' | 'superseded' | 'deprecated';
   taskId: string;
   moduleId: string;
   scenarioId: string;
-  platform: string;
-  environment?: string;
-  device?: string;
-  appVersion?: string;
+  executionSnapshot: ExecutionSnapshot;
   planHash: string;
   steps: OperationStep[];
   preconditions: string[];
@@ -63,6 +92,7 @@ export interface OperationPlan {
   capabilities: string[];
   sourceRunId: string;
   successfulRuns: number;
+  supersedes?: string;
   adaptationHistory?: Array<{ runId: string; detail: string; at: string }>;
   createdAt: string;
   updatedAt: string;
@@ -120,7 +150,7 @@ export interface TestScenario {
 
 export interface TestTask {
   $schema: string;
-  apiVersion: 'qa-agent/v1';
+  apiVersion: 'qa-agent/v2';
   kind: 'TestTask';
   metadata: {
     id: string; name: string; moduleId: string; version: number; status: TaskStatus;
@@ -170,24 +200,27 @@ export interface TestRun {
   id: string;
   taskId: string;
   moduleId: string;
-  context: { environment: string; platform: string; role: string };
+  context: ExecutionSnapshot;
   git: { branch?: string; commit?: string; dirtyWorkspace: boolean; changedFiles: string[] };
   status: RunStatus;
   safeMode: boolean;
-  steps: Array<{ id: string; action: string; status: RunStatus; detail: string; at: string; screenshotPath?: string; visualInspection?: VisualInspectionStatus; source?: 'ui' | 'internal' | 'recovery' | 'operation-replay'; operationStepId?: string }>;
+  steps: Array<{ id: string; action: string; operationAction?: OperationAction; safetyAction?: string; status: RunStatus; detail: string; at: string; scenarioId?: string; screenshotPath?: string; visualInspection?: VisualInspectionStatus; source?: 'ui' | 'internal' | 'recovery' | 'operation-replay'; operationStepId?: string; locator?: Locator; actualLocator?: Locator; inputRefs?: Record<string, string>; expectedState?: string; actualState?: string; adaptation?: string }>;
   scenarioResults: Array<{ scenarioId: string; status: RunStatus; detail?: string }>;
   evidence: Array<{ type: string; path?: string; summary: string }>;
   conclusion?: string;
   reportPath?: string;
   retryOf?: string;
   replayStatus: ReplayStatus;
+  replayStage: ReplayStage;
   operationPlanId?: string;
   operationVersion?: number;
+  scenarioId?: string;
+  replayCursor?: number;
   screenshots: Array<{ stepId: string; path: string; capturedAt: string; visualInspection: VisualInspectionStatus; summary: string }>;
-  recoveryAttempts: Array<{ id: string; reason: string; action: string; outcome: 'continued' | 'blocked' | 'paused' | 'failed'; detail: string; at: string }>;
+  recoveryAttempts: Array<{ id: string; reason: string; action: string; outcome: 'continued' | 'blocked' | 'paused' | 'failed'; detail: string; failedStepId?: string; at: string }>;
   operationCandidates?: string[];
   memoryCandidates?: string[];
-  visualFindings: Array<{ scenarioId: string; assertionId: string; expected: string; actual: string; status: RunStatus; screenshotPath?: string; at: string }>;
+  visualFindings: Array<{ scenarioId: string; assertionId: string; expected: string; actual: string; status: RunStatus; screenshotPath?: string; visualInspection: 'performed'; inspectionProvider?: string; at: string }>;
   startedAt: string;
   completedAt?: string;
 }

@@ -74,7 +74,7 @@ export function curateFailedRun(root: string, task: TestTask, run: TestRun): str
 
 /** Persist observed, reviewable business outcomes without promoting them to project truth. */
 export function curateObservedBusinessRules(root: string, task: TestTask, run: TestRun): string | undefined {
-  if (run.status !== 'passed') return undefined;
+  if (!['passed', 'adapted'].includes(run.status)) return undefined;
   const observations = (run.visualFindings ?? []).filter(item => item.status === 'passed');
   if (!observations.length) return undefined;
   const id = `observed-${task.metadata.id.slice(0, 31)}-${run.id.slice(-8)}`.replace(/[^a-z0-9-]/g, '-');
