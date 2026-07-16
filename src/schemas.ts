@@ -8,4 +8,5 @@ export const schemas: Record<string, object> = {
   'capabilities.schema.json': { $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object', required: ['version', 'capabilities'] },
   'mcp.schema.json': { $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object', required: ['version', 'connections'] },
   'skill.schema.json': { $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object', required: ['apiVersion', 'kind', 'metadata'] },
+  'operation.schema.json': { $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object', required: ['apiVersion', 'kind', 'id', 'version', 'status', 'taskId', 'moduleId', 'scenarioId', 'planHash', 'steps'] },
 };

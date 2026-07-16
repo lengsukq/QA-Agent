@@ -13,7 +13,7 @@ export function testPlanHash(task: TestTask): string {
     id: task.metadata.id, moduleId: task.metadata.moduleId, name: task.metadata.name,
     description: task.description, objectives: task.objectives, scope: task.scope, preconditions: task.preconditions, memoryRefs: task.memoryRefs,
     scenarios: task.scenarios.map(scenario => ({ id: scenario.id, title: scenario.title, input: scenario.input, preconditions: scenario.preconditions, intent: scenario.intent, expected: scenario.expected, evidence: scenario.evidence, cleanup: scenario.cleanup, risk: scenario.risk, execution: scenario.execution, visualAssertions: scenario.visualAssertions })),
-    requiredSkills: task.requiredSkills, capabilities: task.capabilities, safety: task.safety, evidence: task.evidence, regression: task.regression,
+    requiredSkills: task.requiredSkills, capabilities: task.capabilities, safety: task.safety, evidence: task.evidence, evidencePolicy: task.evidencePolicy, recoveryPolicy: task.recoveryPolicy, regression: task.regression,
   };
   return createHash('sha256').update(JSON.stringify(canonicalize(contract))).digest('hex');
 }

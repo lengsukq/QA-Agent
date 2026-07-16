@@ -35,8 +35,10 @@ export function createTaskSkeleton(module: QaModule, id: string, name?: string):
     metadata: { id, name: name ?? `${module.name} 核心流程`, moduleId: module.id, version: 1, status: 'draft', priority: module.riskLevel === 'critical' ? 'p0' : 'p1', tags: [module.id, 'regression'] },
     description: `验证 ${module.name} 的核心业务目标。`, objectives: businessObjectives.length ? businessObjectives : [`完成 ${module.name} 核心业务流程`],
     scope: { platforms: module.platforms, environments: ['local'], roles: module.roles }, preconditions: module.entryPoints?.length ? [`Entry points: ${module.entryPoints.join(', ')}`] : [], memoryRefs: [], scenarios: [scenario],
-    requiredSkills: ['evidence.capture', 'visual.verify'], capabilities: { required: [...new Set(module.platforms.flatMap(platformCapabilities))], optional: ['network.read', 'source.readonly', 'logs.read'] },
-    safety: { safeMode: true, stopBefore: ['payment.submit', 'refund.submit', 'data.delete', 'notification.send'] }, evidence: { required: scenario.evidence }, regression: { triggers: [] }, createdAt: timestamp, updatedAt: timestamp,
+    requiredSkills: ['evidence.capture', 'visual.verify', 'operation.replay'], capabilities: { required: [...new Set(module.platforms.flatMap(platformCapabilities))], optional: ['network.read', 'source.readonly', 'logs.read'] },
+    safety: { safeMode: true, stopBefore: ['payment.submit', 'refund.submit', 'data.delete', 'notification.send'] }, evidence: { required: scenario.evidence },
+    evidencePolicy: { capture: 'every-action', visual: 'adaptive', required: ['baseline', 'key-business-state', 'failure', 'final-result'] },
+    operationPlanRefs: [], recoveryPolicy: { maxRetries: 1, maxRecoveryAttempts: 3, allowSandboxDataReset: true }, regression: { triggers: [] }, createdAt: timestamp, updatedAt: timestamp,
   };
 }
 
@@ -44,6 +46,6 @@ export function taskPlan(task: TestTask): object {
   return {
     taskId: task.metadata.id, planHash: testPlanHash(task), businessLogic: { description: task.description, objectives: task.objectives, memoryRefs: task.memoryRefs }, approvalRequired: !task.metadata.approval || task.metadata.approval.planHash !== testPlanHash(task), approval: task.metadata.approval,
     preconditions: task.preconditions, scenarios: task.scenarios.map(scenario => ({ id: scenario.id, title: scenario.title, intent: scenario.intent, preconditions: scenario.preconditions, input: scenario.input, expected: scenario.expected, visualAssertions: scenario.visualAssertions ?? [], evidence: scenario.evidence })),
-    requiredSkills: task.requiredSkills, requiredCapabilities: task.capabilities, safety: task.safety, stopConditions: task.safety.stopBefore, cleanup: task.scenarios.flatMap(scenario => scenario.cleanup),
+    requiredSkills: task.requiredSkills, requiredCapabilities: task.capabilities, safety: task.safety, stopConditions: task.safety.stopBefore, cleanup: task.scenarios.flatMap(scenario => scenario.cleanup), evidencePolicy: task.evidencePolicy, operationPlanRefs: task.operationPlanRefs, recoveryPolicy: task.recoveryPolicy,
   };
 }

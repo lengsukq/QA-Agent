@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { availableCapabilities, capabilityAdvice } from './capabilities.ts';
-import { beginAgentGuidedRun, completeAgentGuidedRun, configurePlaywrightAdapter, executeTask, recordAgentStep, recordVisualFinding } from './engine.ts';
+import { beginAgentGuidedRun, completeAgentGuidedRun, configurePlaywrightAdapter, executeTask, recordAgentStep, recordRecoveryAttempt, recordVisualFinding } from './engine.ts';
 import { readIndex, rebuildIndexes } from './indexer.ts';
 import { createTaskSkeleton, planModule, taskPlan } from './planning.ts';
 import { createModule, findProjectRoot, initializeProject, modulePath, qaPath, readModule, readTask, requireProjectRoot, saveTask } from './project.ts';
@@ -15,6 +15,7 @@ import { diagnoseSource, searchSource } from './source-verifier.ts';
 import { installHostIntegration, supportedHosts } from './host-adapters.ts';
 import { invalidateApproval, testPlanHash } from './approval.ts';
 import { mobileCapabilityDiagnosis } from './capabilities.ts';
+import { operationSummary, readOperation, reviewOperation } from './operations.ts';
 
 const args = process.argv.slice(2);
 const usage = `qa-agent — local-first QA Agent MVP
@@ -29,12 +30,14 @@ Commands:
   mobile doctor --platform android|ios
   context module MODULE
   module list | module create ID --name NAME [--description TEXT] [--platforms web,android,ios] | module update ID [--name NAME] [--description TEXT] [--risk LEVEL] | module archive ID | module plan ID | module coverage ID
-  task list | task create ID --module MODULE [--name NAME] | task plan ID --module MODULE | task runbook ID --module MODULE --file FILE [--scenario ID] | task review ID --module MODULE --approve --confirmed-by USER | task archive ID --module MODULE | task run ID --module MODULE
+  task list | task create ID --module MODULE [--name NAME] | task plan ID --module MODULE | task runbook ID --module MODULE --file FILE [--scenario ID] | task operation list|show|review ID --module MODULE [--approve|--reject] | task review ID --module MODULE --approve --confirmed-by USER | task archive ID --module MODULE | task run ID --module MODULE
   memory list | memory search TEXT | memory add ID --module MODULE --title TEXT --content TEXT | memory review ID --module MODULE --approve|--reject
   adapter playwright --base-url URL
   source search TEXT | source diagnose --module MODULE --query TEXT
-  run start TASK --module MODULE [--environment ENV] [--platform PLATFORM] [--role ROLE]
-  run step RUN --action TEXT --detail TEXT [--status passed|failed|paused|blocked]
+  run start TASK --module MODULE [--environment ENV] [--platform PLATFORM] [--role ROLE] [--operation OPERATION_ID]
+  run replay TASK --module MODULE --operation OPERATION_ID [--environment ENV] [--platform PLATFORM] [--role ROLE]
+  run step RUN --action TEXT --detail TEXT --screenshot PATH [--status passed|failed|paused|blocked|adapted] [--visual-inspection performed|not-required|skipped] [--operation-step STEP]
+  run recover RUN --action TEXT --reason TEXT --detail TEXT --outcome continued|blocked|paused|failed
   run observe RUN --scenario ID --assertion ID --expected TEXT --actual TEXT --status passed|failed|paused|blocked [--screenshot PATH]
   run complete RUN | run show RUN | run report RUN | run retry RUN
   skill list | skill validate
@@ -164,8 +167,21 @@ async function main(): Promise<void> {
       const task = createTaskSkeleton(readModule(projectRoot, moduleId), subject, flag('--name'));
       saveTask(projectRoot, task); rebuildIndexes(projectRoot); output(task); return;
     }
-    const task = readTask(projectRoot, moduleId, subject);
+    const taskId = action === 'operation' ? (flag('--task') ?? args[3]) : subject;
+    if (!taskId || taskId.startsWith('--')) throw new Error('task id is required for operation commands.');
+    const task = readTask(projectRoot, moduleId, taskId);
     if (action === 'plan') return output(taskPlan(task));
+    if (action === 'operation') {
+      const operationAction = args[3];
+      if (operationAction === 'list') return output(operationSummary(projectRoot, task));
+      if (operationAction === 'show') return output(readOperation(projectRoot, task, requiredFlag('--operation')));
+      if (operationAction === 'review') {
+        const approve = args.includes('--approve'); const reject = args.includes('--reject');
+        if (approve === reject) throw new Error('Specify exactly one of --approve or --reject.');
+        const reviewed = reviewOperation(projectRoot, task, requiredFlag('--operation'), approve ? 'approve' : 'reject'); rebuildIndexes(projectRoot); return output(reviewed);
+      }
+      throw new Error('Operation action must be list, show, or review.');
+    }
     if (action === 'runbook') {
       const raw = JSON.parse(readFileSync(requiredFlag('--file'), 'utf8')) as { startPath?: string; steps?: unknown } | unknown[];
       const runbook = Array.isArray(raw) ? { steps: raw } : raw;
@@ -217,17 +233,26 @@ async function main(): Promise<void> {
   }
   if (group === 'run') {
     const projectRoot = root();
-    if (!subject) throw new Error('run id is required.');
+    if (!subject) throw new Error('run id or task id is required.');
+    if (action === 'replay') {
+      const task = readTask(projectRoot, requiredFlag('--module'), subject);
+      const started = beginAgentGuidedRun(projectRoot, task, { environment: flag('--environment'), platform: flag('--platform'), role: flag('--role'), operationId: requiredFlag('--operation'), device: flag('--device'), appVersion: flag('--app-version') });
+      rebuildIndexes(projectRoot); output(started); return;
+    }
     if (action === 'start') {
       const task = readTask(projectRoot, requiredFlag('--module'), subject);
-      const started = beginAgentGuidedRun(projectRoot, task, { environment: flag('--environment'), platform: flag('--platform'), role: flag('--role') });
+      const started = beginAgentGuidedRun(projectRoot, task, { environment: flag('--environment'), platform: flag('--platform'), role: flag('--role'), operationId: flag('--operation'), device: flag('--device'), appVersion: flag('--app-version') });
       rebuildIndexes(projectRoot); output(started); return;
     }
     const run = readJson(qaPath(projectRoot, 'runs', `${subject}.json`));
     if (action === 'show') return output(run);
     if (action === 'report') return output(qaPath(projectRoot, 'reports', `${subject}.md`));
     if (action === 'step') {
-      const updated = recordAgentStep(projectRoot, subject, { action: requiredFlag('--action'), detail: requiredFlag('--detail'), status: (flag('--status') as RunStatus | undefined) ?? 'passed' });
+      const updated = recordAgentStep(projectRoot, subject, { action: requiredFlag('--action'), detail: requiredFlag('--detail'), screenshotPath: requiredFlag('--screenshot'), status: (flag('--status') as RunStatus | undefined) ?? 'passed', visualInspection: (flag('--visual-inspection') as 'performed' | 'not-required' | 'not-applicable' | 'skipped' | undefined) ?? 'not-required', operationStepId: flag('--operation-step') });
+      output(updated); return;
+    }
+    if (action === 'recover') {
+      const updated = recordRecoveryAttempt(projectRoot, subject, { action: requiredFlag('--action'), reason: requiredFlag('--reason'), detail: requiredFlag('--detail'), outcome: requiredFlag('--outcome') as 'continued' | 'blocked' | 'paused' | 'failed' });
       output(updated); return;
     }
     if (action === 'observe') {

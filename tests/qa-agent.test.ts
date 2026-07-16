@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import test from 'node:test';
-import { beginAgentGuidedRun, completeAgentGuidedRun, configurePlaywrightAdapter, executeTask, recordAgentStep, recordVisualFinding } from '../src/engine.ts';
+import { beginAgentGuidedRun, completeAgentGuidedRun, configurePlaywrightAdapter, executeTask, recordAgentStep, recordRecoveryAttempt, recordVisualFinding } from '../src/engine.ts';
+import { listOperations, reviewOperation } from '../src/operations.ts';
 import { createModule, initializeProject, saveTask } from '../src/project.ts';
 import { createTaskSkeleton } from '../src/planning.ts';
 import { reviewMemory } from '../src/memory.ts';
@@ -36,7 +37,7 @@ test('initializes, plans, persists, validates, and safely blocks an unconfigured
   assert.match(readFileSync(join(root, '.qa-agent', 'prompts', 'execution.md'), 'utf8'), /Before execution/);
   assert.doesNotMatch(readFileSync(join(root, '.qa-agent', 'prompts', 'execution.md'), 'utf8'), /[\u3400-\u9fff]/);
   assert.ok(existsSync(join(root, '.qa-agent', 'skills', 'built-in', 'visual-verify.json')));
-  assert.equal(JSON.parse(run(root, 'skill', 'list')).length, 6);
+  assert.equal(JSON.parse(run(root, 'skill', 'list')).length, 7);
   run(root, 'module', 'create', 'checkout', '--name', 'Checkout', '--description', 'Checkout flow', '--risk', 'high');
   const plan = JSON.parse(run(root, 'module', 'plan', 'checkout'));
   assert.equal(plan.suggestions.length, 8);
@@ -147,10 +148,10 @@ test('records agent-guided visual business verification with screenshot evidence
   const task = createTaskSkeleton(module, 'checkout-visual-flow'); approveTask(task); saveTask(root, task);
   run(root, 'mcp', 'add', 'browser-mcp', '--capabilities', 'browser.interact,browser.inspect', '--readonly');
   run(root, 'mcp', 'activate', 'browser-mcp');
-  const agentRun = beginAgentGuidedRun(root, task);
-  recordAgentStep(root, agentRun.id, { action: '打开结算页', detail: 'Agent opened the real checkout page.' });
   const screenshot = join(root, 'fixture.png');
   writeFileSync(screenshot, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'));
+  const agentRun = beginAgentGuidedRun(root, task);
+  recordAgentStep(root, agentRun.id, { action: '打开结算页', detail: 'Agent opened the real checkout page.', screenshotPath: screenshot });
   assert.throws(() => recordVisualFinding(root, agentRun.id, { scenarioId: 'happy-path', assertionId: 'business-outcome', expected: 'Checkout summary is visible.', actual: 'Checkout summary is visible.', status: 'passed' }), /requires a screenshot/);
   recordVisualFinding(root, agentRun.id, { scenarioId: 'happy-path', assertionId: 'business-outcome', expected: 'Checkout summary is visible.', actual: 'Checkout summary is visible and the amount is displayed.', status: 'passed', screenshotPath: screenshot });
   const completed = completeAgentGuidedRun(root, task, agentRun.id);
@@ -163,6 +164,42 @@ test('records agent-guided visual business verification with screenshot evidence
   assert.match(report, /测试用例与业务逻辑/);
   assert.match(report, /视觉业务验证/);
   assert.match(report, /!\[happy-path business-outcome\]/);
+});
+
+test('creates, approves, and replays a project-local Operation JSON with adaptive evidence', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-replay-'));
+  initializeProject(root, { id: 'replay-fixture' });
+  const module = createModule(root, { id: 'checkout', name: 'Checkout', description: 'Replay fixture' });
+  const task = createTaskSkeleton(module, 'checkout-replay-flow'); approveTask(task); saveTask(root, task);
+  run(root, 'mcp', 'add', 'browser-mcp', '--capabilities', 'browser.interact,browser.inspect', '--readonly');
+  run(root, 'mcp', 'activate', 'browser-mcp');
+  const screenshot = join(root, 'replay.png');
+  writeFileSync(screenshot, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'));
+  const first = beginAgentGuidedRun(root, task);
+  recordAgentStep(root, first.id, { action: 'Open checkout', detail: 'Opened checkout', screenshotPath: screenshot, operationStepId: 'open-checkout' });
+  recordRecoveryAttempt(root, first.id, { reason: 'Async content was not ready', action: 'Wait for network', detail: 'Content appeared after a safe wait.', outcome: 'continued' });
+  recordVisualFinding(root, first.id, { scenarioId: 'happy-path', assertionId: 'business-outcome', expected: 'Checkout result is visible.', actual: 'Checkout result is visible.', status: 'passed', screenshotPath: screenshot });
+  const completed = completeAgentGuidedRun(root, task, first.id);
+  assert.equal(completed.status, 'passed');
+  const candidates = listOperations(root, task);
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0]!.status, 'candidate');
+  reviewOperation(root, task, candidates[0]!.id, 'approve');
+  const replay = beginAgentGuidedRun(root, task, { operationId: candidates[0]!.id });
+  assert.equal(replay.status, 'running');
+  assert.equal(replay.replayStatus, 'replayed');
+  assert.equal(replay.operationPlanId, candidates[0]!.id);
+  recordAgentStep(root, replay.id, { action: 'Open checkout', detail: 'Replayed approved operation', screenshotPath: screenshot, operationStepId: 'open-checkout' });
+  recordRecoveryAttempt(root, replay.id, { reason: 'Replay locator needed a safe wait', action: 'Wait for network', detail: 'The approved flow resumed without changing its meaning.', outcome: 'continued' });
+  recordVisualFinding(root, replay.id, { scenarioId: 'happy-path', assertionId: 'business-outcome', expected: 'Checkout result is visible.', actual: 'Checkout result is visible.', status: 'passed', screenshotPath: screenshot });
+  const replayed = completeAgentGuidedRun(root, task, replay.id);
+  assert.equal(replayed.status, 'passed');
+  assert.equal(replayed.replayStatus, 'replayed');
+  assert.ok(replayed.screenshots.some(item => item.visualInspection === 'not-required'));
+  const report = readFileSync(join(root, '.qa-agent', 'reports', `${replay.id}.md`), 'utf8');
+  assert.match(report, /Screenshot captured/);
+  assert.match(report, /Visual inspection: performed/);
+  assert.match(report, /Recovery/);
 });
 
 test('blocks APP execution until the approved simulator MCP can interact and capture screenshots', () => {

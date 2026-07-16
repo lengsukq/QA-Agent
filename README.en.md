@@ -182,12 +182,12 @@ qa-agent task run checkout-basic-flow --module checkout
 
 ### 4. Agent-guided real UI QA
 
-This is the preferred business-QA mode. The host Agent opens the real browser or simulator, observes the current screen before selecting an action, captures screenshots at consequential transitions and assertions, records expected versus actual results, and completes the Run itself. It must not ask the user to click, capture screenshots, or create the report.
+This is the preferred business-QA mode. The host Agent opens the real browser or simulator and observes the current screen before selecting an action. It captures a screenshot after every real UI action, but invokes visual recognition adaptively at key business assertions, amounts, permissions, state/result changes, unexpected screens, locator adaptations, failures, and the final state. Reports distinguish `Screenshot captured`, `Visual inspection performed`, and `Visual inspection not required`. It must not ask the user to click, capture screenshots, or create the report.
 
 ```bash
 qa-agent context module checkout
 qa-agent run start checkout-basic-flow --module checkout
-qa-agent run step <run-id> --action "Open checkout" --detail "The Agent opened the real checkout screen."
+qa-agent run step <run-id> --action "Open checkout" --detail "The Agent opened the real checkout screen." --screenshot /absolute/path/checkout-open.png --visual-inspection not-required
 qa-agent run observe <run-id> \
   --scenario happy-path \
   --assertion business-outcome \
@@ -200,6 +200,19 @@ qa-agent run complete <run-id>
 
 The report is written to `.qa-agent/reports/<run-id>.md`. Passed and failed visual assertions require a screenshot and reports embed available screenshots.
 
+### 5. Fast regression replay
+
+After a successful run, the Agent creates a candidate Operation JSON under `.qa-agent/modules/<module>/tasks/<task>/operations/`. Review it before reuse:
+
+```bash
+qa-agent task operation list checkout-basic-flow --module checkout
+qa-agent task operation review checkout-basic-flow --module checkout --operation OPERATION_ID --approve
+qa-agent run replay checkout-basic-flow --module checkout --operation OPERATION_ID
+qa-agent run recover <run-id> --reason "Element was not ready" --action "Wait for network" --detail "Element appeared; resume from checkpoint" --outcome continued
+```
+
+Replay is permitted only when the Task plan hash and user approval, Operation JSON, platform/device/app or Web version, environment/role, test data, required MCPs, and macOS permissions are compatible. It skips rediscovery, not business assertions. Outcomes are `PASS`, `FAIL`, `ADAPTED`, `BLOCKED`, or `NEEDS_CONFIRMATION`. Recovery is limited to waiting, refresh/back, app restart, sandbox data reset, MCP reconnect, safe semantic/accessibility fallback locators, and checkpoint resume; never modify source code, bypass permissions, or fabricate results.
+
 ## APP and simulator QA
 
 Declare the platform when initializing the project or creating a module:
@@ -210,6 +223,8 @@ qa-agent module create checkout --name "Checkout" --platforms android
 ```
 
 Before an APP run, the runtime requires Android `android.adb` and `android.screenshot`, or iOS `ios.simulator.interact` and `ios.screenshot`.
+
+On macOS, the host app also needs **Screen Recording** (screenshots/visual evidence) and **Accessibility** (clicks, input, and simulator control). iOS simulator automation may additionally require Developer Mode. The Agent cannot grant system permissions; `mobile doctor` reports the required permissions, validation steps, and the System Settings → Privacy & Security location.
 
 ```bash
 qa-agent mobile doctor --platform android

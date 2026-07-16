@@ -197,14 +197,14 @@ qa-agent task run checkout-basic-flow --module checkout
 
 ### 3. 使用 Agent-guided 真实业务验证
 
-这是推荐的业务 QA 方式。宿主 Agent 应自行打开真实页面/模拟器，观察当前界面后决定下一步，执行操作并在关键转场和每个业务断言处截图。不要让用户手工点击、截图、判定结果或整理报告。
+这是推荐的业务 QA 方式。宿主 Agent 应自行打开真实页面/模拟器，观察当前界面后决定下一步；每个真实 UI 操作后都保存截图，但只在关键业务断言、金额/权限/状态变化、异常页面、定位器适配和最终状态调用视觉识别。报告会明确区分“Screenshot captured”“Visual inspection performed”“Visual inspection not required”。不要让用户手工点击、截图、判定结果或整理报告。
 
 Agent 在后台通过以下命令持久化真实执行轨迹：
 
 ```bash
 qa-agent context module checkout
 qa-agent run start checkout-basic-flow --module checkout
-qa-agent run step <run-id> --action "打开结算页" --detail "已进入真实结算页面"
+qa-agent run step <run-id> --action "打开结算页" --detail "已进入真实结算页面" --screenshot /absolute/path/checkout-open.png --visual-inspection not-required
 qa-agent run observe <run-id> \
   --scenario happy-path \
   --assertion business-outcome \
@@ -217,6 +217,19 @@ qa-agent run complete <run-id>
 
 `run complete` 会自动写入 `.qa-agent/reports/<run-id>.md`。每项视觉业务结论都必须关联截图；缺少视觉证据不能被标记为通过。
 
+### 4. 快速回归执行模式
+
+首次成功运行后，Agent 会在任务目录生成候选 Operation JSON：`.qa-agent/modules/<module>/tasks/<task>/operations/`。审核后可快速回放同一业务流程：
+
+```bash
+qa-agent task operation list checkout-basic-flow --module checkout
+qa-agent task operation review checkout-basic-flow --module checkout --operation OPERATION_ID --approve
+qa-agent run replay checkout-basic-flow --module checkout --operation OPERATION_ID
+qa-agent run recover <run-id> --reason "元素尚未出现" --action "等待网络" --detail "元素出现后继续" --outcome continued
+```
+
+只有 Task 计划哈希、用户确认、Operation JSON、平台/设备/App 或 Web 版本、环境/角色、测试数据、所需 MCP 和 macOS 权限都兼容时才会回放；否则回到计划确认或能力接入。回放不跳过业务断言，只跳过重复探索。结果为 `PASS`、`FAIL`、`ADAPTED`、`BLOCKED` 或 `NEEDS_CONFIRMATION`。安全恢复只能等待、刷新/返回、重启 App、重置沙箱数据、重连 MCP、使用备用无障碍/语义定位或从 checkpoint 继续，不能改代码、绕过权限或伪造结果。
+
 ### APP / 模拟器测试
 
 初始化或创建模块时声明平台：
@@ -228,6 +241,8 @@ qa-agent module create checkout --name "结算" --platforms android
 
 开始 APP 测试前，运行时会强制检查 Android 的 `android.adb` 与 `android.screenshot`，或 iOS 的 `ios.simulator.interact` 与 `ios.screenshot`。如果缺失，Run 会被标记为 `BLOCKED`，并提示 Agent 向用户请求批准连接/安装最小权限的 Android Emulator/ADB 或 iOS Simulator/Appium MCP；不会自动安装。
 
+在 macOS 上还需要宿主应用获得 **Screen Recording**（截图/视觉证据）和 **Accessibility**（点击、输入、模拟器控制）权限；iOS 模拟器按需开启 Developer Mode/自动化权限。Agent 不能代替用户授予系统权限，会在 `mobile doctor` 输出所需权限、验证步骤和 System Settings → Privacy & Security 路径。
+
 获得用户批准并连接后，可在项目中声明该 MCP 能力：
 
 ```bash
@@ -236,7 +251,7 @@ qa-agent mcp activate android-emulator
 qa-agent mobile doctor --platform android
 ```
 
-随后由宿主 Agent 操作模拟器、保存每个关键页面和断言的截图，并通过 Agent-guided Run 自动输出报告。
+随后由宿主 Agent 操作模拟器，保存每个真实操作的截图，并通过 Agent-guided Run 自动输出报告；普通截图只作为证据，不会强制逐张调用视觉模型。
 
 ## 自动报告与经验沉淀
 

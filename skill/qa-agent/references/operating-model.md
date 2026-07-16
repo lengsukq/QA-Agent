@@ -38,12 +38,20 @@ Use the host Agent's browser, mobile, network, log, or source tools for the actu
 
 Do not call a tool merely because a task says it might be useful. Use only the lowest-privilege capability needed by the scenario, and keep blocked runs resumable.
 
+## Fast regression replay
+
+Replay is allowed only when the Task approval and plan hash are current, the Operation JSON is active and derived from that hash, the platform/environment/role/device/app version and test data are compatible, and required MCP capabilities plus macOS permissions have been validated. Load the Task business logic and expected results, check preconditions, then execute the Operation JSON in order. Replay skips rediscovery, not business assertions.
+
+After every real UI action, capture a screenshot for the report. Invoke visual recognition adaptively for key assertions, amounts, permissions, state/result changes, unexpected screens, locator adaptations, failures, and the final state. Reports must distinguish `Screenshot captured`, `Visual inspection performed`, and `Visual inspection not required`.
+
+If a step fails, inspect the current state and use only safe recovery: wait, refresh/back, restart the app, reset sandbox data, reconnect the MCP, use a semantic/accessibility fallback locator, or resume from a checkpoint. Never modify source code, bypass permissions, operate production, or fabricate a result. Record original failure → diagnosis → recovery action → outcome → business conclusion. A semantically successful locator adaptation yields `ADAPTED` and a candidate Operation JSON; a material flow or business-rule change yields `NEEDS_CONFIRMATION`.
+
 ## Visual verification protocol
 
-For Agent-guided QA, screenshots are not decorative artifacts. Take and inspect them at these checkpoints:
+For Agent-guided QA, screenshots are not decorative artifacts. Capture one after every real UI action, but inspect them only at these adaptive checkpoints:
 
 1. Baseline before the workflow or state transition
-2. Immediately after each consequential user operation
+2. Immediately after each consequential user operation (all other action screenshots remain evidence without immediate visual inspection)
 3. At every business assertion
 4. On failure, interruption, or unexpected UI state
 

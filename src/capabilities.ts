@@ -42,7 +42,9 @@ export function mobileCapabilityDiagnosis(root: string, platform: string): objec
   return {
     platform, ready: status.missing.length === 0, requiredCapabilities: required, available: status.available, missing: status.missing,
     userDecisionRequired: status.missing.length > 0,
-    requestToUser: status.missing.length ? `APP testing needs an approved least-privilege ${platform === 'android' ? 'Android Emulator/ADB' : 'iOS Simulator/Appium'} MCP with interaction and screenshot access.` : undefined,
-    nextSteps: status.missing.length ? [`Ask the user to approve connecting or installing the MCP.`, connectionExample, `qa-agent mcp activate ${platform === 'android' ? 'android-emulator' : 'ios-simulator'}`, `qa-agent mobile doctor --platform ${platform}`] : ['Mobile capability preflight passed; start an Agent-guided Run.'],
+    macOSPermissions: ['Screen Recording (for screenshots/visual evidence)', 'Accessibility (for UI interaction)', ...(platform === 'ios' ? ['Developer Mode / Simulator automation where required'] : [])],
+    permissionNote: 'The runtime cannot grant macOS permissions. Ask the user to approve them in System Settings → Privacy & Security, then rerun this doctor check.',
+    requestToUser: status.missing.length ? `APP testing needs an approved least-privilege ${platform === 'android' ? 'Android Emulator/ADB' : 'iOS Simulator/Appium'} MCP with interaction and screenshot access, plus the listed macOS permissions.` : undefined,
+    nextSteps: status.missing.length ? [`Ask the user to approve connecting or installing the MCP.`, `Ask the user to grant Screen Recording and Accessibility permissions in macOS System Settings → Privacy & Security.`, connectionExample, `qa-agent mcp activate ${platform === 'android' ? 'android-emulator' : 'ios-simulator'}`, `qa-agent mobile doctor --platform ${platform}`] : ['Mobile capability preflight passed; confirm macOS Screen Recording and Accessibility permissions before the first UI action, then start an Agent-guided Run.'],
   };
 }

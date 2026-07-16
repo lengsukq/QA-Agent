@@ -1,6 +1,8 @@
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
 export type TaskStatus = 'draft' | 'ready' | 'active' | 'blocked' | 'needs_review' | 'deprecated' | 'archived';
-export type RunStatus = 'pending' | 'running' | 'passed' | 'failed' | 'blocked' | 'paused' | 'inconclusive' | 'not_applicable' | 'needs_confirmation';
+export type RunStatus = 'pending' | 'running' | 'passed' | 'failed' | 'blocked' | 'paused' | 'inconclusive' | 'not_applicable' | 'needs_confirmation' | 'adapted';
+export type ReplayStatus = 'not_replay' | 'replayed' | 'adapted';
+export type VisualInspectionStatus = 'performed' | 'not-required' | 'not-applicable' | 'skipped';
 export type KnowledgeLevel = 'confirmed' | 'observed' | 'inferred' | 'suspected' | 'deprecated';
 export type BrowserAction = 'navigate' | 'click' | 'fill' | 'assert-visible' | 'assert-hidden' | 'assert-text' | 'assert-url' | 'wait-for' | 'screenshot';
 
@@ -20,6 +22,50 @@ export interface VisualAssertion {
   expected: string;
   businessRuleRef?: string;
   importance: RiskLevel;
+}
+
+export interface EvidencePolicy {
+  capture: 'every-action' | 'action-and-key-state';
+  visual: 'adaptive' | 'strict' | 'minimal';
+  required: string[];
+}
+
+export interface OperationStep {
+  id: string;
+  action: string;
+  intent: string;
+  preconditions: string[];
+  locator?: { strategy: string; value?: string; fallbacks?: string[] };
+  expectedState?: string;
+  screenshot: 'after-action' | 'on-state-change' | 'none';
+  visualInspection: 'required' | 'adaptive' | 'not-required';
+  safetyAction?: string;
+}
+
+export interface OperationPlan {
+  $schema: string;
+  apiVersion: 'qa-agent/v1';
+  kind: 'OperationPlan';
+  id: string;
+  version: number;
+  status: 'candidate' | 'active' | 'deprecated';
+  taskId: string;
+  moduleId: string;
+  scenarioId: string;
+  platform: string;
+  environment?: string;
+  device?: string;
+  appVersion?: string;
+  planHash: string;
+  steps: OperationStep[];
+  preconditions: string[];
+  cleanup: string[];
+  capabilities: string[];
+  sourceRunId: string;
+  successfulRuns: number;
+  adaptationHistory?: Array<{ runId: string; detail: string; at: string }>;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ProjectConfig {
@@ -91,6 +137,9 @@ export interface TestTask {
   capabilities: { required: string[]; optional: string[] };
   safety: { safeMode: boolean; stopBefore: string[] };
   evidence: { required: string[] };
+  evidencePolicy: EvidencePolicy;
+  operationPlanRefs: string[];
+  recoveryPolicy: { maxRetries: number; maxRecoveryAttempts: number; allowSandboxDataReset: boolean };
   regression: { triggers: string[] };
   createdAt: string;
   updatedAt: string;
@@ -125,12 +174,18 @@ export interface TestRun {
   git: { branch?: string; commit?: string; dirtyWorkspace: boolean; changedFiles: string[] };
   status: RunStatus;
   safeMode: boolean;
-  steps: Array<{ id: string; action: string; status: RunStatus; detail: string; at: string }>;
+  steps: Array<{ id: string; action: string; status: RunStatus; detail: string; at: string; screenshotPath?: string; visualInspection?: VisualInspectionStatus; source?: 'ui' | 'internal' | 'recovery' | 'operation-replay'; operationStepId?: string }>;
   scenarioResults: Array<{ scenarioId: string; status: RunStatus; detail?: string }>;
   evidence: Array<{ type: string; path?: string; summary: string }>;
   conclusion?: string;
   reportPath?: string;
   retryOf?: string;
+  replayStatus: ReplayStatus;
+  operationPlanId?: string;
+  operationVersion?: number;
+  screenshots: Array<{ stepId: string; path: string; capturedAt: string; visualInspection: VisualInspectionStatus; summary: string }>;
+  recoveryAttempts: Array<{ id: string; reason: string; action: string; outcome: 'continued' | 'blocked' | 'paused' | 'failed'; detail: string; at: string }>;
+  operationCandidates?: string[];
   memoryCandidates?: string[];
   visualFindings: Array<{ scenarioId: string; assertionId: string; expected: string; actual: string; status: RunStatus; screenshotPath?: string; at: string }>;
   startedAt: string;

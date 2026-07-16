@@ -27,7 +27,11 @@ function validateDomainObject(path: string): string[] {
     if (!isSafeId(value.id) || !['candidate', 'active', 'superseded', 'deprecated'].includes(value.status)) errors.push(`${path}: invalid memory id or status.`);
     if (hasSecrets({ content: value.content, structuredRule: value.structuredRule })) errors.push(`${path}: contains a potential secret.`);
   }
-  if (/\/runs\/[^/]+\.json$/.test(path) && !['pending', 'running', 'passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable', 'needs_confirmation'].includes(value.status)) errors.push(`${path}: invalid run status.`);
+  if (/\/runs\/[^/]+\.json$/.test(path) && !['pending', 'running', 'passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable', 'needs_confirmation', 'adapted'].includes(value.status)) errors.push(`${path}: invalid run status.`);
+  if (/\/operations\/[^/]+\.json$/.test(path)) {
+    if (!isSafeId(value.id) || value.kind !== 'OperationPlan' || !['candidate', 'active', 'deprecated'].includes(value.status)) errors.push(`${path}: invalid OperationPlan identity or status.`);
+    if (!Array.isArray(value.steps)) errors.push(`${path}: OperationPlan steps must be an array.`);
+  }
   return errors;
 }
 
@@ -40,6 +44,7 @@ export function validateProject(root: string): ValidationResult {
   ];
   files.push(...listFiles(qaPath(root, 'modules'), path => basename(path) === 'module.json').map(path => [path, ['id', 'name', 'status', 'riskLevel', 'platforms', 'roles']] as [string, string[]]));
   files.push(...listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\.json$/.test(path)).map(path => [path, ['apiVersion', 'kind', 'metadata', 'scenarios', 'capabilities', 'safety', 'evidence']] as [string, string[]]));
+  files.push(...listFiles(qaPath(root, 'modules'), path => /\/operations\/[^/]+\.json$/.test(path)).map(path => [path, ['apiVersion', 'kind', 'id', 'version', 'status', 'taskId', 'moduleId', 'scenarioId', 'planHash', 'steps']] as [string, string[]]));
   files.push(...listFiles(qaPath(root, 'runs'), path => path.endsWith('.json')).map(path => [path, ['id', 'taskId', 'moduleId', 'context', 'status', 'steps', 'startedAt']] as [string, string[]]));
   files.push(...listFiles(qaPath(root, 'modules'), path => /\/memory\/[^/]+\.json$/.test(path)).map(path => [path, ['id', 'type', 'title', 'content', 'knowledgeLevel', 'confidence', 'source']] as [string, string[]]));
   files.push(...listFiles(qaPath(root, 'shared-memory', 'entries'), path => path.endsWith('.json')).map(path => [path, ['id', 'type', 'title', 'content', 'knowledgeLevel', 'confidence', 'source']] as [string, string[]]));
