@@ -1,12 +1,12 @@
 import { join } from 'node:path';
 import { ensureDir, now, writeJsonAtomic } from './store.ts';
-import type { BrowserStep, TestRun, TestScenario } from './types.ts';
+import type { BrowserStep, Locator, OperationAction, TestRun, TestScenario } from './types.ts';
 
 export class SafetyStopError extends Error {
   constructor(message: string) { super(message); this.name = 'SafetyStopError'; }
 }
 
-export interface PlaywrightAdapterConfig { version: 1; kind: 'playwright'; baseUrl: string; headless: boolean; configuredAt: string; capabilities: string[]; }
+export interface PlaywrightAdapterConfig { version: 1 | 2; kind: 'playwright'; baseUrl: string; headless: boolean; configuredAt: string; capabilities: string[]; }
 
 export interface BrowserScenarioResult {
   evidence: TestRun['evidence'];
@@ -88,7 +88,14 @@ async function executeStep(page: any, step: BrowserStep, input: { root: string; 
     case 'screenshot': { const screenshot = join(evidenceDir, `${step.id}.png`); await page.screenshot({ path: screenshot, fullPage: true }); evidence.push({ type: 'screenshot', path: relativeEvidence(input.root, screenshot), summary: step.description ?? step.id }); break; }
     default: throw new Error(`${step.id}: unsupported action ${(step as BrowserStep).action}.`);
   }
-  steps.push({ id: step.id, action: step.action, status: 'passed', detail: step.description ?? 'Completed.', at: started });
+    const postActionScreenshot = join(evidenceDir, `${step.id}-after.png`);
+    await page.screenshot({ path: postActionScreenshot, fullPage: true });
+    const screenshotPath = relativeEvidence(input.root, postActionScreenshot);
+    evidence.push({ type: 'screenshot', path: screenshotPath, summary: `Screenshot after browser operation ${step.id}.` });
+    const actualState = `${page.url()} — ${await page.title()}`;
+    const operationAction: OperationAction = step.action === 'navigate' ? 'navigate' : step.action === 'click' ? 'click' : step.action === 'fill' ? 'fill' : step.action === 'wait-for' ? 'wait' : step.action === 'screenshot' ? 'screenshot' : 'assert';
+    const operationLocator: Locator | undefined = step.locator ? { strategy: 'css', value: step.locator } : undefined;
+    steps.push({ id: step.id, action: step.action, operationAction, safetyAction: step.safetyAction, status: 'passed', detail: step.description ?? 'Completed.', at: started, scenarioId: input.scenario.id, source: 'ui', screenshotPath, visualInspection: 'not-required', locator: operationLocator, expectedState: step.expected, actualState });
 }
 
 function relativeEvidence(root: string, path: string): string { return path.slice(join(root, '.qa-agent').length + 1); }

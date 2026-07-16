@@ -296,6 +296,14 @@ test('executes a browser runbook, verifies assertions, and records real evidence
     assert.ok(run.evidence.some(item => item.type === 'screenshot'));
     assert.ok(run.evidence.some(item => item.type === 'trace'));
     assert.ok(existsSync(join(root, '.qa-agent', 'reports', `${run.id}.md`)));
+    assert.equal(run.operationCandidates?.length, 1, 'successful browser runs must persist one OperationPlan candidate per Scenario');
+    const operationCandidatePath = join(root, '.qa-agent', run.operationCandidates![0]!);
+    assert.ok(existsSync(operationCandidatePath));
+    const operationCandidate = JSON.parse(readFileSync(operationCandidatePath, 'utf8')) as { apiVersion: string; scenarioId: string; steps: Array<{ screenshotPolicy?: string; locator?: { strategy: string } }> };
+    assert.equal(operationCandidate.apiVersion, 'qa-agent/v2');
+    assert.equal(operationCandidate.scenarioId, 'happy-path');
+    assert.ok(operationCandidate.steps.every(step => step.screenshotPolicy === 'after-action'));
+    assert.equal(operationCandidate.steps[0]?.locator?.strategy, 'css');
 
     task.scenarios[0]!.execution!.steps = [{ id: 'pay', action: 'click', locator: '#message', safetyAction: 'payment.submit' }];
     approveTask(task);
