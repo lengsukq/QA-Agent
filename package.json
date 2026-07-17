@@ -13,8 +13,5 @@
   },
   "engines": {
     "node": ">=22.6"
-  },
-  "dependencies": {
-    "playwright": "1.61.1"
   }
 }

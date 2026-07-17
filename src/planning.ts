@@ -1,5 +1,6 @@
 import { now } from './store.ts';
-import type { ProjectMemory, QaModule, TestScenario, TestTask } from './types.ts';
+import { createHash } from 'node:crypto';
+import type { ModuleSnapshot, ProjectMemory, QaModule, TestRequirements, TestScenario, TestTask } from './types.ts';
 import { platformCapabilities } from './capabilities.ts';
 import { testPlanHash } from './approval.ts';
 
@@ -30,15 +31,20 @@ export function createTaskSkeleton(module: QaModule, id: string, name?: string):
     expected: { outcome: '业务目标完成且页面状态符合预期', businessRules }, evidence: ['screenshot', 'current-url', 'visible-text-summary'], cleanup: [], risk: module.riskLevel,
     visualAssertions: [{ id: 'business-outcome', expected: businessRules.length ? `${module.name} 符合已知业务规则：${businessRules.join('；')}` : `${module.name} 的核心业务结果、关键状态和可见反馈符合预期。`, importance: module.riskLevel }],
   };
+  const snapshotSeed = { moduleId: module.id, moduleName: module.name, moduleRevision: module.revision ?? 1, platforms: module.platforms, roles: module.roles, businessGoals: module.businessGoals, coreFlows: module.coreFlows ?? [], businessRules: module.businessRules ?? [], keyStates: module.keyStates ?? [], regressionFocus: module.regressionFocus ?? [] };
+  const moduleSnapshot: ModuleSnapshot = { $schema: '../../../../schemas/module-snapshot.schema.json', apiVersion: 'qa-agent/v2', kind: 'ModuleSnapshot', ...snapshotSeed, snapshotHash: createHash('sha256').update(JSON.stringify(snapshotSeed)).digest('hex'), capturedAt: timestamp };
+  const requirements: TestRequirements = { $schema: '../../../../schemas/requirements.schema.json', apiVersion: 'qa-agent/v2', kind: 'TestRequirements', taskId: id, moduleId: module.id, businessGoals: businessObjectives.length ? businessObjectives : [`完成 ${module.name} 核心业务流程`], actors: module.roles, flows: module.coreFlows ?? [], rules: businessRules.map((statement, index) => ({ id: `rule-${index + 1}`, statement, knowledgeLevel: 'inferred' as const, source: 'module definition' })), scope: { included: businessObjectives, excluded: [] }, preconditions: [], testDataRefs: [], environments: ['local'], sourceRefs: module.sourceHints ?? [], risks: [], userQuestions: [], confirmedDecisions: [], createdAt: timestamp, updatedAt: timestamp };
   return {
-    $schema: '../../../schemas/task.schema.json', apiVersion: 'qa-agent/v2', kind: 'TestTask',
+    $schema: '../../../../schemas/task.schema.json', apiVersion: 'qa-agent/v2', kind: 'TestTask',
     metadata: { id, name: name ?? `${module.name} 核心流程`, moduleId: module.id, version: 1, status: 'draft', priority: module.riskLevel === 'critical' ? 'p0' : 'p1', tags: [module.id, 'regression'] },
+    moduleSnapshotRef: 'module-snapshot.json', requirementsRef: 'requirements.json', testPlanRef: 'test-plan.json', scenarioRefs: ['scenarios/happy-path.json'], regressionSuiteRef: 'regression-suite.json', reportIndexRef: 'reports/index.json', runRefs: [],
     description: `验证 ${module.name} 的核心业务目标。`, objectives: businessObjectives.length ? businessObjectives : [`完成 ${module.name} 核心业务流程`],
     scope: { platforms: module.platforms, environments: ['local'], roles: module.roles }, preconditions: module.entryPoints?.length ? [`Entry points: ${module.entryPoints.join(', ')}`] : [], memoryRefs: [], scenarios: [scenario],
-    requiredSkills: ['evidence.capture', 'visual.verify', 'operation.replay'], capabilities: { required: [...new Set(module.platforms.flatMap(platformCapabilities))], optional: ['network.read', 'source.readonly', 'logs.read'] },
+    requiredSkills: ['execution.contract', 'evidence.record', 'operation.replay'], capabilities: { required: [...new Set(module.platforms.flatMap(platformCapabilities))], optional: ['network.read', 'source.readonly', 'logs.read'] },
     safety: { safeMode: true, stopBefore: ['payment.submit', 'refund.submit', 'data.delete', 'notification.send'] }, evidence: { required: scenario.evidence },
     evidencePolicy: { capture: 'every-action', visual: 'adaptive', required: ['baseline', 'key-business-state', 'failure', 'final-result'] },
     operationPlanRefs: [], recoveryPolicy: { maxRetries: 1, maxRecoveryAttempts: 3, allowSandboxDataReset: true }, regression: { triggers: [] }, createdAt: timestamp, updatedAt: timestamp,
+    moduleSnapshot, requirements,
   };
 }
 

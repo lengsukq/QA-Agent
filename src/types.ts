@@ -5,12 +5,13 @@ export type ReplayStatus = 'not_replay' | 'replayed' | 'adapted';
 export type VisualInspectionStatus = 'performed' | 'not-required' | 'not-applicable' | 'skipped';
 export type ReplayStage = 'idle' | 'ready' | 'preflight_passed' | 'step_pending' | 'executing' | 'screenshot_captured' | 'visual_check_optional' | 'assertion_checked' | 'next_step' | 'completed' | 'blocked' | 'needs_confirmation';
 export type KnowledgeLevel = 'confirmed' | 'observed' | 'inferred' | 'suspected' | 'deprecated';
-export type BrowserAction = 'navigate' | 'click' | 'fill' | 'assert-visible' | 'assert-hidden' | 'assert-text' | 'assert-url' | 'wait-for' | 'screenshot';
 export type OperationAction = 'launch' | 'navigate' | 'click' | 'input' | 'fill' | 'swipe' | 'back' | 'wait' | 'assert' | 'screenshot' | 'reset' | 'restart-app';
 export type LocatorStrategy = 'test-id' | 'accessibility' | 'role' | 'label' | 'text' | 'css' | 'xpath' | 'coordinate' | 'semantic' | 'none';
 export type ScreenshotPolicy = 'after-action' | 'on-state-change' | 'none';
 export type VisualInspectionPolicy = 'required' | 'adaptive' | 'not-required';
 export type PermissionStatus = 'verified' | 'missing' | 'unknown';
+export type RegressionSuiteScope = 'task' | 'module';
+export type RegressionSuiteStatus = 'draft' | 'active' | 'stale' | 'superseded';
 
 export interface Locator {
   strategy: LocatorStrategy;
@@ -33,15 +34,65 @@ export interface ExecutionSnapshot {
   permissionSnapshot: { status: PermissionStatus; permissions: Array<{ name: string; status: PermissionStatus; detail?: string }> };
 }
 
-export interface BrowserStep {
-  id: string;
-  action: BrowserAction;
-  locator?: string;
-  value?: string;
-  expected?: string;
-  timeoutMs?: number;
-  safetyAction?: string;
-  description?: string;
+export interface ModuleSnapshot {
+  $schema: string;
+  apiVersion: 'qa-agent/v2';
+  kind: 'ModuleSnapshot';
+  moduleId: string;
+  moduleName: string;
+  moduleRevision: number;
+  snapshotHash: string;
+  platforms: string[];
+  roles: string[];
+  businessGoals: string[];
+  coreFlows: string[];
+  businessRules: string[];
+  keyStates: string[];
+  regressionFocus: string[];
+  capturedAt: string;
+}
+
+export interface TestRequirements {
+  $schema: string;
+  apiVersion: 'qa-agent/v2';
+  kind: 'TestRequirements';
+  taskId: string;
+  moduleId: string;
+  businessGoals: string[];
+  actors: string[];
+  flows: string[];
+  rules: Array<{ id: string; statement: string; knowledgeLevel: KnowledgeLevel; source?: string }>;
+  scope: { included: string[]; excluded: string[] };
+  preconditions: string[];
+  testDataRefs: string[];
+  environments: string[];
+  sourceRefs: string[];
+  risks: string[];
+  userQuestions: string[];
+  confirmedDecisions: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TestPlan {
+  $schema: string;
+  apiVersion: 'qa-agent/v2';
+  kind: 'TestPlan';
+  taskId: string;
+  moduleId: string;
+  version: number;
+  planHash: string;
+  scenarioRefs: string[];
+  requiredSkills: string[];
+  capabilities: { required: string[]; optional: string[] };
+  safety: { safeMode: boolean; stopBefore: string[] };
+  evidencePolicy: EvidencePolicy;
+  recoveryPolicy: { maxRetries: number; maxRecoveryAttempts: number; allowSandboxDataReset: boolean };
+  status: 'draft' | 'awaiting_confirmation' | 'approved' | 'superseded';
+  approvedBy?: string;
+  approvedAt?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface VisualAssertion {
@@ -106,7 +157,7 @@ export interface ProjectConfig {
   environments?: string[];
   roles?: string[];
   defaultContext: { environment: string; platform: string; role: string };
-  source: { mode: 'local-readonly'; root: string };
+  source: { mode: 'host-provided'; root: string };
   storage: { format: 'json'; runIndexFormat: 'jsonl' };
   createdAt: string;
   updatedAt: string;
@@ -116,6 +167,7 @@ export interface QaModule {
   $schema: string;
   version: 1;
   id: string;
+  revision: number;
   name: string;
   description: string;
   status: 'active' | 'deprecated' | 'archived';
@@ -144,7 +196,6 @@ export interface TestScenario {
   evidence: string[];
   cleanup: string[];
   risk: RiskLevel;
-  execution?: { startPath?: string; steps: BrowserStep[] };
   visualAssertions?: VisualAssertion[];
 }
 
@@ -157,6 +208,16 @@ export interface TestTask {
     priority: 'p0' | 'p1' | 'p2' | 'p3'; tags: string[];
     approval?: { confirmedBy: string; confirmedAt: string; statement: string; planHash: string };
   };
+  moduleSnapshotRef: string;
+  requirementsRef: string;
+  testPlanRef: string;
+  scenarioRefs: string[];
+  regressionSuiteRef: string;
+  reportIndexRef: string;
+  runRefs: string[];
+  moduleSnapshot?: ModuleSnapshot;
+  requirements?: TestRequirements;
+  testPlan?: TestPlan;
   description: string;
   objectives: string[];
   scope: { platforms: string[]; environments: string[]; roles: string[] };
@@ -175,10 +236,61 @@ export interface TestTask {
   updatedAt: string;
 }
 
+export interface RegressionSuiteMember {
+  taskId: string;
+  moduleId: string;
+  scenarioId: string;
+  operationPlanId: string;
+  operationPlanRef: string;
+  operationVersion: number;
+  taskPlanHash: string;
+  order: number;
+}
+
+export interface RegressionSuite {
+  $schema: string;
+  apiVersion: 'qa-agent/v2';
+  kind: 'RegressionSuite';
+  id: string;
+  version: number;
+  scope: RegressionSuiteScope;
+  moduleId: string;
+  taskId?: string;
+  taskSuiteRefs?: string[];
+  operationPlanRefs?: string[];
+  members: RegressionSuiteMember[];
+  selectionPolicy: 'all-active-operation-plans';
+  failurePolicy: 'continue-independent';
+  contextPolicy: 'current-context';
+  suiteHash: string;
+  status: RegressionSuiteStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RegressionRun {
+  $schema: string;
+  apiVersion: 'qa-agent/v2';
+  kind: 'RegressionRun';
+  id: string;
+  suiteId: string;
+  suiteVersion: number;
+  suiteHash: string;
+  moduleId: string;
+  context: ExecutionSnapshot;
+  status: RunStatus;
+  childRuns: Array<{ runId: string; taskId: string; scenarioId: string; operationPlanId: string; status: RunStatus; reportPath?: string; detail?: string }>;
+  failurePolicy: 'continue-independent';
+  startedAt: string;
+  completedAt?: string;
+  reportPath?: string;
+}
+
 export interface ProjectMemory {
   $schema: string;
   id: string;
   moduleId?: string;
+  taskId?: string;
   type: string;
   title: string;
   content: string;

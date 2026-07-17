@@ -1,21 +1,20 @@
 #!/usr/bin/env node
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { availableCapabilities, capabilityAdvice } from './capabilities.ts';
-import { beginAgentGuidedRun, completeAgentGuidedRun, configurePlaywrightAdapter, executeTask, recordAgentStep, recordRecoveryAttempt, recordVisualFinding } from './engine.ts';
+import { beginAgentGuidedRun, beginRegressionRun, buildExecutionSnapshot, completeAgentGuidedRun, completeRegressionRun, recordAgentStep, recordHostEvidence, recordRecoveryAttempt, recordVisualFinding } from './engine.ts';
 import { readIndex, rebuildIndexes } from './indexer.ts';
 import { createTaskSkeleton, planModule, taskPlan } from './planning.ts';
-import { createModule, findProjectRoot, initializeProject, modulePath, qaPath, readModule, readTask, requireProjectRoot, saveTask } from './project.ts';
+import { createModule, findProjectRoot, initializeProject, modulePath, qaPath, readModule, readRunById, readTask, requireProjectRoot, saveTask, taskReportDirectory } from './project.ts';
 import { readProject } from './project.ts';
 import { assertSafeId, now, readJson, writeJsonAtomic } from './store.ts';
-import type { Locator, PermissionStatus, ProjectMemory, RunStatus } from './types.ts';
+import type { ExecutionSnapshot, Locator, PermissionStatus, ProjectMemory, RunStatus } from './types.ts';
 import { validateProject, validateSkill } from './validation.ts';
 import { createMemoryCandidate, reviewMemory } from './memory.ts';
-import { diagnoseSource, searchSource } from './source-verifier.ts';
 import { installHostIntegration, supportedHosts } from './host-adapters.ts';
-import { invalidateApproval, testPlanHash } from './approval.ts';
-import { mobileCapabilityDiagnosis } from './capabilities.ts';
+import { testPlanHash } from './approval.ts';
+import { hostCapabilityDiagnosis } from './capabilities.ts';
 import { operationSummary, readOperation, reviewOperation } from './operations.ts';
+import { readModuleRegressionSuite, readTaskRegressionSuite, syncModuleRegressionSuite, syncTaskRegressionSuite } from './regression.ts';
 
 const args = process.argv.slice(2);
 const usage = `qa-agent — local-first QA Agent MVP
@@ -25,21 +24,17 @@ Commands:
   install-skill [--path SKILLS_DIRECTORY] [--force]   (Codex compatibility alias)
   install-host <codex|claude|cursor|opencode|copilot|gemini|agents> [--scope project|user] [--project PROJECT_DIRECTORY] [--path SKILLS_DIRECTORY] [--force]
   doctor | validate | index rebuild
-  capability list | capability declare NAME | capability remove NAME
-  mcp list | mcp add ID --capabilities CAPABILITY[,CAPABILITY...] [--readonly] [--version VERSION] | mcp activate ID [--permissions verified|missing|unknown] | mcp doctor
-  mobile doctor --platform android|ios
+  host list | host import --file HOST_CAPABILITIES.json | host doctor [--platform android|ios]
   context module MODULE
   module list | module create ID --name NAME [--description TEXT] [--platforms web,android,ios] | module update ID [--name NAME] [--description TEXT] [--risk LEVEL] | module archive ID | module plan ID | module coverage ID
-  task list | task create ID --module MODULE [--name NAME] | task plan ID --module MODULE | task runbook ID --module MODULE --file FILE [--scenario ID] | task operation list|show|review ID --module MODULE [--approve|--reject] | task review ID --module MODULE --approve --confirmed-by USER | task archive ID --module MODULE | task run ID --module MODULE
-  memory list | memory search TEXT | memory add ID --module MODULE --title TEXT --content TEXT | memory review ID --module MODULE --approve|--reject
-  adapter playwright --base-url URL
-  source search TEXT | source diagnose --module MODULE --query TEXT
-  run start TASK --module MODULE [--scenario SCENARIO] [--environment ENV] [--platform PLATFORM] [--role ROLE] [--device DEVICE] [--device-model MODEL] [--os-version VERSION] [--app-version VERSION] [--web-build BUILD] [--test-data-fingerprint FINGERPRINT] [--operation OPERATION_ID]
-  run replay TASK --module MODULE --operation OPERATION_ID [--environment ENV] [--platform PLATFORM] [--role ROLE] [--scenario SCENARIO] [--device DEVICE] [--device-model MODEL] [--os-version VERSION] [--app-version VERSION] [--web-build BUILD] [--test-data-fingerprint FINGERPRINT]
+  task list | task create ID --module MODULE [--name NAME] | task plan ID --module MODULE | task run ID --module MODULE [--operation OPERATION_ID] [--scenario SCENARIO] [--environment ENV] [--platform PLATFORM] [--role ROLE] [--device DEVICE] [--device-model MODEL] [--os-version VERSION] [--app-version VERSION] [--web-build BUILD] [--test-data-fingerprint FINGERPRINT] | task operation list|show|review ID --module MODULE [--approve|--reject] | task regression sync|show|run ID --module MODULE | task review ID --module MODULE --approve --confirmed-by USER | task archive ID --module MODULE
+  module regression sync|show|run MODULE
+  memory list | memory search TEXT | memory add ID --module MODULE [--task TASK] --title TEXT --content TEXT | memory review ID --module MODULE [--task TASK] --approve|--reject
   run step RUN --action TEXT --detail TEXT --screenshot PATH [--operation-action launch|navigate|click|input|fill|swipe|back|wait|assert|screenshot|reset|restart-app] [--safety-action ACTION] [--scenario SCENARIO] [--status passed|failed|paused|blocked|adapted] [--visual-inspection performed|not-required|skipped] [--operation-step STEP] [--locator-strategy STRATEGY] [--locator-value VALUE] [--actual-locator-strategy STRATEGY] [--actual-locator-value VALUE] [--adaptation TEXT]
+  run evidence RUN --type TYPE --summary TEXT [--file PATH]
   run recover RUN --action wait|refresh|back|restart-app|reset-sandbox-data|reconnect-mcp|fallback-locator|resume-checkpoint --reason TEXT --detail TEXT --outcome continued|blocked|paused|failed [--failed-step STEP]
   run observe RUN --scenario ID --assertion ID --expected TEXT --actual TEXT --status passed|failed|paused|blocked [--screenshot PATH]
-  run complete RUN | run show RUN | run report RUN | run retry RUN
+  run complete RUN | run show RUN | run report RUN
   skill list | skill validate
 `;
 
@@ -54,11 +49,16 @@ function locatorFromFlags(prefix = ''): Locator | undefined {
   return { strategy: strategy as Locator['strategy'], value };
 }
 
+function runContextFromFlags(): Partial<ExecutionSnapshot> & { operationId?: string } {
+  return { environment: flag('--environment'), platform: flag('--platform'), role: flag('--role'), scenarioId: flag('--scenario'), operationId: flag('--operation'), device: flag('--device'), deviceModel: flag('--device-model'), osVersion: flag('--os-version'), appVersion: flag('--app-version'), webBuild: flag('--web-build'), testDataFingerprint: flag('--test-data-fingerprint') };
+}
+
 function addMemory(root: string, id: string, moduleId: string, title: string, content: string): ProjectMemory {
   assertSafeId(id, 'memory id');
   readModule(root, moduleId);
+  const taskId = flag('--task'); if (taskId) readTask(root, moduleId, taskId);
   const result = createMemoryCandidate(root, {
-    id, moduleId, type: flag('--type') ?? 'business_rule', title, content,
+    id, moduleId, taskId, type: flag('--type') ?? 'business_rule', title, content,
     scope: { environments: ['local'], platforms: ['web'], roles: ['default'] }, knowledgeLevel: 'observed', confidence: 0.7,
     importance: 'medium', source: { type: 'user_input', reference: 'qa-agent memory add' },
   });
@@ -92,37 +92,21 @@ async function main(): Promise<void> {
     const available = availableCapabilities(projectRoot);
     output({ ok: true, projectRoot, availableCapabilities: available, notes: available.includes('browser.interact') ? [] : capabilityAdvice(['browser.interact']) }); return;
   }
-  if (group === 'capability') {
-    const projectRoot = root();
-    const configPath = qaPath(projectRoot, 'capabilities.json');
-    const config = readJson<{ version: number; capabilities: string[]; updatedAt?: string }>(configPath);
-    if (action === 'list') { output({ declared: config.capabilities, available: availableCapabilities(projectRoot) }); return; }
-    if (!subject) throw new Error('capability name is required.');
-    if (action === 'declare') config.capabilities = [...new Set([...config.capabilities, subject])].sort();
-    else if (action === 'remove') config.capabilities = config.capabilities.filter(item => item !== subject);
-    else throw new Error('Unsupported capability command.');
-    config.updatedAt = now(); writeJsonAtomic(configPath, config); output(config); return;
-  }
-  if (group === 'mcp') {
+  if (group === 'host') {
     const projectRoot = root(); const path = qaPath(projectRoot, 'mcp.json');
-    const config = readJson<{ version: number; connections: Array<{ id: string; capabilities: string[]; scope: string; status: string; readOnly: boolean; permissionStatus?: PermissionStatus; version?: string }> }>(path);
+    const config = readJson<{ version: number; connections: Array<{ id: string; capabilities: string[]; status: 'available' | 'unavailable'; permissionStatus?: PermissionStatus; version?: string; host?: string; attestedAt?: string }> }>(path);
     if (action === 'list') { output(config.connections); return; }
     if (action === 'doctor') {
-      const checks = config.connections.map(connection => ({ id: connection.id, status: connection.status, permissionStatus: connection.permissionStatus ?? 'unknown', healthy: connection.status === 'connected' && connection.capabilities.length > 0 && connection.permissionStatus === 'verified', issue: connection.status !== 'connected' ? 'not connected' : !connection.capabilities.length ? 'no capabilities declared' : connection.permissionStatus !== 'verified' ? 'macOS/MCP permissions are not verified' : undefined }));
+      if (flag('--platform')) { output(hostCapabilityDiagnosis(projectRoot, requiredFlag('--platform'))); return; }
+      const checks = config.connections.map(connection => ({ id: connection.id, status: connection.status, permissionStatus: connection.permissionStatus ?? 'unknown', attestedAt: connection.attestedAt, healthy: connection.status === 'available' && connection.capabilities.length > 0 && connection.permissionStatus === 'verified', issue: connection.status !== 'available' ? 'host did not attest this tool as available' : !connection.capabilities.length ? 'no capabilities declared by host' : connection.permissionStatus !== 'verified' ? 'host did not attest required permissions as verified' : undefined }));
       output({ healthy: checks.every(check => check.healthy), connections: checks }); return;
     }
-    if (!subject) throw new Error('MCP id is required.');
-    if (action === 'add') {
-      assertSafeId(subject, 'MCP id'); if (config.connections.some(connection => connection.id === subject)) throw new Error(`MCP ${subject} already exists.`);
-      const capabilities = requiredFlag('--capabilities').split(',').map(item => item.trim()).filter(Boolean); if (!capabilities.length) throw new Error('At least one capability is required.');
-      config.connections.push({ id: subject, capabilities, scope: 'project', status: 'configured', readOnly: args.includes('--readonly'), permissionStatus: 'unknown', version: flag('--version') });
-    } else if (action === 'activate') {
-      const connection = config.connections.find(item => item.id === subject); if (!connection) throw new Error(`MCP ${subject} was not found.`); connection.status = 'connected';
-      const permissions = flag('--permissions'); if (permissions && !['verified', 'missing', 'unknown'].includes(permissions)) throw new Error('--permissions must be verified, missing, or unknown.'); if (permissions) connection.permissionStatus = permissions as PermissionStatus;
-    } else throw new Error('Unsupported MCP command.');
+    if (action !== 'import') throw new Error('Host command must be list, import, or doctor.');
+    const snapshot = readJson<{ host?: string; collectedAt?: string; connections?: Array<{ id: string; capabilities: string[]; status?: 'available' | 'unavailable'; permissionStatus?: PermissionStatus; version?: string }> }>(requiredFlag('--file'));
+    if (!Array.isArray(snapshot.connections) || snapshot.connections.some(connection => !connection.id || !Array.isArray(connection.capabilities))) throw new Error('Host capability snapshot requires a connections array with id and capabilities.');
+    config.connections = snapshot.connections.map(connection => ({ id: connection.id, capabilities: [...new Set(connection.capabilities)], status: connection.status ?? 'available', permissionStatus: connection.permissionStatus ?? 'unknown', version: connection.version, host: snapshot.host, attestedAt: snapshot.collectedAt ?? now() }));
     writeJsonAtomic(path, config); output(config); return;
   }
-  if (group === 'mobile' && action === 'doctor') { output(mobileCapabilityDiagnosis(root(), requiredFlag('--platform'))); return; }
   if (group === 'validate') {
     const result = validateProject(root()); output(result); if (!result.valid) process.exitCode = 1; return;
   }
@@ -162,7 +146,7 @@ async function main(): Promise<void> {
         module.name = flag('--name') ?? module.name; module.description = flag('--description') ?? module.description;
         const risk = flag('--risk'); if (risk) { if (!['low', 'medium', 'high', 'critical'].includes(risk)) throw new Error('--risk must be low, medium, high, or critical.'); module.riskLevel = risk as typeof module.riskLevel; }
       } else module.status = 'archived';
-      module.updatedAt = now(); writeJsonAtomic(join(modulePath(projectRoot, subject), 'module.json'), module); rebuildIndexes(projectRoot); output(module); return;
+      module.revision = (module.revision ?? 1) + 1; module.updatedAt = now(); writeJsonAtomic(join(modulePath(projectRoot, subject), 'module.json'), module); rebuildIndexes(projectRoot); output(module); return;
     }
   }
   if (group === 'task') {
@@ -174,31 +158,32 @@ async function main(): Promise<void> {
       const task = createTaskSkeleton(readModule(projectRoot, moduleId), subject, flag('--name'));
       saveTask(projectRoot, task); rebuildIndexes(projectRoot); output(task); return;
     }
-    const taskId = action === 'operation' ? (flag('--task') ?? args[3]) : subject;
-    if (!taskId || taskId.startsWith('--')) throw new Error('task id is required for operation commands.');
+    const nestedAction = action === 'operation' || action === 'regression' ? subject : undefined;
+    const taskId = nestedAction ? (flag('--task') ?? args[3]) : subject;
+    if (!taskId || taskId.startsWith('--')) throw new Error('task id is required for operation/regression commands.');
     const task = readTask(projectRoot, moduleId, taskId);
     if (action === 'plan') return output(taskPlan(task));
     if (action === 'operation') {
-      const operationAction = args[3];
+      const operationAction = ['list', 'show', 'review'].includes(subject ?? '') ? subject : args[3];
       if (operationAction === 'list') return output(operationSummary(projectRoot, task));
       if (operationAction === 'show') return output(readOperation(projectRoot, task, requiredFlag('--operation')));
       if (operationAction === 'review') {
         const approve = args.includes('--approve'); const reject = args.includes('--reject');
         if (approve === reject) throw new Error('Specify exactly one of --approve or --reject.');
-        const reviewed = reviewOperation(projectRoot, task, requiredFlag('--operation'), approve ? 'approve' : 'reject'); rebuildIndexes(projectRoot); return output(reviewed);
+        const reviewed = reviewOperation(projectRoot, task, requiredFlag('--operation'), approve ? 'approve' : 'reject'); if (approve) syncTaskRegressionSuite(projectRoot, task); rebuildIndexes(projectRoot); return output(reviewed);
       }
       throw new Error('Operation action must be list, show, or review.');
     }
-    if (action === 'runbook') {
-      const raw = JSON.parse(readFileSync(requiredFlag('--file'), 'utf8')) as { startPath?: string; steps?: unknown } | unknown[];
-      const runbook = Array.isArray(raw) ? { steps: raw } : raw;
-      if (!runbook || typeof runbook !== 'object' || !Array.isArray((runbook as { steps?: unknown }).steps)) throw new Error('Runbook file must be a JSON array of steps or an object with steps.');
-      const scenarioId = flag('--scenario') ?? task.scenarios[0]?.id;
-      const scenario = task.scenarios.find(item => item.id === scenarioId);
-      if (!scenario) throw new Error(`Scenario ${scenarioId} was not found.`);
-      scenario.execution = runbook as typeof scenario.execution;
-      const invalidated = invalidateApproval(task);
-      task.updatedAt = now(); saveTask(projectRoot, task); rebuildIndexes(projectRoot); output({ taskId: task.metadata.id, scenarioId, runbook: scenario.execution, approvalInvalidated: invalidated, message: invalidated ? 'Execution plan changed; present the updated test cases and obtain user confirmation again.' : undefined }); return;
+    if (action === 'regression') {
+      const regressionAction = ['sync', 'show', 'run', 'complete'].includes(subject ?? '') ? subject : args[3];
+      if (regressionAction === 'sync') return output(syncTaskRegressionSuite(projectRoot, task));
+      if (regressionAction === 'show') return output(readTaskRegressionSuite(projectRoot, task));
+      if (regressionAction === 'run') {
+        const suite = readTaskRegressionSuite(projectRoot, task); const context = buildExecutionSnapshot(projectRoot, task, { environment: flag('--environment'), platform: flag('--platform'), role: flag('--role'), scenarioId: flag('--scenario'), device: flag('--device'), deviceModel: flag('--device-model'), osVersion: flag('--os-version'), appVersion: flag('--app-version'), webBuild: flag('--web-build'), testDataFingerprint: flag('--test-data-fingerprint') });
+        const started = beginRegressionRun(projectRoot, suite, context); rebuildIndexes(projectRoot); return output(started);
+      }
+      if (regressionAction === 'complete') { const regressionRun = readJson(qaPath(projectRoot, 'regression-runs', `${requiredFlag('--run')}.json`)); const completed = completeRegressionRun(projectRoot, regressionRun); rebuildIndexes(projectRoot); return output(completed); }
+      throw new Error('Regression action must be sync, show, or run.');
     }
     if (action === 'review') {
       if (!args.includes('--approve')) throw new Error('Task review requires --approve after verifying scope, business logic, scenarios, evidence, and safety stops.');
@@ -210,7 +195,12 @@ async function main(): Promise<void> {
     if (action === 'archive') {
       task.metadata.status = 'archived'; task.metadata.version += 1; task.updatedAt = now(); saveTask(projectRoot, task); rebuildIndexes(projectRoot); output(task); return;
     }
-    if (action === 'run') { const run = await executeTask(projectRoot, task, { environment: flag('--environment'), platform: flag('--platform'), role: flag('--role'), scenarioId: flag('--scenario'), device: flag('--device'), deviceModel: flag('--device-model'), osVersion: flag('--os-version'), appVersion: flag('--app-version'), webBuild: flag('--web-build'), testDataFingerprint: flag('--test-data-fingerprint') }); rebuildIndexes(projectRoot); output(run); return; }
+    if (action === 'run') {
+      const started = beginAgentGuidedRun(projectRoot, task, runContextFromFlags());
+      rebuildIndexes(projectRoot);
+      output({ ...started, next: 'Host Agent should now operate its approved tools and record run step, run evidence, run observe, and run complete internally.' });
+      return;
+    }
   }
   if (group === 'memory') {
     const projectRoot = root();
@@ -228,34 +218,23 @@ async function main(): Promise<void> {
       if (!subject) throw new Error('memory id is required.');
       const approve = args.includes('--approve'); const reject = args.includes('--reject');
       if (approve === reject) throw new Error('Specify exactly one of --approve or --reject.');
-      const memory = reviewMemory(projectRoot, requiredFlag('--module'), subject, approve ? 'approve' : 'reject', (flag('--knowledge-level') as ProjectMemory['knowledgeLevel'] | undefined) ?? 'confirmed');
+      const memory = reviewMemory(projectRoot, requiredFlag('--module'), subject, approve ? 'approve' : 'reject', (flag('--knowledge-level') as ProjectMemory['knowledgeLevel'] | undefined) ?? 'confirmed', flag('--task'));
       rebuildIndexes(projectRoot); output(memory); return;
     }
   }
-  if (group === 'adapter' && action === 'playwright') { configurePlaywrightAdapter(root(), requiredFlag('--base-url')); output({ message: 'Playwright adapter configuration saved. Add a deterministic task runbook before executing UI actions.' }); return; }
-  if (group === 'source') {
-    const projectRoot = root();
-    if (action === 'search') { if (!subject) throw new Error('search text is required.'); output(searchSource(projectRoot, subject)); return; }
-    if (action === 'diagnose') { output(diagnoseSource(projectRoot, requiredFlag('--module'), requiredFlag('--query'))); return; }
-  }
   if (group === 'run') {
+    if (!['show', 'report', 'step', 'evidence', 'recover', 'observe', 'complete'].includes(action ?? '')) throw new Error(`Unsupported command.\n\n${usage}`);
     const projectRoot = root();
-    if (!subject) throw new Error('run id or task id is required.');
-    if (action === 'replay') {
-      const task = readTask(projectRoot, requiredFlag('--module'), subject);
-      const started = beginAgentGuidedRun(projectRoot, task, { environment: flag('--environment'), platform: flag('--platform'), role: flag('--role'), scenarioId: flag('--scenario'), operationId: requiredFlag('--operation'), device: flag('--device'), deviceModel: flag('--device-model'), osVersion: flag('--os-version'), appVersion: flag('--app-version'), webBuild: flag('--web-build'), testDataFingerprint: flag('--test-data-fingerprint') });
-      rebuildIndexes(projectRoot); output(started); return;
-    }
-    if (action === 'start') {
-      const task = readTask(projectRoot, requiredFlag('--module'), subject);
-      const started = beginAgentGuidedRun(projectRoot, task, { environment: flag('--environment'), platform: flag('--platform'), role: flag('--role'), scenarioId: flag('--scenario'), operationId: flag('--operation'), device: flag('--device'), deviceModel: flag('--device-model'), osVersion: flag('--os-version'), appVersion: flag('--app-version'), webBuild: flag('--web-build'), testDataFingerprint: flag('--test-data-fingerprint') });
-      rebuildIndexes(projectRoot); output(started); return;
-    }
-    const run = readJson(qaPath(projectRoot, 'runs', `${subject}.json`));
+    if (!subject) throw new Error('run id is required. Start a Task with task run TASK --module MODULE.');
+    const run = readRunById(projectRoot, subject);
     if (action === 'show') return output(run);
-    if (action === 'report') return output(qaPath(projectRoot, 'reports', `${subject}.md`));
+    if (action === 'report') return output(join(taskReportDirectory(projectRoot, run.moduleId, run.taskId), `${subject}.md`));
     if (action === 'step') {
       const updated = recordAgentStep(projectRoot, subject, { action: requiredFlag('--action'), operationAction: flag('--operation-action') as 'launch' | 'navigate' | 'click' | 'input' | 'fill' | 'swipe' | 'back' | 'wait' | 'assert' | 'screenshot' | 'reset' | 'restart-app' | undefined, safetyAction: flag('--safety-action'), detail: requiredFlag('--detail'), screenshotPath: requiredFlag('--screenshot'), status: (flag('--status') as RunStatus | undefined) ?? 'passed', visualInspection: (flag('--visual-inspection') as 'performed' | 'not-required' | 'not-applicable' | 'skipped' | undefined) ?? 'not-required', operationStepId: flag('--operation-step'), scenarioId: flag('--scenario'), locator: locatorFromFlags(), actualLocator: locatorFromFlags('actual-'), adaptation: flag('--adaptation') });
+      output(updated); return;
+    }
+    if (action === 'evidence') {
+      const updated = recordHostEvidence(projectRoot, subject, { type: requiredFlag('--type'), summary: requiredFlag('--summary'), artifactPath: flag('--file') });
       output(updated); return;
     }
     if (action === 'recover') {
@@ -270,11 +249,21 @@ async function main(): Promise<void> {
       const updated = completeAgentGuidedRun(projectRoot, readTask(projectRoot, (run as { moduleId: string }).moduleId, (run as { taskId: string }).taskId), subject);
       rebuildIndexes(projectRoot); output(updated); return;
     }
-    if (action === 'retry') {
-      const previous = run as { taskId: string; moduleId: string; context: { environment: string; platform: string; role: string } };
-      const retried = await executeTask(projectRoot, readTask(projectRoot, previous.moduleId, previous.taskId), previous.context, subject);
-      rebuildIndexes(projectRoot); output(retried); return;
+  }
+  if (group === 'module' && action === 'regression') {
+    const projectRoot = root();
+    const regressionAction = ['sync', 'show', 'run', 'complete'].includes(subject ?? '') ? subject : args[3];
+    const moduleId = regressionAction === subject ? args[3] : subject;
+    if (!moduleId || moduleId.startsWith('--')) throw new Error('module id is required.');
+    if (regressionAction === 'sync') return output(syncModuleRegressionSuite(projectRoot, moduleId));
+    if (regressionAction === 'show') return output(readModuleRegressionSuite(projectRoot, moduleId));
+    if (regressionAction === 'run') {
+      const suite = readModuleRegressionSuite(projectRoot, moduleId); const first = suite.members[0]; if (!first) throw new Error(`Module ${moduleId} has no active OperationPlan.`);
+      const task = readTask(projectRoot, moduleId, first.taskId); const context = buildExecutionSnapshot(projectRoot, task, { environment: flag('--environment'), platform: flag('--platform'), role: flag('--role'), device: flag('--device'), deviceModel: flag('--device-model'), osVersion: flag('--os-version'), appVersion: flag('--app-version'), webBuild: flag('--web-build'), testDataFingerprint: flag('--test-data-fingerprint') });
+      const started = beginRegressionRun(projectRoot, suite, context); rebuildIndexes(projectRoot); return output(started);
     }
+    if (regressionAction === 'complete') { const regressionRun = readJson(qaPath(projectRoot, 'regression-runs', `${requiredFlag('--run')}.json`)); const completed = completeRegressionRun(projectRoot, regressionRun); rebuildIndexes(projectRoot); return output(completed); }
+    throw new Error('Module regression action must be sync, show, or run.');
   }
   if (group === 'skill') {
     const skillRoot = join(process.cwd(), 'skill', 'qa-agent');

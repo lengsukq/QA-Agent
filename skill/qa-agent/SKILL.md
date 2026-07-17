@@ -9,7 +9,7 @@ Use this skill as a local-first QA operating system. Treat real business results
 
 ## Architecture boundary
 
-This Skill uses the `qa-agent/v2` contract. It is the QA brain, not a browser or simulator framework. It decides what to test, why it matters, what evidence is necessary, and how to classify the result. The host Agent and its approved MCPs perform clicks, typing, screenshots, recordings, simulator/device control, logs, data reads, source reads, and issue creation. The optional local Playwright adapter is a development/reference capability only; do not treat it as the required execution architecture.
+This Skill uses the `qa-agent/v2` contract. It is the QA brain, not a browser or simulator framework. It decides what to test, why it matters, what evidence is necessary, and how to classify the result. The host Agent and its approved MCPs perform clicks, typing, screenshots, recordings, simulator/device control, logs, data reads, source reads, and issue creation. Import the host capability snapshot before a Run; `qa-agent` never connects those tools or validates their system permissions itself.
 
 ## Agent-guided live QA
 
@@ -19,11 +19,11 @@ Do not reduce a business request to a static test-case runner. Use the available
 2. After confirmation, start an Agent-guided Run, then inspect the real rendered screen before choosing an action. Make the next action conditional on the observed state.
 3. For every real UI action (click, input, swipe, back, launch, reset, or navigation), save a screenshot for the report. Do not invoke visual recognition for every screenshot by default: inspect key business assertions, amounts, permissions, status/result changes, unexpected pages, locator adaptations, and final state. Label `Screenshot captured`, `Visual inspection performed`, and `Visual inspection not required` separately.
 4. Record every meaningful operation and visual observation with its expected result, actual rendered result, status, and screenshot. Use DOM, network, logs, or source only as corroborating evidence.
-5. For a later regression, enter fast replay only when the approved Task hash, user approval, active Scenario-specific OperationPlan, platform/device/app version, environment/role, test-data fingerprint, MCP health, and verified macOS permissions all match. Replay structured steps in order, keep business assertions, and use `ADAPTED` only when a safe semantic/accessibility locator adaptation preserves the business meaning. Otherwise return to plan confirmation or capability setup.
+5. For a later regression, load the Task or Module RegressionSuite. Enter fast replay only when its suite hash, approved Task hash, user approval, active Scenario-specific OperationPlan, platform/device/app version, environment/role, test-data fingerprint, and host-attested capability/permission snapshot all match. The Agent automatically iterates the Suite; the user must not be asked to enter individual `run step` commands. Replay structured steps in order, keep business assertions, and use `ADAPTED` only when a safe semantic/accessibility locator adaptation preserves the business meaning. Otherwise return to plan confirmation or capability setup.
 6. Stop on a risky action or missing capability, preserve the current Run as `paused` or `blocked`, and explain what is needed to resume. After an operation failure, wait, refresh/back, restart the app, reset sandbox data, reconnect MCP, use a fallback locator, or resume from a checkpoint. Never modify source code, bypass permissions, touch production, or fake results. Use `inconclusive` when evidence cannot support a verdict, `not_applicable` when the scenario does not apply to the current context, and `needs_confirmation` when the expected business rule itself needs user confirmation.
 7. Complete the Run only after each scenario has business evidence; curate a failed result into a reviewable project-memory candidate and a successful first run into a candidate OperationPlan for later review. An adapted replay creates a versioned candidate that supersedes the prior plan only after review.
 
-For Android or iOS, follow the same process with simulator/device screenshots and accessibility hierarchy. Before an APP run, call `qa-agent mobile doctor --platform android|ios`; require `android.adb` + `android.screenshot`, or `ios.simulator.interact` + `ios.screenshot`. If either is absent, create a BLOCKED run and ask the user to approve connecting or installing the least-privilege Android/iOS Simulator, ADB, or Appium MCP; state the requested permissions and validation steps, and do not install it automatically.
+For Android or iOS, follow the same process with simulator/device screenshots and accessibility hierarchy. Before an APP run, call `qa-agent host doctor --platform android|ios`; require `android.adb` + `android.screenshot`, or `ios.simulator.interact` + `ios.screenshot`. If either is absent, create a BLOCKED run and ask the user to approve connecting or installing the least-privilege Android/iOS Simulator, ADB, or Appium MCP; state the requested permissions and validation steps, and do not install it automatically.
 
 Run this workflow automatically when the user asks to execute a test. Do not ask the user to click through the UI, capture screenshots, enter Run steps, assess visual results, or generate the report. The Agent performs those actions and returns the final report. Ask the user only to confirm generated test cases before any execution, for unavailable credentials, an explicit high-risk approval, a missing required capability, or a business rule that cannot be inferred safely.
 
@@ -46,17 +46,17 @@ Use the hierarchy `Project → Module → Test Task → Scenario → Run → Ste
 - Create modules as stable business boundaries.
 - Treat module planning as non-mutating output. Cover core flows, boundaries, roles, state transitions, exceptions, consistency, idempotency, dependencies, and historic regressions.
 - Create or modify a Test Task only after the intended scenarios and expected results are clear. Use project Memory, Module facts, and read-only source context to generate business rules, normal/boundary/permission/state/exception/idempotency/cross-module scenarios, visual assertions, and required evidence. Present the generated test cases and business logic for explicit user confirmation; use `task review --approve --confirmed-by <user>` only after that confirmation. Approval is tied to the generated plan hash: any material test-plan change invalidates approval and requires a new user confirmation, while an unchanged approved version may run repeatedly without asking again.
-- Use Task for what to verify; use an approved OperationPlan under the Task's project-local `operations/` directory for how to replay a stable flow. Use Skill for reusable operation capability, never for project memory.
+- Use Task for what to verify; use an approved OperationPlan under the Task's project-local `operation-plans/<scenario>/` directory for how to replay a stable flow. Treat `run.json` as a result record, never as an executable script. Use Task and Module RegressionSuite files to organize fast regression. Use Skill for reusable operation capability, never for project memory.
+- Keep the complete Task asset set together: `task.json`, `module-snapshot.json`, `requirements.json`, `test-plan.json`, `scenarios/`, `operation-plans/`, `regression-suite.json`, `runs/`, `reports/`, and task-local memory candidates.
 - Save reusable project skills under `.qa-agent/skills/generated/` only after a successful repeated operation and explicit user approval.
 
 ## Execute and verify
 
-1. Convert the selected Task into a plan with prerequisites, data preparation, scenarios, capability requirements, evidence, cleanup, and stop conditions. Prefer Agent-guided interaction for business QA: operate the real browser, simulator, or device; inspect what is rendered; adapt the next action to the observed state.
-   For browser scenarios, persist a deterministic runbook: `navigate`, `click`, `fill`, `assert-visible`, `assert-hidden`, `assert-text`, `assert-url`, `wait-for`, or `screenshot`. Give every tool action a structured locator, fallback locators, expected state, assertion references, screenshot policy, and `safetyAction`.
+1. Convert the selected Task into a plan with prerequisites, data preparation, scenarios, capability requirements, evidence, cleanup, and stop conditions. Prefer Agent-guided interaction for business QA: use the host's real browser, simulator, or device tools; inspect what is rendered; adapt the next action to the observed state.
 2. Check capabilities before any external action. Required gaps create a `BLOCKED` run, not a pass or a guessed result.
 3. Verify the environment, platform, role, page state, and unique element locator before acting. Prefer test id, accessibility role/name, label, visible text, stable attribute, CSS, XPath, then coordinates. DOM inspection supports a conclusion but never replaces checking the rendered business result.
 4. Capture a screenshot after every real UI action. Inspect only the adaptive checkpoints required by the Task evidence policy (baseline, key business state, failure/exception, locator adaptation, and final result); record whether visual inspection was performed or not required.
-5. Use `run start`/`run replay`, `run step`, `run observe`, `run recover`, and `run complete` to preserve the real interaction trail. Replay `run step` calls must reference the next `operationStepId`; a visual observation must name the Scenario, assertion, expected business result, actual rendered result, status, and screenshot.
+5. Use `task run` (with `--operation` for replay) to start a single Task interaction trail. The host then uses `run step`, `run evidence`, `run observe`, `run recover`, and `run complete` internally. For normal regression, use `task regression run` or `module regression run`; those commands create host-driven child runs. Replay `run step` calls must reference the next `operationStepId`; a visual observation must name the Scenario, assertion, expected business result, actual rendered result, status, and screenshot.
 6. Compare actual results with the Task's explicit expectations. Mark outcomes as passed, failed, adapted, blocked, paused, or needs_confirmation; never manufacture a passing result. Generate a Markdown report and retain only its evidence paths in the Run.
 
 When using Agent-guided mode, invoke the Run lifecycle commands yourself as part of execution; they are persistence operations for the Agent, not instructions for the user to carry out.
@@ -79,16 +79,19 @@ npm run qa-agent -- module create checkout --name "Checkout" --description "Orde
 npm run qa-agent -- module plan checkout
 npm run qa-agent -- task create checkout-basic-flow --module checkout
 npm run qa-agent -- task plan checkout-basic-flow --module checkout
-npm run qa-agent -- task runbook checkout-basic-flow --module checkout --file checkout-runbook.json
-npm run qa-agent -- task run checkout-basic-flow --module checkout
 npm run qa-agent -- memory add checkout-total-rule --module checkout --title "Total rule" --content "..."
 npm run qa-agent -- memory review checkout-total-rule --module checkout --approve
-npm run qa-agent -- source diagnose --module checkout --query "payment selector"
-  npm run qa-agent -- run start checkout-basic-flow --module checkout
+  npm run qa-agent -- host import --file /absolute/path/host-capabilities.json
+  npm run qa-agent -- task run checkout-basic-flow --module checkout
   npm run qa-agent -- task operation list checkout-basic-flow --module checkout
   npm run qa-agent -- task operation review checkout-basic-flow --module checkout --operation OPERATION_ID --approve
-  npm run qa-agent -- run replay checkout-basic-flow --module checkout --operation OPERATION_ID
+  npm run qa-agent -- task regression sync checkout-basic-flow --module checkout
+  npm run qa-agent -- task regression run checkout-basic-flow --module checkout
+  npm run qa-agent -- module regression sync checkout
+  npm run qa-agent -- module regression run checkout
+  npm run qa-agent -- task run checkout-basic-flow --module checkout --operation OPERATION_ID
   npm run qa-agent -- run step run-... --action "Tap checkout" --detail "Checkout page opened" --screenshot /absolute/path/step.png --visual-inspection not-required
+  npm run qa-agent -- run evidence run-... --type console --summary "Host console output" --file /absolute/path/console.log
   npm run qa-agent -- run recover run-... --reason "Element was not ready" --action "Wait for network" --detail "Element appeared after 2s" --outcome continued
 npm run qa-agent -- run observe run-... --scenario happy-path --assertion business-outcome --expected "..." --actual "..." --status passed --screenshot /absolute/path.png
 npm run qa-agent -- run complete run-...

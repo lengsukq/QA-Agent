@@ -38,13 +38,12 @@ Project → Module → Test Task → Scenario → Run → Step / Evidence / Repo
 | Gemini CLI | `/qa-agent` Command |
 | 通用兼容宿主 | `.agents/skills/qa-agent` Skill |
 
-宿主负责提供可用的工具权限，例如浏览器控制、模拟器控制或 MCP；`qa-agent` 负责统一规划、执行记录、证据、报告和项目记忆。它是 QA 大脑，不是新的浏览器或模拟器框架。仓库中的 Playwright 适配器仅是本地开发/参考能力，真实 Web、Android/iOS 操作应由宿主 Agent 的已批准 MCP 或本地工具完成，再通过同一套 Run 生命周期保存证据和报告。
+宿主负责提供并实际调用浏览器、模拟器、日志、数据库和源码等工具；`qa-agent` 负责统一规划、执行记录、证据、报告和项目记忆。它是 QA 大脑，不是新的浏览器或模拟器框架：真实 Web、Android/iOS 操作必须由宿主 Agent 的已批准 MCP 或本地工具完成，再通过同一套 Run 生命周期保存证据和报告。
 
 ## 前置条件
 
 - Node.js `>= 22.6`
 - npm
-- 浏览器验证需要 Playwright Chromium；若本机尚未安装浏览器二进制，执行 `npx playwright install chromium`
 - 对真实 UI 执行，当前 Agent 宿主必须有对应浏览器、模拟器或设备控制能力
 
 ## 启动项目
@@ -58,7 +57,7 @@ npm test
 npm run qa-agent -- help
 ```
 
-测试会启动一个本地 Chromium 页面夹具，覆盖浏览器操作、截图证据、视觉业务观察、自动报告和跨宿主安装。
+测试覆盖宿主能力快照、步骤和证据导入、视觉业务观察、快速回放、自动报告和跨宿主安装。
 
 ## 安装到 Agent 宿主
 
@@ -114,13 +113,12 @@ node /Users/leo/Documents/code/QA-Agent/bin/qa-agent.mjs doctor
 
 ```text
 .qa-agent/
-├── modules/          # 业务模块与任务
-├── runs/             # 每次执行的完整记录
-├── evidence/         # 截图、trace、日志等证据
-├── reports/          # 自动生成的 Markdown 报告
+├── modules/          # 模块资产；每个 Task 自己保存运行、证据、报告和记忆
+├── index/            # 项目级搜索/索引投影（包含 runs.jsonl）
+├── regression-runs/  # 跨 Task / Module 套件编排记录
 ├── shared-memory/    # 已审核的项目知识
 ├── policies.json     # 安全策略
-└── capabilities.json # 已声明的能力
+└── mcp.json           # 宿主工具能力快照与健康状态
 ```
 
 ## 推荐工作流
@@ -167,32 +165,28 @@ qa-agent task plan checkout-basic-flow --module checkout
 qa-agent task review checkout-basic-flow --module checkout --approve --confirmed-by "leo"
 ```
 
-确认会绑定当前测试计划的哈希。后续如果修改业务逻辑、预期结果、Runbook 步骤、测试数据、能力或安全边界，旧确认会自动失效，任务回到 `needs_review`；只有未变更的已确认计划才可重复自动回归运行。
+确认会绑定当前测试计划的哈希。后续如果修改业务逻辑、预期结果、OperationPlan、测试数据、能力或安全边界，旧确认会自动失效，任务回到 `needs_review`；只有未变更的已确认计划才可重复自动回归运行。
 
-### 2. 配置浏览器执行器（可选的确定性路径）
+### 2. 导入宿主能力快照
 
-```bash
-qa-agent adapter playwright --base-url http://localhost:3000
-```
-
-将浏览器动作写入 JSON Runbook，例如 `checkout-runbook.json`：
+宿主 Agent 在开始前确认其已连接的工具和系统权限，并把快照导入当前项目。`qa-agent` 不连接 MCP，也不自行验证权限。
 
 ```json
 {
-  "startPath": "/checkout",
-  "steps": [
-    { "id": "total-visible", "action": "assert-visible", "locator": "[data-testid=order-total]" },
-    { "id": "total-text", "action": "assert-text", "locator": "[data-testid=order-total]", "expected": "¥199.00" },
-    { "id": "result-shot", "action": "screenshot", "description": "结算金额和提交按钮可见" }
+  "host": "codex",
+  "connections": [
+    {
+      "id": "browser-mcp",
+      "status": "available",
+      "capabilities": ["browser.interact", "browser.inspect", "logs.read"],
+      "permissionStatus": "verified"
+    }
   ]
 }
 ```
 
-绑定、审核并运行：
-
 ```bash
-qa-agent task runbook checkout-basic-flow --module checkout --file checkout-runbook.json
-qa-agent task run checkout-basic-flow --module checkout
+qa-agent host import --file /absolute/path/host-capabilities.json
 ```
 
 ### 3. 使用 Agent-guided 真实业务验证
@@ -203,8 +197,9 @@ Agent 在后台通过以下命令持久化真实执行轨迹：
 
 ```bash
 qa-agent context module checkout
-qa-agent run start checkout-basic-flow --module checkout
+qa-agent task run checkout-basic-flow --module checkout
 qa-agent run step <run-id> --action "打开结算页" --detail "已进入真实结算页面" --screenshot /absolute/path/checkout-open.png --visual-inspection not-required
+qa-agent run evidence <run-id> --type console --summary "宿主浏览器控制台输出" --file /absolute/path/console.log
 qa-agent run observe <run-id> \
   --scenario happy-path \
   --assertion business-outcome \
@@ -215,22 +210,44 @@ qa-agent run observe <run-id> \
 qa-agent run complete <run-id>
 ```
 
-`run complete` 会自动写入 `.qa-agent/reports/<run-id>.md`。每项视觉业务结论都必须关联截图；缺少视觉证据不能被标记为通过。
+`run complete` 会自动写入当前 Task 的 `reports/<run-id>.md`，并更新 `reports/index.json` 与 `reports/latest.json`。每项视觉业务结论都必须关联截图；缺少视觉证据不能被标记为通过。
+
+每个 Task 是一个自包含测试资产目录：
+
+```text
+.qa-agent/modules/<module>/tasks/<task>/
+├── task.json
+├── module-snapshot.json
+├── requirements.json
+├── test-plan.json
+├── scenarios/
+├── operation-plans/
+├── regression-suite.json
+├── runs/<run-id>/
+├── reports/
+└── memory/
+```
 
 ### 4. 快速回归执行模式
 
-首次成功运行后，Agent 会在任务目录生成候选 OperationPlan：`.qa-agent/modules/<module>/tasks/<task>/operations/`。审核后可快速回放同一业务流程：
+首次成功运行后，Agent 会在任务目录生成候选 OperationPlan：`.qa-agent/modules/<module>/tasks/<task>/operation-plans/<scenario>/`。审核后可快速回放同一业务流程：
 
 ```bash
 qa-agent task operation list checkout-basic-flow --module checkout
 qa-agent task operation review checkout-basic-flow --module checkout --operation OPERATION_ID --approve
-qa-agent run replay checkout-basic-flow --module checkout --operation OPERATION_ID
+qa-agent task run checkout-basic-flow --module checkout --operation OPERATION_ID
 qa-agent run recover <run-id> --reason "元素尚未出现" --action wait --detail "元素出现后继续" --outcome continued
+qa-agent task regression sync checkout-basic-flow --module checkout
+qa-agent task regression run checkout-basic-flow --module checkout
+qa-agent module regression sync checkout
+qa-agent module regression run checkout
 ```
 
 只有 Task 计划哈希、用户确认、active OperationPlan、平台/设备/App 或 Web 版本、环境/角色、测试数据、所需 MCP 和 macOS 权限都兼容时才会回放；否则回到计划确认或能力接入。回放不跳过业务断言，只跳过重复探索。结果为 `PASS`、`FAIL`、`ADAPTED`、`BLOCKED` 或 `NEEDS_CONFIRMATION`。安全恢复只能使用 `wait`、`refresh`、`back`、`restart-app`、`reset-sandbox-data`、`reconnect-mcp`、`fallback-locator` 或 `resume-checkpoint`，不能改代码、绕过权限或伪造结果。
 
 OperationPlan 按 Scenario 独立保存，步骤包含操作类型、主/备用定位器、输入引用、前置条件、预期状态、断言引用、截图策略、视觉识别策略、风险动作和 checkpoint。回放时每个 `run step` 必须引用下一个 `operationStepId`，不能跳步或重复提交。
+
+Task 级 RegressionSuite 组织一个 Task 的所有 active OperationPlan；Module 级 RegressionSuite 汇总多个 Task。模块回归会串行自动执行所有独立流程，单个业务失败后继续其他流程，最后生成模块汇总报告。`run.json` 是结果记录，OperationPlan 才是可执行操作定义。
 
 ### APP / 模拟器测试
 
@@ -243,14 +260,13 @@ qa-agent module create checkout --name "结算" --platforms android
 
 开始 APP 测试前，运行时会强制检查 Android 的 `android.adb` 与 `android.screenshot`，或 iOS 的 `ios.simulator.interact` 与 `ios.screenshot`。如果缺失，Run 会被标记为 `BLOCKED`，并提示 Agent 向用户请求批准连接/安装最小权限的 Android Emulator/ADB 或 iOS Simulator/Appium MCP；不会自动安装。
 
-在 macOS 上还需要宿主应用获得 **Screen Recording**（截图/视觉证据）和 **Accessibility**（点击、输入、模拟器控制）权限；iOS 模拟器按需开启 Developer Mode/自动化权限。Agent 不能代替用户授予系统权限，会在 `mobile doctor` 输出所需权限、验证步骤和 System Settings → Privacy & Security 路径。
+在 macOS 上还需要宿主应用获得 **Screen Recording**（截图/视觉证据）和 **Accessibility**（点击、输入、模拟器控制）权限；iOS 模拟器按需开启 Developer Mode/自动化权限。Agent 不能代替用户授予系统权限；`host doctor --platform` 根据宿主导入的快照输出所需权限、验证步骤和 System Settings → Privacy & Security 路径。
 
-获得用户批准并连接后，可在项目中声明该 MCP 能力：
+获得用户批准并连接后，由宿主导出最新能力快照：
 
 ```bash
-qa-agent mcp add android-emulator --capabilities android.adb,android.screenshot --readonly
-qa-agent mcp activate android-emulator --permissions verified
-qa-agent mobile doctor --platform android
+qa-agent host import --file /absolute/path/android-host-capabilities.json
+qa-agent host doctor --platform android
 ```
 
 随后由宿主 Agent 操作模拟器，保存每个真实操作的截图，并通过 Agent-guided Run 自动输出报告；普通截图只作为证据，不会强制逐张调用视觉模型。
@@ -296,15 +312,13 @@ qa-agent memory review checkout-total-rule --module checkout --approve
 
 ```bash
 qa-agent doctor
-qa-agent capability list
-qa-agent mcp list
+qa-agent host list
 qa-agent context module <module-id>
 qa-agent module coverage <module-id>
 qa-agent task list
 qa-agent run show <run-id>
 qa-agent run report <run-id>
 qa-agent memory list
-qa-agent source diagnose --module <module-id> --query "关键字"
 ```
 
 查看完整命令：

@@ -2,7 +2,6 @@ import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { qaPath } from './project.ts';
 import { hasSecrets, isSafeId, listFiles, readJson } from './store.ts';
-import { approvalIsCurrent } from './approval.ts';
 
 export interface ValidationResult { valid: boolean; errors: string[]; checked: number; }
 
@@ -16,20 +15,22 @@ function validateObject(path: string, fields: string[]): string[] {
 function validateDomainObject(path: string): string[] {
   const value = readJson<Record<string, any>>(path);
   const errors: string[] = [];
-  if (path.endsWith('module.json') && (!isSafeId(value.id) || !['active', 'deprecated', 'archived'].includes(value.status))) errors.push(`${path}: invalid module id or status.`);
-  if (/\/tasks\/[^/]+\.json$/.test(path)) {
+  if (path.endsWith('module.json') && (!isSafeId(value.id) || !['active', 'deprecated', 'archived'].includes(value.status) || typeof value.revision !== 'number')) errors.push(`${path}: invalid module id, revision, or status.`);
+  if (/\/tasks\/[^/]+\/task\.json$/.test(path)) {
     if (value.apiVersion !== 'qa-agent/v2') errors.push(`${path}: Task must use qa-agent/v2.`);
     if (!value.metadata || !isSafeId(value.metadata.id) || !isSafeId(value.metadata.moduleId)) errors.push(`${path}: invalid task metadata.`);
-    if (['ready', 'active'].includes(value.metadata?.status) && (!value.metadata.approval?.confirmedBy || !value.metadata.approval?.confirmedAt || !value.metadata.approval?.planHash || !approvalIsCurrent(value))) errors.push(`${path}: ready or active task requires current explicit user approval.`);
-    if (!Array.isArray(value.scenarios) || new Set(value.scenarios.map((scenario: any) => scenario.id)).size !== value.scenarios.length) errors.push(`${path}: scenarios must be an array with unique ids.`);
-    for (const scenario of value.scenarios ?? []) for (const step of scenario.execution?.steps ?? []) if (!['navigate', 'click', 'fill', 'assert-visible', 'assert-hidden', 'assert-text', 'assert-url', 'wait-for', 'screenshot'].includes(step.action)) errors.push(`${path}: unsupported browser action ${step.action}.`);
+    if (['ready', 'active'].includes(value.metadata?.status) && (!value.metadata.approval?.confirmedBy || !value.metadata.approval?.confirmedAt || !value.metadata.approval?.planHash)) errors.push(`${path}: ready or active task requires current explicit user approval.`);
+    if (!Array.isArray(value.scenarioRefs) || !value.scenarioRefs.length) errors.push(`${path}: scenarioRefs must be a non-empty array.`);
   }
+  if (/\/scenarios\/[^/]+\.json$/.test(path) && (!isSafeId(value.id) || typeof value.intent !== 'string' || !value.expected || !Array.isArray(value.preconditions))) errors.push(`${path}: invalid Scenario contract.`);
+  if (path.endsWith('/module-snapshot.json') && (value.apiVersion !== 'qa-agent/v2' || value.kind !== 'ModuleSnapshot' || !isSafeId(value.moduleId) || typeof value.snapshotHash !== 'string')) errors.push(`${path}: invalid module snapshot.`);
+  if (path.endsWith('/requirements.json') && (value.apiVersion !== 'qa-agent/v2' || value.kind !== 'TestRequirements' || !isSafeId(value.taskId) || !isSafeId(value.moduleId))) errors.push(`${path}: invalid test requirements.`);
   if (/\/memory\/[^/]+\.json$/.test(path) || /\/shared-memory\/entries\/[^/]+\.json$/.test(path)) {
     if (!isSafeId(value.id) || !['candidate', 'active', 'superseded', 'deprecated'].includes(value.status)) errors.push(`${path}: invalid memory id or status.`);
     if (hasSecrets({ content: value.content, structuredRule: value.structuredRule })) errors.push(`${path}: contains a potential secret.`);
   }
-  if (/\/runs\/[^/]+\.json$/.test(path) && !['pending', 'running', 'passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable', 'needs_confirmation', 'adapted'].includes(value.status)) errors.push(`${path}: invalid run status.`);
-  if (/\/operations\/[^/]+\.json$/.test(path)) {
+  if (/\/runs\/[^/]+\/run\.json$/.test(path) && !['pending', 'running', 'passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable', 'needs_confirmation', 'adapted'].includes(value.status)) errors.push(`${path}: invalid run status.`);
+  if (/\/operation-plans\/[^/]+\/v\d+\.json$/.test(path)) {
     if (value.apiVersion !== 'qa-agent/v2') errors.push(`${path}: OperationPlan must use qa-agent/v2.`);
     if (!isSafeId(value.id) || value.kind !== 'OperationPlan' || !['candidate', 'active', 'superseded', 'deprecated'].includes(value.status)) errors.push(`${path}: invalid OperationPlan identity or status.`);
     if (!Array.isArray(value.steps)) errors.push(`${path}: OperationPlan steps must be an array.`);
@@ -45,6 +46,10 @@ function validateDomainObject(path: string): string[] {
       if (item.inputRefs && hasSecrets(item.inputRefs)) errors.push(`${path}: step ${index + 1} contains a potential secret; use env: references.`);
     }
   }
+  if (/\/regression-suite\.json$/.test(path)) {
+    if (value.apiVersion !== 'qa-agent/v2' || value.kind !== 'RegressionSuite' || !['task', 'module'].includes(value.scope) || !['draft', 'active', 'stale', 'superseded'].includes(value.status)) errors.push(`${path}: invalid RegressionSuite.`);
+    if (!Array.isArray(value.members)) errors.push(`${path}: RegressionSuite members must be an array.`);
+  }
   return errors;
 }
 
@@ -52,13 +57,17 @@ export function validateProject(root: string): ValidationResult {
   const files: Array<[string, string[]]> = [
     [qaPath(root, 'project.json'), ['version', 'project', 'platforms', 'defaultContext', 'source', 'storage']],
     [qaPath(root, 'policies.json'), ['safeMode', 'prohibitedActions', 'stopBefore']],
-    [qaPath(root, 'capabilities.json'), ['version', 'capabilities']],
     [qaPath(root, 'mcp.json'), ['version', 'connections']],
   ];
   files.push(...listFiles(qaPath(root, 'modules'), path => basename(path) === 'module.json').map(path => [path, ['id', 'name', 'status', 'riskLevel', 'platforms', 'roles']] as [string, string[]]));
-  files.push(...listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\.json$/.test(path)).map(path => [path, ['apiVersion', 'kind', 'metadata', 'scenarios', 'capabilities', 'safety', 'evidence']] as [string, string[]]));
-  files.push(...listFiles(qaPath(root, 'modules'), path => /\/operations\/[^/]+\.json$/.test(path)).map(path => [path, ['apiVersion', 'kind', 'id', 'version', 'status', 'taskId', 'moduleId', 'scenarioId', 'planHash', 'steps']] as [string, string[]]));
-  files.push(...listFiles(qaPath(root, 'runs'), path => path.endsWith('.json')).map(path => [path, ['id', 'taskId', 'moduleId', 'context', 'status', 'steps', 'startedAt']] as [string, string[]]));
+  files.push(...listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/task\.json$/.test(path)).map(path => [path, ['apiVersion', 'kind', 'metadata', 'moduleSnapshotRef', 'requirementsRef', 'testPlanRef', 'scenarioRefs', 'regressionSuiteRef', 'capabilities', 'safety', 'evidence']] as [string, string[]]));
+  files.push(...listFiles(qaPath(root, 'modules'), path => path.endsWith('/module-snapshot.json')).map(path => [path, ['apiVersion', 'kind', 'moduleId', 'moduleName', 'moduleRevision', 'snapshotHash', 'capturedAt']] as [string, string[]]));
+  files.push(...listFiles(qaPath(root, 'modules'), path => path.endsWith('/requirements.json')).map(path => [path, ['apiVersion', 'kind', 'taskId', 'moduleId', 'businessGoals', 'actors', 'flows', 'rules', 'scope', 'preconditions', 'testDataRefs', 'environments']] as [string, string[]]));
+  files.push(...listFiles(qaPath(root, 'modules'), path => path.endsWith('/test-plan.json')).map(path => [path, ['apiVersion', 'kind', 'taskId', 'moduleId', 'version', 'planHash', 'scenarioRefs', 'capabilities', 'safety', 'evidencePolicy', 'recoveryPolicy', 'status']] as [string, string[]]));
+  files.push(...listFiles(qaPath(root, 'modules'), path => /\/operation-plans\/[^/]+\/v\d+\.json$/.test(path)).map(path => [path, ['apiVersion', 'kind', 'id', 'version', 'status', 'taskId', 'moduleId', 'scenarioId', 'planHash', 'executionSnapshot', 'steps']] as [string, string[]]));
+  files.push(...listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/runs\/[^/]+\/run\.json$/.test(path)).map(path => [path, ['id', 'taskId', 'moduleId', 'context', 'status', 'steps', 'startedAt']] as [string, string[]]));
+  files.push(...listFiles(qaPath(root, 'modules'), path => /\/regression-suite\.json$/.test(path)).map(path => [path, ['apiVersion', 'kind', 'id', 'scope', 'moduleId', 'members', 'suiteHash', 'status']] as [string, string[]]));
+  files.push(...listFiles(qaPath(root, 'regression-runs'), path => path.endsWith('.json')).map(path => [path, ['apiVersion', 'kind', 'id', 'suiteId', 'suiteVersion', 'suiteHash', 'moduleId', 'context', 'status', 'childRuns', 'startedAt']] as [string, string[]]));
   files.push(...listFiles(qaPath(root, 'modules'), path => /\/memory\/[^/]+\.json$/.test(path)).map(path => [path, ['id', 'type', 'title', 'content', 'knowledgeLevel', 'confidence', 'source']] as [string, string[]]));
   files.push(...listFiles(qaPath(root, 'shared-memory', 'entries'), path => path.endsWith('.json')).map(path => [path, ['id', 'type', 'title', 'content', 'knowledgeLevel', 'confidence', 'source']] as [string, string[]]));
   files.push(...listFiles(qaPath(root, 'skills'), path => path.endsWith('.json')).map(path => [path, ['apiVersion', 'kind', 'metadata', 'requirements', 'safety', 'outputs']] as [string, string[]]));

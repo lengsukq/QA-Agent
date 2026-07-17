@@ -38,9 +38,11 @@ Use the host Agent's browser, mobile, network, log, or source tools for the actu
 
 Do not call a tool merely because a task says it might be useful. Use only the lowest-privilege capability needed by the scenario, and keep blocked runs resumable.
 
-## Fast regression replay
+## Task and Module fast regression replay
 
-Replay uses the `qa-agent/v2` contract and is allowed only when the Task approval and plan hash are current, the Scenario-specific OperationPlan is active and derived from that hash, the platform/environment/role/device/app version and test-data fingerprint are compatible, and required MCP capabilities plus macOS permissions are `verified`. Load the Task business logic and expected results, check preconditions, then execute the structured OperationPlan steps in order. Replay skips rediscovery, not business assertions.
+Replay uses the `qa-agent/v2` contract and is allowed only when the Task or Module RegressionSuite is active and current, Task approval and plan hash are current, each Scenario-specific OperationPlan is active and derived from that hash, the platform/environment/role/device/app version and test-data fingerprint are compatible, and the host-attested capabilities plus permissions are `verified`. Load the Task business logic and expected results, check preconditions, then have the host execute the Suite's structured OperationPlan steps in stable order. Replay skips rediscovery, not business assertions. `run.json` records results; OperationPlan is the replay contract.
+
+Task assets are project-local and co-located under `modules/<module>/tasks/<task>/`: requirements, module snapshot, test plan, scenarios, operation-plans, RegressionSuite, runs, reports, evidence, and task-local memory candidates. A Module RegressionSuite aggregates Task suites. Independent failures continue to the next member; global capability or permission failures block the Suite.
 
 After every real UI action, capture a screenshot for the report. Invoke visual recognition adaptively for key assertions, amounts, permissions, state/result changes, unexpected screens, locator adaptations, failures, and the final state. Reports must distinguish `Screenshot captured`, `Visual inspection performed`, and `Visual inspection not required`.
 
@@ -57,13 +59,13 @@ For Agent-guided QA, screenshots are not decorative artifacts. Capture one after
 
 For each checkpoint, record what was expected by the business rule, what is visibly rendered, the conclusion, and the screenshot path. Compare rendered values, labels, enabled/disabled controls, permissions, error/success feedback, and state transitions. Do not infer a visual result solely from a successful click, DOM property, network response, or source branch.
 
-Use deterministic Playwright runbooks for stable repeated flows. Use Agent-guided interaction whenever the workflow requires discovery, login context, simulator control, adaptive navigation, image/OCR judgement, or a business outcome that cannot be reduced safely to selectors.
+Use approved OperationPlans for stable repeated flows. The host Agent selects and invokes its own browser, simulator, and diagnostic tools; the runtime records their outputs and enforces the QA contract.
 
 The Run lifecycle is internal automation: the Agent starts it, controls the UI, records observations, completes it, and presents the generated report. Do not transfer these operational steps to the user.
 
 ## Source-assisted diagnosis
 
-Use `qa-agent source search` or `qa-agent source diagnose` only after observing a business result. Source output is an `investigation_hint`, not a confirmed cause. The local verifier searches only the configured read-only source root and excludes `.qa-agent` and `node_modules`.
+Use the host's approved read-only source tool only after observing a business result. Submit findings to the active Run as `source-diagnosis` evidence. Source output is an `investigation_hint`, not a confirmed cause.
 
 ## Memory curation
 

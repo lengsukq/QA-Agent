@@ -2,62 +2,95 @@ import { randomUUID } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { capabilityAdvice, capabilitySnapshot, checkCapabilities, platformCapabilities } from './capabilities.ts';
-import { checkpointRun, gitMetadata, qaPath, readTask, saveRun } from './project.ts';
+import { checkpointRun, gitMetadata, qaPath, readRunById, readTask, saveRun, saveTask, taskDirectory, taskEvidenceDirectory, taskReportDirectory } from './project.ts';
 import { rebuildIndexes } from './indexer.ts';
 import { hasSecrets, now, readJson, writeJsonAtomic } from './store.ts';
 import { writeReport } from './report.ts';
-import { executeBrowserScenario, type PlaywrightAdapterConfig, SafetyStopError } from './playwright-adapter.ts';
 import { curateFailedRun, curateObservedBusinessRules } from './memory.ts';
-import type { ExecutionSnapshot, Locator, OperationAction, RunStatus, TestRun, TestTask, VisualInspectionStatus } from './types.ts';
+import type { ExecutionSnapshot, Locator, OperationAction, RegressionRun, RegressionSuite, RunStatus, TestRun, TestTask, VisualInspectionStatus } from './types.ts';
 import { approvalIsCurrent } from './approval.ts';
 import { approvedOperationForReplay, createOperationCandidates, readOperation } from './operations.ts';
 import { assertRecoveryAction, assertSafeAction, type RecoveryAction } from './safety.ts';
+import { newRegressionRun, saveRegressionRun, suitePreflight, writeRegressionReport } from './regression.ts';
 
 type RunContextInput = Partial<ExecutionSnapshot> & { operationId?: string; scenarioId?: string };
 
-function newRun(root: string, task: TestTask, input: RunContextInput = {}): TestRun {
-  const startedAt = now();
-  const policy = readJson<{ safeMode: boolean }>(qaPath(root, 'policies.json'));
+export function buildExecutionSnapshot(root: string, task: TestTask, input: RunContextInput = {}): ExecutionSnapshot {
   const platform = input.platform ?? task.scope.platforms[0] ?? 'web';
   const snapshot = capabilitySnapshot(root, platform);
-  const context: ExecutionSnapshot = {
+  return {
     environment: input.environment ?? task.scope.environments[0] ?? 'local', platform, role: input.role ?? task.scope.roles[0] ?? 'default',
     scenarioId: input.scenarioId, device: input.device, deviceModel: input.deviceModel, osVersion: input.osVersion,
     appVersion: input.appVersion, webBuild: input.webBuild, testDataFingerprint: input.testDataFingerprint,
     mcpSnapshot: input.mcpSnapshot ?? snapshot.mcpSnapshot, permissionSnapshot: input.permissionSnapshot ?? snapshot.permissionSnapshot,
   };
+}
+
+function newRun(root: string, task: TestTask, input: RunContextInput = {}): TestRun {
+  const startedAt = now();
+  const policy = readJson<{ safeMode: boolean }>(qaPath(root, 'policies.json'));
+  const context = buildExecutionSnapshot(root, task, input);
   return {
-    $schema: '../../schemas/run.schema.json', id: `run-${startedAt.replace(/[-:.TZ]/g, '').slice(0, 14)}-${randomUUID().slice(0, 8)}`,
+    $schema: '../../../../schemas/run.schema.json', id: `run-${startedAt.replace(/[-:.TZ]/g, '').slice(0, 14)}-${randomUUID().slice(0, 8)}`,
     taskId: task.metadata.id, moduleId: task.metadata.moduleId, context, git: gitMetadata(root), status: 'pending', safeMode: policy.safeMode,
     steps: [], scenarioResults: [], evidence: [], visualFindings: [], replayStatus: 'not_replay', replayStage: 'idle', replayCursor: 0,
     scenarioId: input.scenarioId, screenshots: [], recoveryAttempts: [], startedAt,
   };
 }
 
+export function beginRegressionRun(root: string, suite: RegressionSuite, context: ExecutionSnapshot): RegressionRun {
+  const run = newRegressionRun(suite, context);
+  const errors = suitePreflight(root, suite, context);
+  if (errors.length) {
+    run.status = errors.some(error => /plan hash|approval|changed|confirmation/i.test(error)) ? 'needs_confirmation' : 'blocked';
+    run.childRuns = suite.members.map(member => ({ runId: '', taskId: member.taskId, scenarioId: member.scenarioId, operationPlanId: member.operationPlanId, status: run.status, detail: errors.find(error => error.includes(member.taskId)) ?? errors.join(' ') }));
+    run.completedAt = now(); run.reportPath = `modules/${run.moduleId}/reports/${run.id}.md`; saveRegressionRun(root, run); writeRegressionReport(root, run); return run;
+  }
+  for (const member of suite.members) {
+    const task = readTask(root, member.moduleId, member.taskId);
+    const child = beginAgentGuidedRun(root, task, { ...context, scenarioId: member.scenarioId, operationId: member.operationPlanId });
+    run.childRuns.push({ runId: child.id, taskId: member.taskId, scenarioId: member.scenarioId, operationPlanId: member.operationPlanId, status: child.status, reportPath: child.reportPath, detail: child.conclusion });
+  }
+  saveRegressionRun(root, run); return run;
+}
+
+export function completeRegressionRun(root: string, run: RegressionRun): RegressionRun {
+  for (const child of run.childRuns) {
+    if (!child.runId) continue;
+    try { const childRun = readRunById(root, child.runId); child.status = childRun.status; child.reportPath = childRun.reportPath; child.detail = childRun.conclusion; } catch { /* Child may not have been started by the host yet. */ }
+  }
+  if (run.childRuns.some(child => child.status === 'running' || child.status === 'pending')) return run;
+  const statuses = run.childRuns.map(child => child.status);
+  run.status = finalStatus(statuses); run.completedAt = now(); run.reportPath = `modules/${run.moduleId}/reports/${run.id}.md`; saveRegressionRun(root, run); writeRegressionReport(root, run); return run;
+}
+
 function finish(root: string, task: TestTask, run: TestRun): TestRun {
   run.completedAt = now();
   const memoryCandidates = [curateFailedRun(root, task, run), curateObservedBusinessRules(root, task, run)].filter((id): id is string => Boolean(id));
-  if (memoryCandidates.length) run.memoryCandidates = memoryCandidates;
+  if (memoryCandidates.length) {
+    run.memoryCandidates = memoryCandidates;
+    task.memoryRefs ??= [];
+    for (const id of memoryCandidates) {
+      const ref = `memory/${id}.json`;
+      if (!task.memoryRefs.includes(ref)) task.memoryRefs.push(ref);
+    }
+  }
   const operationCandidates = createOperationCandidates(root, task, run);
   if (operationCandidates.length) run.operationCandidates = operationCandidates;
   run.reportPath = `reports/${run.id}.md`;
-  writeReport(root, task, run); saveRun(root, run); rebuildIndexes(root); return run;
+  task.runRefs ??= []; const runRef = `runs/${run.id}/run.json`; if (!task.runRefs.includes(runRef)) task.runRefs.push(runRef); task.updatedAt = now();
+  writeReport(root, task, run); saveRun(root, run); saveTask(root, task);
+  const reportDirectory = taskReportDirectory(root, task.metadata.moduleId, task.metadata.id);
+  const reportIndexPath = join(reportDirectory, 'index.json');
+  const reportIndex = existsSync(reportIndexPath) ? readJson<{ runs: Array<Record<string, unknown>> }>(reportIndexPath) : { runs: [] };
+  reportIndex.runs = [{ runId: run.id, status: run.status, reportPath: run.reportPath, completedAt: run.completedAt }, ...reportIndex.runs.filter(item => item.runId !== run.id)];
+  writeJsonAtomic(reportIndexPath, { version: 1, updatedAt: now(), runs: reportIndex.runs });
+  writeJsonAtomic(join(reportDirectory, 'latest.json'), { runId: run.id, reportPath: run.reportPath, status: run.status, updatedAt: now() });
+  rebuildIndexes(root); return run;
 }
 
 function preflightStatus(detail: string): RunStatus {
   return /plan hash|approval|scenario|business|confirmation|operation .*changed|flow/i.test(detail) ? 'needs_confirmation' : 'blocked';
-}
-
-function retryDepth(root: string, retryOf?: string): number {
-  let depth = 0;
-  let current = retryOf;
-  while (current) {
-    depth += 1;
-    const path = qaPath(root, 'runs', `${current}.json`);
-    if (!existsSync(path)) break;
-    current = readJson<TestRun>(path).retryOf;
-  }
-  return depth;
 }
 
 function block(root: string, task: TestTask, run: TestRun, detail: string, status: RunStatus = preflightStatus(detail)): TestRun {
@@ -69,40 +102,6 @@ function block(root: string, task: TestTask, run: TestRun, detail: string, statu
   return finish(root, task, run);
 }
 
-export async function executeTask(root: string, task: TestTask, context: RunContextInput = {}, retryOf?: string): Promise<TestRun> {
-  const run = newRun(root, task, context); run.retryOf = retryOf;
-  if (retryOf && retryDepth(root, retryOf) >= task.recoveryPolicy.maxRetries) return block(root, task, run, `Retry limit ${task.recoveryPolicy.maxRetries} was reached.`, 'blocked');
-  const policy = readJson<{ safeMode: boolean; prohibitedActions: string[]; stopBefore: string[] }>(qaPath(root, 'policies.json'));
-  if (!['ready', 'active'].includes(task.metadata.status)) return block(root, task, run, `Task status is ${task.metadata.status}; review and mark it ready before execution.`);
-  if (!approvalIsCurrent(task)) return block(root, task, run, 'Generated test cases are unapproved or changed after approval. Present the current plan and obtain user confirmation before execution.', 'needs_confirmation');
-  const capabilities = checkCapabilities(root, [...new Set([...task.capabilities.required, ...platformCapabilities(run.context.platform)])], task.capabilities.optional);
-  if (capabilities.missing.length) return block(root, task, run, `Missing required capabilities: ${capabilities.missing.join(', ')}. ${capabilityAdvice(capabilities.missing).join(' ')}`, 'blocked');
-  if (run.context.platform !== 'web') return block(root, task, run, `Platform ${run.context.platform} requires an Agent-guided mobile Run with the approved simulator/device MCP.`, 'blocked');
-  const adapterPath = qaPath(root, 'adapters', 'playwright.json');
-  if (!existsSync(adapterPath)) return block(root, task, run, 'Browser capabilities are declared but no validated Playwright adapter configuration exists.', 'blocked');
-  const config = readJson<PlaywrightAdapterConfig>(adapterPath);
-  const executable = task.scenarios.filter(scenario => (scenario.execution?.steps.length ?? 0) > 0);
-  if (!executable.length) return block(root, task, run, 'No deterministic Scenario execution runbook exists.', 'blocked');
-  const prohibited = executable.flatMap(scenario => scenario.execution?.steps ?? []).map(step => step.safetyAction).filter((action): action is string => Boolean(action)).filter(action => policy.prohibitedActions.includes(action));
-  if (prohibited.length) return block(root, task, run, `Task contains prohibited actions: ${[...new Set(prohibited)].join(', ')}.`, 'paused');
-  run.status = 'running'; run.replayStage = 'step_pending';
-  run.steps.push({ id: 'capability-check', action: 'Capability preflight', status: 'passed', detail: `Required capabilities available. Optional missing: ${capabilities.optionalMissing.join(', ') || 'none'}.`, at: now(), source: 'internal' }); checkpointRun(root, run);
-  for (const scenario of executable) {
-    try {
-      const result = await executeBrowserScenario({ root, runId: run.id, scenario, config, stopBefore: [...policy.stopBefore, ...task.safety.stopBefore], prohibitedActions: policy.prohibitedActions });
-      run.steps.push(...result.steps); run.evidence.push(...result.evidence); run.scenarioResults.push({ scenarioId: scenario.id, status: 'passed', detail: `Verified at ${result.url}.` });
-    } catch (error) {
-      const resultError = error as Error & { qaEvidence?: TestRun['evidence']; qaSteps?: TestRun['steps'] };
-      if (resultError.qaEvidence) run.evidence.push(...resultError.qaEvidence); if (resultError.qaSteps) run.steps.push(...resultError.qaSteps);
-      const status: RunStatus = resultError instanceof SafetyStopError ? 'paused' : 'failed'; run.steps.push({ id: `scenario-${scenario.id}`, action: 'Execute scenario', status, detail: resultError.message, at: now(), source: 'internal' }); run.scenarioResults.push({ scenarioId: scenario.id, status, detail: resultError.message });
-    }
-    checkpointRun(root, run);
-  }
-  run.status = finalStatus(run.scenarioResults.map(result => result.status)); run.replayStage = run.status === 'passed' ? 'completed' : run.replayStage;
-  run.conclusion = run.status === 'passed' ? 'All executable scenarios satisfied their declared assertions.' : run.status === 'failed' ? 'At least one scenario did not satisfy its declared assertions.' : 'Run did not complete; inspect the recorded blocker or safety pause.';
-  return finish(root, task, run);
-}
-
 export function beginAgentGuidedRun(root: string, task: TestTask, context: RunContextInput = {}): TestRun {
   const run = newRun(root, task, context);
   if (!['ready', 'active'].includes(task.metadata.status)) return block(root, task, run, `Task status is ${task.metadata.status}; review and mark it ready before execution.`);
@@ -110,7 +109,7 @@ export function beginAgentGuidedRun(root: string, task: TestTask, context: RunCo
   const required = [...new Set([...task.capabilities.required, ...platformCapabilities(run.context.platform)])];
   const capabilities = checkCapabilities(root, required, task.capabilities.optional);
   if (capabilities.missing.length) return block(root, task, run, `Missing required capabilities: ${capabilities.missing.join(', ')}. ${capabilityAdvice(capabilities.missing).join(' ')}`, 'blocked');
-  if (run.context.platform !== 'web' && run.context.permissionSnapshot.status !== 'verified') return block(root, task, run, 'macOS/MCP permissions are not verified. Run mobile doctor, grant Screen Recording and Accessibility, then retry.', 'blocked');
+  if (run.context.platform !== 'web' && run.context.permissionSnapshot.status !== 'verified') return block(root, task, run, 'macOS/MCP permissions are not verified. Run host doctor --platform android|ios, grant Screen Recording and Accessibility, then retry.', 'blocked');
   if (context.operationId) {
     try {
       const operation = approvedOperationForReplay(root, task, context.operationId, run.context);
@@ -124,7 +123,7 @@ export function beginAgentGuidedRun(root: string, task: TestTask, context: RunCo
 }
 
 export function recordAgentStep(root: string, runId: string, input: { action: string; operationAction?: OperationAction; safetyAction?: string; detail: string; status?: RunStatus; screenshotPath?: string; visualInspection?: VisualInspectionStatus; source?: TestRun['steps'][number]['source']; operationStepId?: string; scenarioId?: string; locator?: Locator; actualLocator?: Locator; inputRefs?: Record<string, string>; expectedState?: string; actualState?: string; adaptation?: string }): TestRun {
-  const run = readJson<TestRun>(qaPath(root, 'runs', `${runId}.json`)); if (run.status !== 'running') throw new Error(`Run ${runId} is not running.`);
+  const run = readRunById(root, runId); if (run.status !== 'running') throw new Error(`Run ${runId} is not running.`);
   const task = readTask(root, run.moduleId, run.taskId); const scenarioId = input.scenarioId ?? run.scenarioId ?? (task.scenarios.length === 1 ? task.scenarios[0]?.id : undefined);
   if (!scenarioId) throw new Error('A UI step must specify --scenario when the Task contains multiple scenarios.');
   const source = input.source ?? (run.replayStatus === 'replayed' || run.replayStatus === 'adapted' ? 'operation-replay' : 'ui'); const visualInspection = input.visualInspection ?? 'not-required';
@@ -147,12 +146,30 @@ export function recordAgentStep(root: string, runId: string, input: { action: st
 
 function captureScreenshot(root: string, run: TestRun, stepId: string, sourcePath: string, visualInspection: VisualInspectionStatus, summary: string): string {
   if (!existsSync(sourcePath)) throw new Error(`Screenshot does not exist: ${sourcePath}`);
-  const destination = join(qaPath(root, 'evidence', run.id, 'steps', `${stepId}-${basename(sourcePath)}`)); mkdirSync(join(destination, '..'), { recursive: true }); copyFileSync(sourcePath, destination);
-  const relativePath = destination.slice(qaPath(root).length + 1); run.screenshots.push({ stepId, path: relativePath, capturedAt: now(), visualInspection, summary }); run.evidence.push({ type: 'screenshot', path: relativePath, summary: `Screenshot captured: ${summary}` }); if (run.replayStatus !== 'not_replay') run.replayStage = 'screenshot_captured'; return relativePath;
+  const destination = join(taskEvidenceDirectory(root, run.moduleId, run.taskId, run.id), 'screenshots', 'steps', `${stepId}-${basename(sourcePath)}`); mkdirSync(join(destination, '..'), { recursive: true }); copyFileSync(sourcePath, destination);
+  const relativePath = destination.slice(taskDirectory(root, run.moduleId, run.taskId).length + 1); run.screenshots.push({ stepId, path: relativePath, capturedAt: now(), visualInspection, summary }); run.evidence.push({ type: 'screenshot', path: relativePath, summary: `Screenshot captured: ${summary}` }); if (run.replayStatus !== 'not_replay') run.replayStage = 'screenshot_captured'; return relativePath;
+}
+
+/** Import an artifact produced by the host tool; this runtime never captures it itself. */
+export function recordHostEvidence(root: string, runId: string, input: { type: string; summary: string; artifactPath?: string }): TestRun {
+  const run = readRunById(root, runId);
+  if (run.status !== 'running') throw new Error(`Run ${runId} is not running.`);
+  if (!input.type.trim() || !input.summary.trim()) throw new Error('Evidence type and summary are required.');
+  if (hasSecrets({ summary: input.summary })) throw new Error('Evidence summary contains a potential secret.');
+  let path: string | undefined;
+  if (input.artifactPath) {
+    if (!existsSync(input.artifactPath)) throw new Error(`Evidence artifact does not exist: ${input.artifactPath}`);
+    const destination = join(taskEvidenceDirectory(root, run.moduleId, run.taskId, run.id), 'artifacts', `${run.evidence.length + 1}-${basename(input.artifactPath)}`);
+    mkdirSync(join(destination, '..'), { recursive: true }); copyFileSync(input.artifactPath, destination);
+    path = destination.slice(taskDirectory(root, run.moduleId, run.taskId).length + 1);
+  }
+  run.evidence.push({ type: input.type, path, summary: input.summary });
+  checkpointRun(root, run);
+  return run;
 }
 
 export function recordRecoveryAttempt(root: string, runId: string, input: { reason: string; action: string; outcome: 'continued' | 'blocked' | 'paused' | 'failed'; detail: string; failedStepId?: string }): TestRun {
-  const run = readJson<TestRun>(qaPath(root, 'runs', `${runId}.json`)); if (run.status !== 'running') throw new Error(`Run ${runId} is not running.`);
+  const run = readRunById(root, runId); if (run.status !== 'running') throw new Error(`Run ${runId} is not running.`);
   assertRecoveryAction(input.action); const task = readTask(root, run.moduleId, run.taskId); const max = task.recoveryPolicy.maxRecoveryAttempts; if (run.recoveryAttempts.length >= max) return block(root, task, run, `Recovery attempt limit ${max} was reached.`, 'blocked'); if (input.action === 'reset-sandbox-data' && !task.recoveryPolicy.allowSandboxDataReset) throw new Error('Task recovery policy does not allow sandbox data reset.');
   const attempt = { id: `recovery-${run.recoveryAttempts.length + 1}`, reason: input.reason, action: input.action, outcome: input.outcome, detail: input.detail, failedStepId: input.failedStepId, at: now() };
   run.recoveryAttempts.push(attempt); run.steps.push({ id: attempt.id, action: `Recovery: ${input.action}`, status: input.outcome === 'continued' ? 'passed' : input.outcome, detail: `${input.reason}\n${input.detail}`, at: attempt.at, source: 'recovery', scenarioId: run.scenarioId, visualInspection: 'not-required' });
@@ -161,7 +178,7 @@ export function recordRecoveryAttempt(root: string, runId: string, input: { reas
 }
 
 export function recordVisualFinding(root: string, runId: string, input: { scenarioId: string; assertionId: string; expected: string; actual: string; status: RunStatus; screenshotPath?: string; inspectionProvider?: string }): TestRun {
-  const run = readJson<TestRun>(qaPath(root, 'runs', `${runId}.json`)); if (run.status !== 'running') throw new Error(`Run ${runId} is not running.`);
+  const run = readRunById(root, runId); if (run.status !== 'running') throw new Error(`Run ${runId} is not running.`);
   if (!['passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable', 'needs_confirmation', 'adapted'].includes(input.status)) throw new Error('A visual observation must use a terminal QA conclusion status.');
   const task = readTask(root, run.moduleId, run.taskId); const scenario = task.scenarios.find(item => item.id === input.scenarioId); if (!scenario) throw new Error(`Scenario ${input.scenarioId} does not belong to task ${run.taskId}.`);
   if (run.scenarioId && run.scenarioId !== input.scenarioId) throw new Error(`Run is scoped to scenario ${run.scenarioId}; received visual finding for ${input.scenarioId}.`);
@@ -175,7 +192,7 @@ export function recordVisualFinding(root: string, runId: string, input: { scenar
 }
 
 export function completeAgentGuidedRun(root: string, task: TestTask, runId: string): TestRun {
-  const run = readJson<TestRun>(qaPath(root, 'runs', `${runId}.json`)); if (run.status !== 'running') throw new Error(`Run ${runId} is not running.`);
+  const run = readRunById(root, runId); if (run.status !== 'running') throw new Error(`Run ${runId} is not running.`);
   if (run.replayStatus !== 'not_replay' && run.operationPlanId) { const operation = readOperation(root, task, run.operationPlanId); if ((run.replayCursor ?? 0) < operation.steps.length) return block(root, task, run, `Replay is incomplete: ${operation.steps.length - (run.replayCursor ?? 0)} Operation steps remain.`, 'blocked'); }
   const active = task.scenarios.filter(scenario => !run.scenarioId || scenario.id === run.scenarioId);
   run.scenarioResults = task.scenarios.map(scenario => {
@@ -191,9 +208,4 @@ export function completeAgentGuidedRun(root: string, task: TestTask, runId: stri
 
 function finalStatus(statuses: RunStatus[]): RunStatus {
   if (!statuses.length || statuses.includes('pending') || statuses.includes('running')) return 'blocked'; if (statuses.includes('failed')) return 'failed'; if (statuses.includes('needs_confirmation')) return 'needs_confirmation'; if (statuses.includes('inconclusive')) return 'inconclusive'; if (statuses.includes('paused')) return 'paused'; if (statuses.includes('blocked')) return 'blocked'; if (statuses.includes('adapted')) return 'adapted'; if (statuses.every(status => status === 'not_applicable')) return 'not_applicable'; return 'passed';
-}
-
-export function configurePlaywrightAdapter(root: string, baseUrl: string, headless = true): void {
-  if (!/^https?:\/\//.test(baseUrl)) throw new Error('Playwright base URL must start with http:// or https://.');
-  writeJsonAtomic(qaPath(root, 'adapters', 'playwright.json'), { version: 2, kind: 'playwright', baseUrl, headless, configuredAt: now(), capabilities: ['browser.interact', 'browser.inspect'] } satisfies PlaywrightAdapterConfig);
 }

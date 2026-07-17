@@ -34,13 +34,12 @@ Source code, DOM state, and logs support diagnosis only. The rendered business o
 | Gemini CLI | `/qa-agent` command |
 | Compatible hosts | `.agents/skills/qa-agent` Skill |
 
-The host supplies browser, simulator, device, or MCP permissions. `qa-agent` supplies the shared planning, approval, evidence, reporting, and project-memory workflow. It is a QA brain, not a new browser or simulator framework. The repository's Playwright adapter is a local development/reference capability; real Web, Android, and iOS operations should use the host Agent's approved MCPs or local tools.
+The host supplies and invokes browser, simulator, device, log, database, and source tools. `qa-agent` supplies the shared planning, approval, evidence, reporting, and project-memory workflow. It is a QA brain, not a browser or simulator framework; real Web, Android, and iOS operations always use the host Agent's approved tools.
 
 ## Prerequisites
 
 - Node.js `>= 22.6`
 - npm
-- Playwright Chromium for browser verification; if needed run `npx playwright install chromium`
 - A host with the relevant browser, simulator, or device-control capability for real UI execution
 
 ## Start the runtime
@@ -52,7 +51,7 @@ npm test
 npm run qa-agent -- help
 ```
 
-The test suite launches a local Chromium fixture and verifies browser actions, screenshots, visual assertions, reports, mobile preflight, approval invalidation, and host integrations.
+The test suite verifies host capability snapshots, imported artifacts, visual assertions, replay, reports, mobile preflight, approval invalidation, and host integrations.
 
 ## Install a host integration
 
@@ -97,13 +96,12 @@ node /Users/leo/Documents/code/QA-Agent/bin/qa-agent.mjs doctor
 
 ```text
 .qa-agent/
-├── modules/          # Business modules and Tasks
-├── runs/             # Execution records
-├── evidence/         # Screenshots, traces, and logs
-├── reports/          # Generated Markdown reports
+├── modules/          # Module assets; each Task owns its runs, evidence, reports, and memory
+├── index/            # Project-level search/index projections, including runs.jsonl
+├── regression-runs/  # Cross-task/module suite orchestration records
 ├── shared-memory/    # Reviewed project knowledge
 ├── policies.json     # Safety policy
-└── capabilities.json # Declared capabilities
+└── mcp.json          # Host capability snapshot and health state
 ```
 
 ## Recommended workflow
@@ -152,32 +150,14 @@ No browser or APP action may begin until the user confirms the generated test ca
 qa-agent task review checkout-basic-flow --module checkout --approve --confirmed-by "leo"
 ```
 
-Approval is tied to the current test-plan hash. Changing business logic, expected results, Runbook steps, test data, capabilities, or safety boundaries invalidates the approval and returns the Task to `needs_review`. An unchanged approved plan can run repeatedly for regression work without asking again.
+Approval is tied to the current test-plan hash. Changing business logic, expected results, an OperationPlan, test data, capabilities, or safety boundaries invalidates the approval and returns the Task to `needs_review`. An unchanged approved plan can run repeatedly for regression work without asking again.
 
-### 3. Configure deterministic browser execution
+### 3. Import a host capability snapshot
 
-```bash
-qa-agent adapter playwright --base-url http://localhost:3000
-```
-
-Example `checkout-runbook.json`:
-
-```json
-{
-  "startPath": "/checkout",
-  "steps": [
-    { "id": "total-visible", "action": "assert-visible", "locator": "[data-testid=order-total]" },
-    { "id": "total-text", "action": "assert-text", "locator": "[data-testid=order-total]", "expected": "$199.00" },
-    { "id": "result-shot", "action": "screenshot", "description": "The total and checkout action are visible" }
-  ]
-}
-```
+The host Agent confirms its connected tools and permissions before a Run, then imports that attestation into the project. `qa-agent` never connects MCPs or verifies system permissions itself.
 
 ```bash
-qa-agent task runbook checkout-basic-flow --module checkout --file checkout-runbook.json
-# Re-confirm the plan if the Runbook changed.
-qa-agent task review checkout-basic-flow --module checkout --approve --confirmed-by "leo"
-qa-agent task run checkout-basic-flow --module checkout
+qa-agent host import --file /absolute/path/host-capabilities.json
 ```
 
 ### 4. Agent-guided real UI QA
@@ -186,8 +166,9 @@ This is the preferred business-QA mode. The runtime uses the `qa-agent/v2` data 
 
 ```bash
 qa-agent context module checkout
-qa-agent run start checkout-basic-flow --module checkout
+qa-agent task run checkout-basic-flow --module checkout
 qa-agent run step <run-id> --action "Open checkout" --detail "The Agent opened the real checkout screen." --screenshot /absolute/path/checkout-open.png --visual-inspection not-required
+qa-agent run evidence <run-id> --type console --summary "Host browser console output" --file /absolute/path/console.log
 qa-agent run observe <run-id> \
   --scenario happy-path \
   --assertion business-outcome \
@@ -198,22 +179,44 @@ qa-agent run observe <run-id> \
 qa-agent run complete <run-id>
 ```
 
-The report is written to `.qa-agent/reports/<run-id>.md`. Passed and failed visual assertions require a screenshot and reports embed available screenshots.
+The report is written to the current Task's `reports/<run-id>.md`; `reports/index.json` and `reports/latest.json` are updated as well. Passed and failed visual assertions require a screenshot and reports embed available screenshots.
+
+Each Task is a self-contained test asset directory:
+
+```text
+.qa-agent/modules/<module>/tasks/<task>/
+├── task.json
+├── module-snapshot.json
+├── requirements.json
+├── test-plan.json
+├── scenarios/
+├── operation-plans/
+├── regression-suite.json
+├── runs/<run-id>/
+├── reports/
+└── memory/
+```
 
 ### 5. Fast regression replay
 
-After a successful run, the Agent creates a candidate OperationPlan under `.qa-agent/modules/<module>/tasks/<task>/operations/`. Review it before reuse:
+After a successful run, the Agent creates a candidate OperationPlan under `.qa-agent/modules/<module>/tasks/<task>/operation-plans/<scenario>/`. Review it before reuse:
 
 ```bash
 qa-agent task operation list checkout-basic-flow --module checkout
 qa-agent task operation review checkout-basic-flow --module checkout --operation OPERATION_ID --approve
-qa-agent run replay checkout-basic-flow --module checkout --operation OPERATION_ID
+qa-agent task run checkout-basic-flow --module checkout --operation OPERATION_ID
 qa-agent run recover <run-id> --reason "Element was not ready" --action wait --detail "Element appeared; resume from checkpoint" --outcome continued
+qa-agent task regression sync checkout-basic-flow --module checkout
+qa-agent task regression run checkout-basic-flow --module checkout
+qa-agent module regression sync checkout
+qa-agent module regression run checkout
 ```
 
 Replay is permitted only when the Task plan hash and user approval, an active OperationPlan, platform/device/app or Web version, environment/role, test data, required MCPs, and verified macOS permissions are compatible. It skips rediscovery, not business assertions. Outcomes are `PASS`, `FAIL`, `ADAPTED`, `BLOCKED`, or `NEEDS_CONFIRMATION`. Recovery is limited to `wait`, `refresh`, `back`, `restart-app`, `reset-sandbox-data`, `reconnect-mcp`, `fallback-locator`, and `resume-checkpoint`; never modify source code, bypass permissions, or fabricate results.
 
 OperationPlans are Scenario-specific. Each step stores an operation action, primary and fallback locators, redacted input references, preconditions, expected state, assertion references, screenshot and visual-inspection policies, safety action, and checkpoint. During replay every `run step` must reference the next `operationStepId`; steps cannot be skipped or duplicated.
+
+A Task-level RegressionSuite organizes all active OperationPlans for one Task. A Module-level RegressionSuite aggregates Task suites. Module replay runs independent flows serially, continues after an isolated business failure, and produces an aggregate report. `run.json` is a result record; OperationPlan is the executable operation definition.
 
 ## APP and simulator QA
 
@@ -226,20 +229,19 @@ qa-agent module create checkout --name "Checkout" --platforms android
 
 Before an APP run, the runtime requires Android `android.adb` and `android.screenshot`, or iOS `ios.simulator.interact` and `ios.screenshot`.
 
-On macOS, the host app also needs **Screen Recording** (screenshots/visual evidence) and **Accessibility** (clicks, input, and simulator control). iOS simulator automation may additionally require Developer Mode. The Agent cannot grant system permissions; `mobile doctor` reports the required permissions, validation steps, and the System Settings → Privacy & Security location.
+On macOS, the host app also needs **Screen Recording** (screenshots/visual evidence) and **Accessibility** (clicks, input, and simulator control). iOS simulator automation may additionally require Developer Mode. The Agent cannot grant system permissions; `host doctor --platform` reports the required permissions, validation steps, and the System Settings → Privacy & Security location from the host-imported snapshot.
 
 ```bash
-qa-agent mobile doctor --platform android
+qa-agent host doctor --platform android
 ```
 
 If a capability is missing, the Run is `BLOCKED`. The Agent must ask the user to approve connecting or installing the least-privilege Android Emulator/ADB or iOS Simulator/Appium MCP. It never installs an MCP automatically.
 
-After approval and connection, declare and activate the project MCP:
+After approval and connection, import a fresh host capability snapshot:
 
 ```bash
-qa-agent mcp add android-emulator --capabilities android.adb,android.screenshot --readonly
-qa-agent mcp activate android-emulator --permissions verified
-qa-agent mobile doctor --platform android
+qa-agent host import --file /absolute/path/android-host-capabilities.json
+qa-agent host doctor --platform android
 ```
 
 The host Agent then operates the simulator, captures visual evidence, and creates the same automatic report.
@@ -272,16 +274,14 @@ Configure project policy in `.qa-agent/policies.json`.
 
 ```bash
 qa-agent doctor
-qa-agent mobile doctor --platform android
-qa-agent capability list
-qa-agent mcp list
+qa-agent host doctor --platform android
+qa-agent host list
 qa-agent context module <module-id>
 qa-agent module coverage <module-id>
 qa-agent task list
 qa-agent run show <run-id>
 qa-agent run report <run-id>
 qa-agent memory list
-qa-agent source diagnose --module <module-id> --query "keyword"
 qa-agent help
 ```
 

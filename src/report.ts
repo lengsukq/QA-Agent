@@ -1,4 +1,5 @@
-import { qaPath, readProject } from './project.ts';
+import { readProject, taskReportDirectory } from './project.ts';
+import { join } from 'node:path';
 import { writeTextAtomic } from './store.ts';
 import type { TestRun, TestTask } from './types.ts';
 
@@ -13,7 +14,7 @@ export function writeReport(root: string, task: TestTask, run: TestRun): string 
   ];
   const lines = [
     `# QA Run: ${task.metadata.name}`, '', '## 测试上下文', '',
-    `- Project: ${project.project.name}`, `- Module: ${run.moduleId}`, `- Task: ${run.taskId}`,
+    `- Project: ${project.project.name}`, `- Module: ${run.moduleId}`, `- Task: ${run.taskId}`, `- Module snapshot: ${task.moduleSnapshot?.snapshotHash ?? 'not materialized'} (revision ${task.moduleSnapshot?.moduleRevision ?? 'unknown'})`, `- Requirements: ${task.requirementsRef}`, `- Test plan: ${task.testPlanRef}`,
     `- Environment: ${run.context.environment}`, `- Platform: ${run.context.platform}`, `- Role: ${run.context.role}`, `- Scenario: ${run.scenarioId ?? 'all selected scenarios'}`, `- Device: ${run.context.device ?? 'unknown'}`, `- Device model: ${run.context.deviceModel ?? 'unknown'}`, `- OS version: ${run.context.osVersion ?? 'unknown'}`, `- App version: ${run.context.appVersion ?? 'unknown'}`, `- Web build: ${run.context.webBuild ?? 'unknown'}`, `- Test data fingerprint: ${run.context.testDataFingerprint ?? 'unknown'}`,
     `- Git Branch: ${run.git.branch ?? 'unknown'}`, `- Git Commit: ${run.git.commit ?? 'unknown'}`, `- Safe Mode: ${run.safeMode}`, `- Test plan approval: ${task.metadata.approval ? `${task.metadata.approval.confirmedBy} at ${task.metadata.approval.confirmedAt}` : 'missing'}`, `- Plan hash: ${task.metadata.approval?.planHash ?? 'unapproved'}`, `- Replay: ${run.replayStatus}${run.operationPlanId ? ` (${run.operationPlanId} v${run.operationVersion ?? '?'})` : ''}`, `- Replay stage: ${run.replayStage}`, `- MCP snapshot: ${run.context.mcpSnapshot.map(item => `${item.id}:${item.status}/${item.permissionStatus}`).join(', ') || 'none'}`, `- Permission snapshot: ${run.context.permissionSnapshot.status}`, '',
     '## 测试用例与业务逻辑', '', `- Description: ${task.description}`, ...task.objectives.map(item => `- Business objective: ${item}`),
@@ -31,7 +32,7 @@ export function writeReport(root: string, task: TestTask, run: TestRun): string 
     ...(run.memoryCandidates?.length ? ['## 候选项目记忆', '', ...run.memoryCandidates.map(item => `- ${item}`), ''] : []),
     '## 源码辅助分析', '', '未在本次运行中执行源码诊断。业务结论应以实际页面、接口和运行证据为准。', '',
   ];
-  const path = qaPath(root, 'reports', `${run.id}.md`);
+  const path = join(taskReportDirectory(root, task.metadata.moduleId, task.metadata.id), `${run.id}.md`);
   writeTextAtomic(path, `${lines.join('\n')}\n`);
   return path;
 }
