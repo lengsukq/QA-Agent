@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { join, relative } from 'node:path';
 import { approvedOperationForReplay, listOperations, readOperation } from './operations.ts';
-import { moduleRegressionSuitePath, modulePath, moduleReportDirectory, qaPath, readModule, readTask, saveTask, taskDirectory, taskRegressionSuitePath } from './project.ts';
+import { modulePath, moduleReportDirectory, qaPath, readModule, readTask, saveTask, taskDirectory, taskRegressionSuitePath } from './project.ts';
 import { listFiles, now, readJson, writeJsonAtomic, writeTextAtomic } from './store.ts';
 import type { ExecutionSnapshot, RegressionRun, RegressionSuite, RegressionSuiteMember, TestTask } from './types.ts';
 import { testPlanHash } from './approval.ts';
@@ -18,7 +18,7 @@ function taskMembers(root: string, task: TestTask): RegressionSuiteMember[] {
 function suiteBase(id: string, scope: RegressionSuite['scope'], moduleId: string, members: RegressionSuiteMember[], taskId?: string): RegressionSuite {
   const timestamp = now();
   const suiteHash = suiteHashForMembers(scope, moduleId, taskId, members);
-  return { $schema: scope === 'task' ? '../../../../schemas/regression-suite.schema.json' : '../../schemas/regression-suite.schema.json', apiVersion: 'qa-agent/v2', kind: 'RegressionSuite', id, version: 1, scope, moduleId, taskId, operationPlanRefs: members.map(member => member.operationPlanRef), members, selectionPolicy: 'all-active-operation-plans', failurePolicy: 'continue-independent', contextPolicy: 'current-context', suiteHash, status: members.length ? 'active' : 'draft', createdAt: timestamp, updatedAt: timestamp };
+  return { $schema: scope === 'task' ? '../../../../schemas/regression-suite.schema.json' : '../../schemas/regression-suite.schema.json', apiVersion: 'qa-agent/v2', kind: 'RegressionSuite', id, version: 1, scope, moduleId, taskId, members, selectionPolicy: 'all-active-operation-plans', failurePolicy: 'continue-independent', contextPolicy: 'current-context', suiteHash, status: members.length ? 'active' : 'draft', createdAt: timestamp, updatedAt: timestamp };
 }
 
 function suiteHashForMembers(scope: RegressionSuite['scope'], moduleId: string, taskId: string | undefined, members: RegressionSuiteMember[]): string {
@@ -42,18 +42,13 @@ export function readTaskRegressionSuite(root: string, task: TestTask): Regressio
   return readJson<RegressionSuite>(taskRegressionSuitePath(root, task.metadata.moduleId, task.metadata.id));
 }
 
-export function syncModuleRegressionSuite(root: string, moduleId: string): RegressionSuite {
+/** Module regression is a live aggregate of active Task OperationPlans, never a second persisted suite. */
+export function buildModuleRegressionSuite(root: string, moduleId: string): RegressionSuite {
   const module = readModule(root, moduleId);
   const taskPaths = listFiles(join(modulePath(root, moduleId), 'tasks'), path => path.endsWith('/task.json')).sort();
-  const suites = taskPaths.map(path => readTask(root, moduleId, readJson<TestTask>(path).metadata.id)).map(task => syncTaskRegressionSuite(root, task));
-  const members = suites.flatMap(suite => suite.members).map((member, index) => ({ ...member, order: index }));
-  const suite = suiteBase(`${moduleId}-regression`, 'module', module.id, members);
-  suite.taskSuiteRefs = suites.map(item => relative(modulePath(root, moduleId), taskRegressionSuitePath(root, moduleId, item.taskId)));
-  writeJsonAtomic(moduleRegressionSuitePath(root, moduleId), suite);
-  return suite;
+  const members = taskPaths.flatMap(path => taskMembers(root, readTask(root, moduleId, readJson<TestTask>(path).metadata.id))).sort((a, b) => a.taskId.localeCompare(b.taskId) || a.scenarioId.localeCompare(b.scenarioId) || a.operationVersion - b.operationVersion).map((member, index) => ({ ...member, order: index }));
+  return suiteBase(`${moduleId}-regression`, 'module', module.id, members);
 }
-
-export function readModuleRegressionSuite(root: string, moduleId: string): RegressionSuite { return readJson<RegressionSuite>(moduleRegressionSuitePath(root, moduleId)); }
 
 export function suitePreflight(root: string, suite: RegressionSuite, context: ExecutionSnapshot): string[] {
   const errors: string[] = [];

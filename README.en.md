@@ -208,7 +208,6 @@ qa-agent task run checkout-basic-flow --module checkout --operation OPERATION_ID
 qa-agent run recover <run-id> --reason "Element was not ready" --action wait --detail "Element appeared; resume from checkpoint" --outcome continued
 qa-agent task regression sync checkout-basic-flow --module checkout
 qa-agent task regression run checkout-basic-flow --module checkout
-qa-agent module regression sync checkout
 qa-agent module regression run checkout
 ```
 
@@ -216,7 +215,7 @@ Replay is permitted only when the Task plan hash and user approval, an active Op
 
 OperationPlans are Scenario-specific. Each step stores an operation action, primary and fallback locators, redacted input references, preconditions, expected state, assertion references, screenshot and visual-inspection policies, safety action, and checkpoint. During replay every `run step` must reference the next `operationStepId`; steps cannot be skipped or duplicated.
 
-A Task-level RegressionSuite organizes all active OperationPlans for one Task. A Module-level RegressionSuite aggregates Task suites. Module replay runs independent flows serially, continues after an isolated business failure, and produces an aggregate report. `run.json` is a result record; OperationPlan is the executable operation definition.
+A Task-level RegressionSuite organizes all active OperationPlans for one Task. Module replay dynamically aggregates active OperationPlans across Tasks at start, instead of persisting a second Module Suite. It runs independent flows serially, continues after an isolated business failure, and produces an aggregate report. `run.json` is a result record; OperationPlan is the executable operation definition.
 
 ## APP and simulator QA
 

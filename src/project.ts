@@ -81,7 +81,6 @@ export function taskModuleSnapshotPath(root: string, moduleId: string, taskId: s
 export function taskScenarioPath(root: string, moduleId: string, taskId: string, scenarioId: string): string { assertSafeId(scenarioId, 'scenario id'); return join(taskDirectory(root, moduleId, taskId), 'scenarios', `${scenarioId}.json`); }
 export function taskOperationDirectory(root: string, moduleId: string, taskId: string, scenarioId?: string): string { return join(taskDirectory(root, moduleId, taskId), 'operation-plans', ...(scenarioId ? [scenarioId] : [])); }
 export function taskRegressionSuitePath(root: string, moduleId: string, taskId: string): string { return join(taskDirectory(root, moduleId, taskId), 'regression-suite.json'); }
-export function moduleRegressionSuitePath(root: string, moduleId: string): string { return join(modulePath(root, moduleId), 'regression-suite.json'); }
 export function taskRunDirectory(root: string, moduleId: string, taskId: string, runId: string): string { assertSafeId(runId, 'run id'); return join(taskDirectory(root, moduleId, taskId), 'runs', runId); }
 export function taskRunPath(root: string, moduleId: string, taskId: string, runId: string): string { return join(taskRunDirectory(root, moduleId, taskId, runId), 'run.json'); }
 export function taskReportDirectory(root: string, moduleId: string, taskId: string): string { return join(taskDirectory(root, moduleId, taskId), 'reports'); }

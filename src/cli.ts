@@ -14,7 +14,7 @@ import { installHostIntegration, supportedHosts } from './host-adapters.ts';
 import { testPlanHash } from './approval.ts';
 import { hostCapabilityDiagnosis } from './capabilities.ts';
 import { operationSummary, readOperation, reviewOperation } from './operations.ts';
-import { readModuleRegressionSuite, readTaskRegressionSuite, syncModuleRegressionSuite, syncTaskRegressionSuite } from './regression.ts';
+import { buildModuleRegressionSuite, readTaskRegressionSuite, syncTaskRegressionSuite } from './regression.ts';
 
 const args = process.argv.slice(2);
 const usage = `qa-agent — local-first QA Agent MVP
@@ -27,8 +27,8 @@ Commands:
   host list | host import --file HOST_CAPABILITIES.json | host doctor [--platform android|ios]
   context module MODULE
   module list | module create ID --name NAME [--description TEXT] [--platforms web,android,ios] | module update ID [--name NAME] [--description TEXT] [--risk LEVEL] | module archive ID | module plan ID | module coverage ID
-  task list | task create ID --module MODULE [--name NAME] | task plan ID --module MODULE | task run ID --module MODULE [--operation OPERATION_ID] [--scenario SCENARIO] [--environment ENV] [--platform PLATFORM] [--role ROLE] [--device DEVICE] [--device-model MODEL] [--os-version VERSION] [--app-version VERSION] [--web-build BUILD] [--test-data-fingerprint FINGERPRINT] | task operation list|show|review ID --module MODULE [--approve|--reject] | task regression sync|show|run ID --module MODULE | task review ID --module MODULE --approve --confirmed-by USER | task archive ID --module MODULE
-  module regression sync|show|run MODULE
+  task list | task create ID --module MODULE [--name NAME] | task plan ID --module MODULE | task run ID --module MODULE [--operation OPERATION_ID] [--scenario SCENARIO] [--environment ENV] [--platform PLATFORM] [--role ROLE] [--device DEVICE] [--device-model MODEL] [--os-version VERSION] [--app-version VERSION] [--web-build BUILD] [--test-data-fingerprint FINGERPRINT] | task operation list|show|review ID --module MODULE [--approve|--reject] | task regression sync|show|run|complete ID --module MODULE | task review ID --module MODULE --approve --confirmed-by USER | task archive ID --module MODULE
+  module regression show|run|complete MODULE
   memory list | memory search TEXT | memory add ID --module MODULE [--task TASK] --title TEXT --content TEXT | memory review ID --module MODULE [--task TASK] --approve|--reject
   run step RUN --action TEXT --detail TEXT --screenshot PATH [--operation-action launch|navigate|click|input|fill|swipe|back|wait|assert|screenshot|reset|restart-app] [--safety-action ACTION] [--scenario SCENARIO] [--status passed|failed|paused|blocked|adapted] [--visual-inspection performed|not-required|skipped] [--operation-step STEP] [--locator-strategy STRATEGY] [--locator-value VALUE] [--actual-locator-strategy STRATEGY] [--actual-locator-value VALUE] [--adaptation TEXT]
   run evidence RUN --type TYPE --summary TEXT [--file PATH]
@@ -252,18 +252,18 @@ async function main(): Promise<void> {
   }
   if (group === 'module' && action === 'regression') {
     const projectRoot = root();
-    const regressionAction = ['sync', 'show', 'run', 'complete'].includes(subject ?? '') ? subject : args[3];
-    const moduleId = regressionAction === subject ? args[3] : subject;
+    const regressionAction = subject;
+    const moduleId = args[3];
+    if (!['show', 'run', 'complete'].includes(regressionAction ?? '')) throw new Error(`Unsupported command.\n\n${usage}`);
     if (!moduleId || moduleId.startsWith('--')) throw new Error('module id is required.');
-    if (regressionAction === 'sync') return output(syncModuleRegressionSuite(projectRoot, moduleId));
-    if (regressionAction === 'show') return output(readModuleRegressionSuite(projectRoot, moduleId));
+    if (regressionAction === 'show') return output(buildModuleRegressionSuite(projectRoot, moduleId));
     if (regressionAction === 'run') {
-      const suite = readModuleRegressionSuite(projectRoot, moduleId); const first = suite.members[0]; if (!first) throw new Error(`Module ${moduleId} has no active OperationPlan.`);
+      const suite = buildModuleRegressionSuite(projectRoot, moduleId); const first = suite.members[0]; if (!first) throw new Error(`Module ${moduleId} has no active OperationPlan.`);
       const task = readTask(projectRoot, moduleId, first.taskId); const context = buildExecutionSnapshot(projectRoot, task, { environment: flag('--environment'), platform: flag('--platform'), role: flag('--role'), device: flag('--device'), deviceModel: flag('--device-model'), osVersion: flag('--os-version'), appVersion: flag('--app-version'), webBuild: flag('--web-build'), testDataFingerprint: flag('--test-data-fingerprint') });
       const started = beginRegressionRun(projectRoot, suite, context); rebuildIndexes(projectRoot); return output(started);
     }
     if (regressionAction === 'complete') { const regressionRun = readJson(qaPath(projectRoot, 'regression-runs', `${requiredFlag('--run')}.json`)); const completed = completeRegressionRun(projectRoot, regressionRun); rebuildIndexes(projectRoot); return output(completed); }
-    throw new Error('Module regression action must be sync, show, or run.');
+    throw new Error('Module regression action must be show, run, or complete.');
   }
   if (group === 'skill') {
     const skillRoot = join(process.cwd(), 'skill', 'qa-agent');

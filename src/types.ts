@@ -256,8 +256,6 @@ export interface RegressionSuite {
   scope: RegressionSuiteScope;
   moduleId: string;
   taskId?: string;
-  taskSuiteRefs?: string[];
-  operationPlanRefs?: string[];
   members: RegressionSuiteMember[];
   selectionPolicy: 'all-active-operation-plans';
   failurePolicy: 'continue-independent';

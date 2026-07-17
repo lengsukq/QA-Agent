@@ -239,7 +239,6 @@ qa-agent task run checkout-basic-flow --module checkout --operation OPERATION_ID
 qa-agent run recover <run-id> --reason "元素尚未出现" --action wait --detail "元素出现后继续" --outcome continued
 qa-agent task regression sync checkout-basic-flow --module checkout
 qa-agent task regression run checkout-basic-flow --module checkout
-qa-agent module regression sync checkout
 qa-agent module regression run checkout
 ```
 
@@ -247,7 +246,7 @@ qa-agent module regression run checkout
 
 OperationPlan 按 Scenario 独立保存，步骤包含操作类型、主/备用定位器、输入引用、前置条件、预期状态、断言引用、截图策略、视觉识别策略、风险动作和 checkpoint。回放时每个 `run step` 必须引用下一个 `operationStepId`，不能跳步或重复提交。
 
-Task 级 RegressionSuite 组织一个 Task 的所有 active OperationPlan；Module 级 RegressionSuite 汇总多个 Task。模块回归会串行自动执行所有独立流程，单个业务失败后继续其他流程，最后生成模块汇总报告。`run.json` 是结果记录，OperationPlan 才是可执行操作定义。
+Task 级 RegressionSuite 组织一个 Task 的所有 active OperationPlan；Module 回归在启动时从各 Task 的 active OperationPlan 动态聚合，不再保存第二份 Module Suite。模块回归会串行自动执行所有独立流程，单个业务失败后继续其他流程，最后生成模块汇总报告。`run.json` 是结果记录，OperationPlan 才是可执行操作定义。
 
 ### APP / 模拟器测试
 
