@@ -1,4 +1,4 @@
 interface:
   display_name: "QA Agent"
-  short_description: "Project-aware QA with an approval and execution gate"
-  default_prompt: "Use $qa-agent. Start with workflow bootstrap, mirror its TodoList, and do not use UI tools until uiExecutionAllowed is true and a runId is returned."
+  short_description: "Project-aware QA planning and safe execution"
+  default_prompt: "Use $qa-agent, load the current project canonicalPrompts, require real human plan approval, then execute and report the safe QA lifecycle."
