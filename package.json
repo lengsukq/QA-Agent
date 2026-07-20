@@ -4,7 +4,7 @@
   "type": "module",
   "description": "CLI-first local QA Agent with Codex, Cursor, and other host Skill integrations",
   "bin": {
-    "qa-agent": "./bin/qa-agent.mjs"
+    "qa-agent": "bin/qa-agent.mjs"
   },
   "files": [
     "bin/",
@@ -30,7 +30,14 @@
     "url": "https://github.com/lengsukq/QA-Agent/issues"
   },
   "homepage": "https://github.com/lengsukq/QA-Agent#readme",
-  "keywords": ["qa", "testing", "agent", "skills", "cli", "regression"],
+  "keywords": [
+    "qa",
+    "testing",
+    "agent",
+    "skills",
+    "cli",
+    "regression"
+  ],
   "engines": {
     "node": ">=22.6"
   }
