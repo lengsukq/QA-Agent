@@ -88,6 +88,40 @@ qa-agent configure --project /path/to/your-app --host gemini --scope project
 
 `configure` 在已经初始化的目标项目上不会覆盖 `.qa-agent/` 业务数据；如果宿主文件已经存在，需要明确加 `--force` 才会替换宿主注入文件。
 
+也可以一次为同一个被测项目注入多个宿主。平台参数来自统一平台注册表：
+
+```bash
+cd /path/to/your-app
+qa-agent init \
+  --id my-app \
+  --name "My App" \
+  --codex --cursor --claude --opencode --copilot --gemini --agents
+```
+
+这条命令只创建一次 `.qa-agent/`，并分别生成所选平台的托管文件。重复执行 `init` 是幂等的；增加新的平台时只传入新的平台参数即可。
+
+平台注入路径如下：
+
+| 平台 | 项目级文件 |
+| --- | --- |
+| Codex | `.codex/skills/qa-agent/`、共享 `.agents/skills/qa-agent/` |
+| Cursor | `.cursor/rules/qa-agent.mdc`、`.cursor/commands/qa-agent.md`、`.cursor/skills/qa-agent/` |
+| Claude Code | `.claude/skills/qa-agent/`、`.claude/commands/qa-agent.md` |
+| OpenCode | `.opencode/skills/qa-agent/`、`.opencode/commands/qa-agent.md` |
+| Gemini CLI | `.gemini/commands/qa-agent.toml`、共享 `.agents/skills/qa-agent/` |
+| GitHub Copilot | `.github/skills/qa-agent/`、`.github/agents/qa-agent.agent.md`、`.github/prompts/qa-agent.prompt.md` |
+| Agent Skills 标准 | `.agents/skills/qa-agent/` |
+
+更新 CLI 后，在每个已初始化的被测项目中同步模板：
+
+```bash
+npm install --global qa-agent-skill@latest
+cd /path/to/your-app
+qa-agent update
+```
+
+`update` 只更新 QA Agent 自己管理且未被修改的文件；发现用户改过的宿主文件时会报告冲突，不会静默覆盖。确认要替换时使用 `qa-agent update --force`；旧版本路径迁移使用 `qa-agent update --migrate`。Task、Run、截图、报告、OperationPlan、RegressionSuite 和 Memory 不会被更新过程删除。
+
 ### 手动分步初始化
 
 如果不希望同时注入宿主，可以先只初始化项目运行边界：
@@ -137,7 +171,7 @@ qa-agent configure \
   --name "My App"
 ```
 
-`configure` 只负责项目初始化和宿主注入；后续通过 `qa-agent workflow`、`qa-agent task`、`qa-agent run`、`qa-agent operation` 等命令执行 QA 工作流。
+`configure` 只负责项目初始化和宿主注入；后续通过 `qa-agent start`、`qa-agent test`、`qa-agent task regression`、`qa-agent archive` 等命令执行 QA 工作流。
 
 CLI 是执行入口；宿主 Skill 只负责让 Codex、Cursor 等 Agent 知道何时调用哪些 CLI 命令，以及如何使用浏览器、模拟器和其他已批准工具。项目数据、Task、Run、截图和报告始终保存在被测项目的 `.qa-agent/` 内。
 
@@ -157,6 +191,17 @@ qa-agent archive --module checkout --task checkout-basic-flow
 `init` 只初始化被测项目的 `.qa-agent/` 运行边界，不注入宿主 Skill。`configure` 负责“一站式”项目初始化和宿主提示词/Skill 注入；已经初始化的 `.qa-agent` 数据不会被覆盖。宿主 Skill 负责对话确认、TodoList 镜像和实际 UI 工具调用，CLI Runtime 负责状态、证据、报告和归档。
 
 兼容旧项目的底层命令仍保留，包括 `workflow bootstrap`、`task explore`、`task run`、`operation replay`、`task review` 和 `task archive`；新项目优先使用上面的语义入口。
+
+### 注入的子 Skill 职责
+
+所有宿主共享同一套业务状态机，但会按宿主能力渲染不同的调用方式：
+
+- `qa-agent`：总入口，负责 `start → review → test → archive` 的对话引导和安全门禁。
+- `qa-agent-test`：执行已审批 Task，自动选择首次探索或兼容回归，并在报告后主动提示 OperationPlan 候选。
+- `qa-agent-regression`：只运行已审批、上下文兼容的 OperationPlan 和 RegressionSuite。
+- `qa-agent-archive`：检查背景、计划、报告、截图、回归套件和 OperationPlan 完整性后归档。
+
+业务逻辑和 CLI 规则只维护一份；Codex 使用 Skill，Cursor/Gemini 使用 Command，Cursor 额外使用 Rule，Copilot 使用 Custom Agent 和 Prompt。所有宿主最终调用同一个 CLI Runtime。
 
 ## 为什么需要 QA Agent
 

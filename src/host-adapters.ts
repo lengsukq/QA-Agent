@@ -1,11 +1,18 @@
-import { cpSync, existsSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { existsSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { writeTextAtomic } from './store.ts';
+import { createHash } from 'node:crypto';
+import { listFiles, readJson, writeJsonAtomic } from './store.ts';
+import { HOST_PLATFORMS, supportedHosts, type HostId, type InstallScope } from './host-configurators/registry.ts';
+import { agentsConfigurator } from './host-configurators/agents.ts';
+import { claudeConfigurator } from './host-configurators/claude.ts';
+import { codexConfigurator } from './host-configurators/codex.ts';
+import { copilotConfigurator } from './host-configurators/copilot.ts';
+import { cursorConfigurator } from './host-configurators/cursor.ts';
+import { geminiConfigurator } from './host-configurators/gemini.ts';
+import { opencodeConfigurator } from './host-configurators/opencode.ts';
 
-export type HostId = 'codex' | 'claude' | 'cursor' | 'opencode' | 'copilot' | 'gemini' | 'agents';
-export type InstallScope = 'project' | 'user';
+export type { HostId, InstallScope } from './host-configurators/registry.ts';
 
 export interface HostInstallOptions {
   host: HostId;
@@ -21,104 +28,57 @@ export interface HostInstallResult {
   message: string;
 }
 
-export const supportedHosts: HostId[] = ['codex', 'claude', 'cursor', 'opencode', 'copilot', 'gemini', 'agents'];
+export interface ConfiguredHostRecord { host: HostId; paths: string[]; hashes: Record<string, string>; updatedAt: string }
 
-function skillSource(): string {
-  return fileURLToPath(new URL('../skill/qa-agent', import.meta.url));
+export { HOST_PLATFORMS, supportedHosts };
+
+export const HOST_CONFIGURATORS = {
+  codex: codexConfigurator,
+  cursor: cursorConfigurator,
+  claude: claudeConfigurator,
+  opencode: opencodeConfigurator,
+  copilot: copilotConfigurator,
+  gemini: geminiConfigurator,
+  agents: agentsConfigurator,
+} as const;
+
+function hashPath(path: string): string {
+  const hash = createHash('sha256');
+  if (existsSync(path) && statSync(path).isDirectory()) for (const file of listFiles(path, () => true).sort()) hash.update(file.slice(path.length)).update(readFileSync(file));
+  else if (existsSync(path)) hash.update(readFileSync(path));
+  return hash.digest('hex');
 }
 
-function requireProjectPath(projectPath: string | undefined): string {
-  if (!projectPath) throw new Error('This host requires --project PROJECT_DIRECTORY.');
-  if (!existsSync(projectPath) || !statSync(projectPath).isDirectory()) throw new Error(`Project directory does not exist: ${projectPath}`);
-  return projectPath;
+export function recordHostInstall(projectRoot: string, result: HostInstallResult): ConfiguredHostRecord {
+  const path = join(projectRoot, '.qa-agent', '.configured-hosts.json');
+  const records = existsSync(path) ? readJson<Record<string, ConfiguredHostRecord>>(path) : {};
+  const record = { host: result.host, paths: result.paths, hashes: Object.fromEntries(result.paths.map(item => [item, hashPath(item)])), updatedAt: new Date().toISOString() };
+  records[result.host] = record; writeJsonAtomic(path, records);
+  const templatePath = join(projectRoot, '.qa-agent', '.template-hashes.json');
+  const templates = existsSync(templatePath) ? readJson<{ version: number; hashes: Record<string, string> }>(templatePath) : { version: 1, hashes: {} };
+  templates.hashes = { ...templates.hashes, ...record.hashes };
+  writeJsonAtomic(templatePath, templates);
+  return record;
 }
 
-function assertWritableTargets(paths: string[], force: boolean): void {
-  const existing = paths.filter(existsSync);
-  if (existing.length && !force) throw new Error(`Host integration already exists at ${existing.join(', ')}. Use --force only if replacing it is intended.`);
+export function configuredHostRecords(projectRoot: string): Record<string, ConfiguredHostRecord> {
+  const path = join(projectRoot, '.qa-agent', '.configured-hosts.json');
+  return existsSync(path) ? readJson<Record<string, ConfiguredHostRecord>>(path) : {};
 }
 
-function copySkill(destination: string, force: boolean): void {
-  assertWritableTargets([destination], force);
-  cpSync(skillSource(), destination, { recursive: true, force, errorOnExist: !force });
-}
-
-const sharedGuidance = `# QA Agent
-
-1. Start with \`qa-agent start --request "<request>" --module <id> --task <task>\`. This one CLI call creates the complete Task directory and assets. Never create Task JSON/Markdown files one by one. Confirm \`taskDirectory\`, \`taskAssets\`, \`planHash\`, and mirror \`todoList\`.
-2. Show the returned plan and wait for explicit human approval. Approval must not start a Run. The Agent cannot approve its own plan.
-3. After approval, call only \`qa-agent task review <task> --module <module> --approve --confirmed-by <human>\` to persist approval. Verify \`metadata.status: ready\`; do not call UI tools or a Run command in this action.
-4. Only after review succeeds, run \`qa-agent test --module <module> --task <task> [--scenario <scenario>]\`; it automatically selects explore or replay. \`task plan\` displays planning suggestions, \`task operation list/show/review\` manages replay plans, \`task regression sync/run/complete\` manages regression suites, and \`archive\` validates and archives completed assets.
-5. Internal Run commands are \`run step\`, \`run evidence\`, \`run observe\`, \`run cleanup\`, \`run recover\`, and \`run complete\`; they persist the existing \`runId\` and do not create a Task or start a second Run.
-6. Never call UI tools unless the response contains \`uiExecutionAllowed: true\`, \`mustStop: false\`, and a \`runId\`. If a response is BLOCKED, NEEDS_CONFIRMATION, or \`mustStop: true\`, stop immediately. Only the Runtime report under \`tasks/<task>/runs/<run-id>/report.md\` is formal. Never write reports manually.
-7. Treat the runtime verdict as authoritative and never fabricate a PASS. After Run completion, inspect \`operationCandidates\` and \`operationCandidateIssues\`; if candidates exist, proactively tell the user, show the candidate IDs/Scenario/source Run/plan hash, and ask for approval. After approval call \`qa-agent task operation review <task> --module <module> --operation <operation-id> --approve\`, then \`qa-agent task regression sync <task> --module <module>\`. Only then use \`qa-agent archive --module <module> --task <task>\`; stop before production writes, payments, refunds, deletion, notifications, or permission changes.
-`;
-
-function cursorRule(): string {
-  return `---\ndescription: Execute project-aware visual QA with the local qa-agent runtime, real browser or simulator interaction, screenshot evidence, and automatic reports.\nalwaysApply: false\n---\n\n${sharedGuidance}`;
-}
-
-function copilotAgent(): string {
-  return `---\nname: QA Agent\ndescription: Plans and executes project-aware visual QA, captures evidence, and produces a final QA report.\ntools:\n  - read\n  - search\n  - edit\n  - terminal\n---\n\n${sharedGuidance}`;
-}
-
-function geminiCommand(): string {
-  const prompt = sharedGuidance.replace(/`/g, '\\`').replace(/"/g, '\\"').replace(/\n/g, '\\n');
-  return `description = "Execute project-aware visual QA and return the final report"\nprompt = "${prompt}\n\nUser request: {{args}}"\n`;
+export function updateHostIntegrations(projectRoot: string, options: { force?: boolean; migrate?: boolean } = {}): { updated: string[]; conflicts: Array<{ host: string; paths: string[] }>; skipped: string[] } {
+  const records = configuredHostRecords(projectRoot); const updated: string[] = []; const conflicts: Array<{ host: string; paths: string[] }> = []; const skipped: string[] = [];
+  for (const [host, record] of Object.entries(records)) {
+    const changed = record.paths.filter(path => existsSync(path) && hashPath(path) !== record.hashes[path]);
+    if (changed.length && !options.force) { conflicts.push({ host, paths: changed }); continue; }
+    if (!supportedHosts.includes(host as HostId)) { skipped.push(host); continue; }
+    const result = installHostIntegration({ host: host as HostId, projectPath: projectRoot, scope: 'project', force: true });
+    recordHostInstall(projectRoot, result); updated.push(host);
+  }
+  return { updated, conflicts, skipped };
 }
 
 /** Install only host-facing prompts. The QA runtime and data remain host-neutral. */
 export function installHostIntegration(options: HostInstallOptions): HostInstallResult {
-  const force = Boolean(options.force);
-  const scope = options.scope ?? (options.host === 'codex' ? 'user' : 'project');
-  if (options.host === 'codex') {
-    if (scope !== 'user') throw new Error('Codex integration is user-scoped. For a portable project Skill, install the agents host with --scope project.');
-    const parent = options.path ?? join(process.env.CODEX_HOME ?? join(homedir(), '.codex'), 'skills');
-    const destination = join(parent, 'qa-agent');
-    copySkill(destination, force);
-    return { host: options.host, paths: [destination], message: 'Installed Codex QA Agent skill.' };
-  }
-
-  if (options.host === 'cursor' && scope === 'user') {
-    throw new Error('Cursor user Rules are managed as plain text in Cursor Settings > Rules, not as a file-based Skill. Use --scope project for the generated Rule and Command.');
-  }
-  const project = scope === 'project' ? requireProjectPath(options.projectPath) : undefined;
-  if (options.host === 'claude') {
-    const destination = scope === 'user' ? join(homedir(), '.claude', 'skills', 'qa-agent') : join(project!, '.claude', 'skills', 'qa-agent');
-    copySkill(destination, force);
-    return { host: options.host, paths: [destination], message: 'Installed Claude Code-compatible QA Agent skill.' };
-  }
-  if (options.host === 'opencode') {
-    const destination = scope === 'user' ? join(homedir(), '.config', 'opencode', 'skills', 'qa-agent') : join(project!, '.opencode', 'skills', 'qa-agent');
-    copySkill(destination, force);
-    return { host: options.host, paths: [destination], message: 'Installed OpenCode QA Agent skill.' };
-  }
-  if (options.host === 'agents') {
-    const destination = scope === 'user' ? join(homedir(), '.agents', 'skills', 'qa-agent') : join(project!, '.agents', 'skills', 'qa-agent');
-    copySkill(destination, force);
-    return { host: options.host, paths: [destination], message: 'Installed portable Agent Skills QA package.' };
-  }
-  if (options.host === 'cursor') {
-    const rule = join(project!, '.cursor', 'rules', 'qa-agent.mdc');
-    const command = join(project!, '.cursor', 'commands', 'qa-agent.md');
-    assertWritableTargets([rule, command], force);
-    writeTextAtomic(rule, cursorRule());
-    writeTextAtomic(command, sharedGuidance);
-    return { host: options.host, paths: [rule, command], message: 'Installed Cursor QA Agent rule and slash command.' };
-  }
-  if (options.host === 'copilot') {
-    const skill = scope === 'user' ? join(homedir(), '.copilot', 'skills', 'qa-agent') : join(project!, '.github', 'skills', 'qa-agent');
-    const agent = scope === 'user' ? join(homedir(), '.copilot', 'agents', 'qa-agent.agent.md') : join(project!, '.github', 'agents', 'qa-agent.agent.md');
-    assertWritableTargets([skill, agent], force);
-    copySkill(skill, force);
-    writeTextAtomic(agent, copilotAgent());
-    return { host: options.host, paths: [skill, agent], message: 'Installed GitHub Copilot QA skill and custom agent.' };
-  }
-  if (options.host === 'gemini') {
-    const command = scope === 'user' ? join(homedir(), '.gemini', 'commands', 'qa-agent.toml') : join(project!, '.gemini', 'commands', 'qa-agent.toml');
-    assertWritableTargets([command], force);
-    writeTextAtomic(command, geminiCommand());
-    return { host: options.host, paths: [command], message: 'Installed Gemini CLI /qa-agent command. Run /commands reload in Gemini CLI.' };
-  }
-  throw new Error(`Unsupported host: ${options.host}`);
+  return HOST_CONFIGURATORS[options.host].configure(options);
 }

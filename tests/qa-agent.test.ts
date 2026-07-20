@@ -12,6 +12,7 @@ import { reviewMemory } from '../src/memory.ts';
 import { testPlanHash } from '../src/approval.ts';
 import type { TestTask } from '../src/types.ts';
 import { buildModuleRegressionSuite, syncTaskRegressionSuite } from '../src/regression.ts';
+import { HOST_CONFIGURATORS, HOST_PLATFORMS } from '../src/host-adapters.ts';
 
 const repository = process.cwd();
 const cli = join(repository, 'src', 'cli.ts');
@@ -147,8 +148,63 @@ test('installs native host integrations without changing the host-neutral runtim
   assert.ok(existsSync(join(target, '.opencode', 'skills', 'qa-agent', 'SKILL.md')));
   assert.ok(existsSync(join(target, '.github', 'skills', 'qa-agent', 'SKILL.md')));
   assert.ok(existsSync(join(target, '.github', 'agents', 'qa-agent.agent.md')));
+  assert.ok(existsSync(join(target, '.github', 'prompts', 'qa-agent.prompt.md')));
   assert.ok(existsSync(join(target, '.gemini', 'commands', 'qa-agent.toml')));
   assert.ok(existsSync(join(target, '.agents', 'skills', 'qa-agent', 'SKILL.md')));
+});
+
+test('initializes multiple registered hosts, shared skills, metadata, and idempotent updates', () => {
+  const target = mkdtempSync(join(tmpdir(), 'qa-agent-platforms-'));
+  const initialized = JSON.parse(run(target, 'init', '--id', 'platform-fixture', '--codex', '--cursor', '--claude'));
+  assert.deepEqual(initialized.hosts, ['codex', 'cursor', 'claude']);
+  assert.ok(existsSync(join(target, '.qa-agent', '.version')));
+  assert.ok(existsSync(join(target, '.qa-agent', '.template-hashes.json')));
+  const records = JSON.parse(readFileSync(join(target, '.qa-agent', '.configured-hosts.json'), 'utf8'));
+  assert.deepEqual(Object.keys(records).sort(), ['claude', 'codex', 'cursor']);
+  assert.ok(existsSync(join(target, '.codex', 'skills', 'qa-agent', 'SKILL.md')));
+  assert.ok(existsSync(join(target, '.agents', 'skills', 'qa-agent', 'skills', 'test', 'SKILL.md')));
+  assert.ok(existsSync(join(target, '.cursor', 'rules', 'qa-agent.mdc')));
+  assert.ok(existsSync(join(target, '.cursor', 'skills', 'qa-agent', 'skills', 'regression', 'SKILL.md')));
+  assert.ok(existsSync(join(target, '.claude', 'commands', 'qa-agent.md')));
+
+  const repeated = JSON.parse(run(target, 'init', '--cursor'));
+  assert.deepEqual(repeated.hosts, []);
+  const added = JSON.parse(run(target, 'init', '--gemini'));
+  assert.deepEqual(added.hosts, ['gemini']);
+  assert.ok(existsSync(join(target, '.gemini', 'commands', 'qa-agent.toml')));
+});
+
+test('keeps the platform registry and configurator contracts complete', () => {
+  const hosts = ['codex', 'cursor', 'claude', 'opencode', 'copilot', 'gemini', 'agents'] as const;
+  assert.deepEqual(Object.keys(HOST_PLATFORMS).sort(), [...hosts].sort());
+  for (const host of hosts) {
+    assert.equal(HOST_PLATFORMS[host].cliFlag, host);
+    assert.ok(HOST_PLATFORMS[host].managedPaths.length > 0);
+    assert.equal(typeof HOST_CONFIGURATORS[host].configure, 'function');
+    assert.ok(HOST_CONFIGURATORS[host].collectManagedTemplates().size > 0);
+    assert.equal(typeof HOST_CONFIGURATORS[host].detect, 'function');
+  }
+});
+
+test('update protects user-modified host templates and force refreshes only managed files', () => {
+  const target = mkdtempSync(join(tmpdir(), 'qa-agent-update-'));
+  run(target, 'init', '--id', 'update-fixture', '--cursor');
+  const projectFile = join(target, '.qa-agent', 'project.json');
+  const project = JSON.parse(readFileSync(projectFile, 'utf8'));
+  project.project.description = 'user data must survive update';
+  writeFileSync(projectFile, `${JSON.stringify(project, null, 2)}\n`, 'utf8');
+  const rule = join(target, '.cursor', 'rules', 'qa-agent.mdc');
+  writeFileSync(rule, `${readFileSync(rule, 'utf8')}\n# user customization\n`, 'utf8');
+  const update = JSON.parse(run(target, 'update'));
+  assert.deepEqual(update.hostUpdate.updated, []);
+  assert.equal(update.hostUpdate.conflicts[0].host, 'cursor');
+  assert.match(readFileSync(rule, 'utf8'), /user customization/);
+  assert.equal(JSON.parse(readFileSync(projectFile, 'utf8')).project.description, 'user data must survive update');
+  const forced = JSON.parse(run(target, 'update', '--force'));
+  assert.deepEqual(forced.hostUpdate.updated, ['cursor']);
+  assert.doesNotMatch(readFileSync(rule, 'utf8'), /user customization/);
+  const hashes = JSON.parse(readFileSync(join(target, '.qa-agent', '.template-hashes.json'), 'utf8'));
+  assert.ok(Object.keys(hashes.hashes).length > 0);
 });
 
 test('validates explicit installation scopes and host limitations', () => {

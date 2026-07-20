@@ -25,7 +25,9 @@ Use the CLI for all project and Task mutations. Do not manually create or edit t
 | Command | Purpose | Starts UI Run? |
 | --- | --- | --- |
 | `qa-agent init` | Create the project `.qa-agent/` runtime boundary only. | No |
+| `qa-agent init --codex --cursor --claude ...` | Initialize `.qa-agent/` once and inject the selected registered hosts; repeated initialization is a no-op for already managed hosts. | No |
 | `qa-agent configure --project PATH --host HOST` | Initialize a project if needed and inject the host Skill/Rule/Command. | No |
+| `qa-agent update [--force] [--migrate]` | Synchronize current prompts and host templates; report user edits, preserve project QA data, and migrate legacy runtime assets when requested. | No |
 | `qa-agent doctor` | Show the host capabilities known to the project. | No |
 | `qa-agent context module MODULE` | Load project, Module, Task, memory, policy, prompts, and capability context. | No |
 | `qa-agent start --request TEXT --module MODULE --task TASK` | Create or reuse the Module and create the complete Task directory, planning assets, Scenarios, plan hash, and TodoList. Stops at `approval_required`. | No |
@@ -112,6 +114,8 @@ When the user asks whether a build can be released, use the release workflow rat
 4. Use `npm run qa-agent -- doctor` to expose capability gaps. Explain missing capabilities and least-privilege options; never install or connect an MCP without the user's confirmation.
 
 Install this Skill once through the matching host integration, then initialize each tested project separately with `qa-agent init`. Use `qa-agent install-host codex`, `claude`, `cursor`, `opencode`, `copilot`, `gemini`, or `agents`; `qa-agent install-skill` remains the Codex-compatible alias.
+
+The platform registry is the source of truth for host flags, paths, and render context. The shared `.agents/skills/qa-agent/` package is the portable Agent Skills layer; platform-specific Rule, Command, Agent, and Prompt files only adapt how the same CLI lifecycle is invoked. The bundled `skills/test`, `skills/regression`, and `skills/archive` subskills divide execution responsibilities without creating separate runtime state machines.
 
 An IDE/user-level installation contains only reusable instructions. Never put business rules, credentials or their references, Tasks, Runs, screenshots, evidence, reports, or reviewed Memory in a global host directory. Keep every project fact and artifact inside the active project's `.qa-agent/` boundary.
 

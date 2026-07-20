@@ -11,7 +11,8 @@ import { assertSafeId, listFiles, now, readJson, writeJsonAtomic } from './store
 import type { ExecutionSnapshot, Locator, PermissionStatus, ProjectMemory, RegressionProfile, RegressionRun, ReleaseCheck, RunStatus, StepExecutionMode, TestPriority, TestRun, TestTask } from './types.ts';
 import { validateProject, validateSkill } from './validation.ts';
 import { createMemoryCandidate, reviewMemory } from './memory.ts';
-import { installHostIntegration, supportedHosts } from './host-adapters.ts';
+import { configuredHostRecords, installHostIntegration, recordHostInstall, supportedHosts, updateHostIntegrations } from './host-adapters.ts';
+import { detectConfiguredHosts, hostsFromFlags, HOST_PLATFORMS } from './host-configurators/registry.ts';
 import { assertHumanApprover, testPlanHash } from './approval.ts';
 import { hostCapabilityDiagnosis } from './capabilities.ts';
 import { operationSummary, readOperation, reviewOperation } from './operations.ts';
@@ -24,15 +25,18 @@ import { inspectTaskArchive } from './archive.ts';
 
 const args = process.argv.slice(2);
 const packageMetadata = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
+const hostFlags = supportedHosts.map(host => `--${HOST_PLATFORMS[host].cliFlag}`).join(' ');
+const hostNames = supportedHosts.join('|');
 const usage = `qa-agent — local-first QA Agent MVP
 
 Commands:
   --help, -h, help | --version, -v, version
-  init [--id ID] [--name NAME] [--description TEXT] [--platforms web,android,ios]
-  configure --project PROJECT_DIRECTORY --host <codex|claude|cursor|opencode|copilot|gemini|agents> [--scope project|user] [init options] [--force]
+  init [--id ID] [--name NAME] [--description TEXT] [--platforms web,android,ios] [${hostFlags}] [--force]
+  configure --project PROJECT_DIRECTORY --host <${hostNames}> [--scope project|user] [init options] [--force]
   install-skill [--path SKILLS_DIRECTORY] [--force]   (Codex compatibility alias)
-  install-host <codex|claude|cursor|opencode|copilot|gemini|agents> [--scope project|user] [--project PROJECT_DIRECTORY] [--path SKILLS_DIRECTORY] [--force]
+  install-host <${hostNames}> [--scope project|user] [--project PROJECT_DIRECTORY] [--path SKILLS_DIRECTORY] [--force]
   doctor | validate | migrate | index rebuild | prompts sync
+  update [--force] [--migrate]
   start --request TEXT --module ID --task ID [--module-name NAME] [--task-name NAME] [--platforms web,android,ios] [--risk low|medium|high|critical]
   test --module MODULE --task TASK [--scenario SCENARIO] [execution context flags]
   archive --module MODULE --task TASK
@@ -226,8 +230,14 @@ async function main(): Promise<void> {
   if (!group || group === '--help' || group === '-h' || group === 'help') return output(usage);
   if (group === '--version' || group === '-v' || group === 'version') return output(packageMetadata.version);
   if (group === 'init') {
-    const project = initializeProject(process.cwd(), { id: flag('--id'), name: flag('--name'), description: flag('--description'), platforms: listFlag('--platforms') });
-    output({ message: 'Initialized .qa-agent', project: project.project, path: qaPath(process.cwd()) }); return;
+    const projectRoot = process.cwd(); const projectFile = join(projectRoot, '.qa-agent', 'project.json');
+    const initialized = existsSync(projectFile);
+    const project = initialized ? readProject(projectRoot) : initializeProject(projectRoot, { id: flag('--id'), name: flag('--name'), description: flag('--description'), platforms: listFlag('--platforms') });
+    const requestedHosts = hostsFromFlags(args); const selectedHosts = requestedHosts.length ? requestedHosts : (process.stdin.isTTY && process.stdout.isTTY ? detectConfiguredHosts(projectRoot) : []);
+    const managedHosts = Object.keys(configuredHostRecords(projectRoot));
+    const hosts = args.includes('--force') ? selectedHosts : selectedHosts.filter(host => !managedHosts.includes(host));
+    const integrations = hosts.map(host => { const result = installHostIntegration({ host, projectPath: projectRoot, scope: 'project', force: args.includes('--force') }); recordHostInstall(projectRoot, result); return result; });
+    output({ message: initialized ? 'QA project already initialized' : 'Initialized .qa-agent', project: project.project, path: qaPath(projectRoot), hosts, integrations }); return;
   }
   if (group === 'configure') {
     const projectPath = resolve(requiredFlag('--project'));
@@ -236,7 +246,10 @@ async function main(): Promise<void> {
     const projectFile = join(projectPath, '.qa-agent', 'project.json');
     const initialized = !existsSync(projectFile);
     const project = initialized ? initializeProject(projectPath, { id: flag('--id'), name: flag('--name'), description: flag('--description'), platforms: listFlag('--platforms') }) : undefined;
-    const hostIntegration = installHostIntegration({ host: host as typeof supportedHosts[number], projectPath, path: flag('--path'), scope: flag('--scope') as 'project' | 'user' | undefined, force: args.includes('--force') });
+    const hostScope = flag('--scope') as 'project' | 'user' | undefined;
+    const hostIntegration = installHostIntegration({ host: host as typeof supportedHosts[number], projectPath, path: flag('--path'), scope: hostScope, force: args.includes('--force') });
+    const effectiveScope = hostScope ?? (host === 'codex' ? 'user' : 'project');
+    if (effectiveScope === 'project') recordHostInstall(projectPath, hostIntegration);
     output({ projectPath, projectInitialized: initialized, project: project?.project, projectDataPath: join(projectPath, '.qa-agent'), hostIntegration }); return;
   }
   if (group === 'install-skill') {
@@ -247,7 +260,9 @@ async function main(): Promise<void> {
     if (!action || !supportedHosts.includes(action as typeof supportedHosts[number])) throw new Error(`Host is required and must be one of: ${supportedHosts.join(', ')}.`);
     const scope = flag('--scope');
     if (scope && scope !== 'project' && scope !== 'user') throw new Error('--scope must be project or user.');
-    const result = installHostIntegration({ host: action as typeof supportedHosts[number], projectPath: flag('--project'), path: flag('--path'), scope: scope as 'project' | 'user' | undefined, force: args.includes('--force') });
+    const projectPath = flag('--project'); const result = installHostIntegration({ host: action as typeof supportedHosts[number], projectPath, path: flag('--path'), scope: scope as 'project' | 'user' | undefined, force: args.includes('--force') });
+    const effectiveScope = scope ?? (action === 'codex' ? 'user' : 'project');
+    if (effectiveScope === 'project' && projectPath) recordHostInstall(resolve(projectPath), result);
     output(result); return;
   }
   if (group === 'doctor') {
@@ -255,6 +270,14 @@ async function main(): Promise<void> {
     if (!projectRoot) return output({ ok: false, message: 'No QA project found. Run qa-agent init.' });
     const available = availableCapabilities(projectRoot);
     output({ ok: true, projectRoot, availableCapabilities: available, notes: available.includes('browser.interact') ? [] : capabilityAdvice(['browser.interact']) }); return;
+  }
+  if (group === 'update') {
+    const projectRoot = root();
+    const promptPaths = syncProjectPrompts(projectRoot);
+    const migration = args.includes('--migrate') ? migrateProjectArtifacts(projectRoot) : undefined;
+    const hostUpdate = updateHostIntegrations(projectRoot, { force: args.includes('--force'), migrate: args.includes('--migrate') });
+    writeJsonAtomic(qaPath(projectRoot, '.version'), { version: packageMetadata.version, updatedAt: now() });
+    output({ projectRoot, prompts: promptPaths, migration, hostUpdate, migrated: args.includes('--migrate'), next: hostUpdate.conflicts.length ? 'Review conflicts or rerun qa-agent update --force.' : 'Project templates are current.' }); return;
   }
   if (group === 'start') { bootstrapFromFlags(root()); return; }
   if (group === 'test') {

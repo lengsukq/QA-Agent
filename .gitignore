@@ -54,3 +54,7 @@ plan/
 screenshots/
 test/
 docs/
+
+# QA Agent host Skill subskills are source templates, not test fixtures.
+!skill/qa-agent/skills/test/
+!skill/qa-agent/skills/test/SKILL.md

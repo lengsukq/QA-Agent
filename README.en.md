@@ -86,6 +86,40 @@ qa-agent configure --project /path/to/your-app --host gemini --scope project
 
 `configure` does not overwrite existing `.qa-agent/` project data. If host files already exist, pass `--force` explicitly to replace the injected host files.
 
+You can inject several hosts into one tested project. The flags are generated from the single platform registry:
+
+```bash
+cd /path/to/your-app
+qa-agent init \
+  --id my-app \
+  --name "My App" \
+  --codex --cursor --claude --opencode --copilot --gemini --agents
+```
+
+This creates `.qa-agent/` once and writes the selected host files. Repeating `init` is idempotent; pass a new host flag to add only that host.
+
+Project-level injection paths are:
+
+| Host | Project files |
+| --- | --- |
+| Codex | `.codex/skills/qa-agent/` and shared `.agents/skills/qa-agent/` |
+| Cursor | `.cursor/rules/qa-agent.mdc`, `.cursor/commands/qa-agent.md`, `.cursor/skills/qa-agent/` |
+| Claude Code | `.claude/skills/qa-agent/`, `.claude/commands/qa-agent.md` |
+| OpenCode | `.opencode/skills/qa-agent/`, `.opencode/commands/qa-agent.md` |
+| Gemini CLI | `.gemini/commands/qa-agent.toml` and shared `.agents/skills/qa-agent/` |
+| GitHub Copilot | `.github/skills/qa-agent/`, `.github/agents/qa-agent.agent.md`, `.github/prompts/qa-agent.prompt.md` |
+| Agent Skills standard | `.agents/skills/qa-agent/` |
+
+After upgrading the global CLI, synchronize templates in each initialized project:
+
+```bash
+npm install --global qa-agent-skill@latest
+cd /path/to/your-app
+qa-agent update
+```
+
+`update` changes only QA-Agent-managed files that users have not modified. It reports conflicts instead of silently overwriting custom host files. Use `qa-agent update --force` to replace them, or `qa-agent update --migrate` for legacy path migration. Tasks, Runs, screenshots, reports, OperationPlans, RegressionSuites, and Memory are preserved.
+
 ### Initialize in separate steps
 
 To initialize the project runtime without injecting a host integration:
@@ -135,7 +169,7 @@ qa-agent configure \
   --name "My App"
 ```
 
-`configure` only initializes the project and injects the host integration. Use `qa-agent workflow`, `qa-agent task`, `qa-agent run`, and `qa-agent operation` for the QA lifecycle afterward.
+`configure` only initializes the project and injects the host integration. Use `qa-agent start`, `qa-agent test`, `qa-agent task regression`, and `qa-agent archive` for the QA lifecycle afterward.
 
 The CLI is the execution entry point. Host Skills tell Codex, Cursor, and other Agents when to call the CLI and how to use approved browser, simulator, and diagnostic tools. Project data, Tasks, Runs, screenshots, and reports always remain inside the tested project's `.qa-agent/` boundary.
 
@@ -155,6 +189,17 @@ qa-agent archive --module checkout --task checkout-basic-flow
 `init` only initializes the tested project's `.qa-agent/` runtime boundary and does not inject a host Skill. `configure` performs project initialization plus host Skill/prompt injection and never overwrites an existing `.qa-agent` data set. The host Skill owns conversation approval, TodoList mirroring, and UI tools; the CLI Runtime owns state, evidence, reports, and archiving.
 
 The lower-level commands `workflow bootstrap`, `task explore`, `task run`, `operation replay`, `task review`, and `task archive` remain available for compatibility and automation.
+
+### Injected Skill responsibilities
+
+All hosts share the same business state machine, while the host renderer changes how the workflow is invoked:
+
+- `qa-agent`: the main entry point for `start → review → test → archive` and safety gates.
+- `qa-agent-test`: executes approved Tasks, selects explore or compatible replay, and surfaces OperationPlan candidates after reporting.
+- `qa-agent-regression`: runs only approved, context-compatible OperationPlans and RegressionSuites.
+- `qa-agent-archive`: checks Task background, plans, reports, screenshots, suites, and OperationPlans before archiving.
+
+Business rules and CLI instructions are maintained once. Codex uses Skills, Cursor/Gemini use Commands, Cursor also uses a Rule, and Copilot uses a Custom Agent plus Prompt. Every host ultimately calls the same CLI Runtime.
 
 It is not a traditional test script runner. It helps teams work like real QA engineers: understand projects, analyze impact, design test plans, validate business workflows, collect evidence, generate reports, and continuously build regression knowledge.
 
