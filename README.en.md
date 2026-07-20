@@ -135,6 +135,65 @@ node bin/qa-agent.mjs install-host agents --scope user
 
 Use `--force` only when replacing an existing integration is intended. After installing the Gemini command, run `/commands reload`. Cursor user rules are managed through **Cursor Settings > Rules**, so the CLI only creates its version-controlled project Rule and Command.
 
+### Codex installation example
+
+Install the Skill for the current developer and make it available across projects:
+
+```bash
+cd /path/to/QA-Agent
+npm install
+node bin/qa-agent.mjs install-host codex --scope user
+```
+
+Open the tested project in Codex, then initialize its project-local QA-Agent data boundary:
+
+```bash
+cd /path/to/your-app
+node /path/to/QA-Agent/bin/qa-agent.mjs init \
+  --id my-app \
+  --name "My App" \
+  --description "Business application QA project"
+node /path/to/QA-Agent/bin/qa-agent.mjs doctor
+```
+
+To commit a project-level Skill with the tested project, use the generic Agent Skills integration:
+
+```bash
+cd /path/to/QA-Agent
+node bin/qa-agent.mjs install-host agents --scope project --project /path/to/your-app
+```
+
+Verify the project-level Codex-compatible file at `/path/to/your-app/.agents/skills/qa-agent/SKILL.md`.
+
+### Cursor installation example
+
+Cursor uses a project-level Rule and Command. From the QA-Agent repository, run:
+
+```bash
+cd /path/to/QA-Agent
+npm install
+node bin/qa-agent.mjs install-host cursor \
+  --scope project \
+  --project /path/to/your-app
+```
+
+Open `/path/to/your-app` in Cursor and verify these files were created:
+
+```text
+/path/to/your-app/.cursor/rules/qa-agent.mdc
+/path/to/your-app/.cursor/commands/qa-agent.md
+```
+
+Run `/qa-agent` in Cursor to start the QA workflow. The tested project must still be initialized once:
+
+```bash
+cd /path/to/your-app
+node /path/to/QA-Agent/bin/qa-agent.mjs init --id my-app --name "My App"
+node /path/to/QA-Agent/bin/qa-agent.mjs doctor
+```
+
+Cursor user-level Rules must be managed in **Cursor Settings > Rules**; this CLI only creates the version-controlled project Rule and Command.
+
 ## Initialize a tested project
 
 Initialize each tested project separately. All project memory, evidence, and reports stay in that project's `.qa-agent/` boundary.

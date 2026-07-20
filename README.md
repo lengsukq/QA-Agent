@@ -140,6 +140,65 @@ node bin/qa-agent.mjs install-host agents --scope project --project /path/to/you
 
 如需覆盖已有宿主配置，显式添加 `--force`。Gemini CLI 安装后执行 `/commands reload` 使新命令生效。Cursor 的用户级 Rule 由 **Cursor Settings > Rules** 管理，且该格式是纯文本；因此本 CLI 只自动生成其可版本控制的项目级 Rule 和 Command。Codex 若需要仓库级可共享的 Skill，可使用 `agents --scope project`。
 
+### Codex 安装示例
+
+用户级安装会让当前开发者的所有项目都可以使用 QA-Agent：
+
+```bash
+cd /path/to/QA-Agent
+npm install
+node bin/qa-agent.mjs install-host codex --scope user
+```
+
+安装后，在 Codex 中打开被测项目，并在被测项目根目录初始化 QA-Agent 数据边界：
+
+```bash
+cd /path/to/your-app
+node /path/to/QA-Agent/bin/qa-agent.mjs init \
+  --id my-app \
+  --name "My App" \
+  --description "业务应用 QA 项目"
+node /path/to/QA-Agent/bin/qa-agent.mjs doctor
+```
+
+如果希望把 Skill 随被测项目提交到仓库，使用项目级通用 Agent Skills 安装：
+
+```bash
+cd /path/to/QA-Agent
+node bin/qa-agent.mjs install-host agents --scope project --project /path/to/your-app
+```
+
+验证 Codex 项目级文件：`/path/to/your-app/.agents/skills/qa-agent/SKILL.md`。
+
+### Cursor 安装示例
+
+Cursor 使用项目级 Rule 和 Command。进入 QA-Agent 仓库执行：
+
+```bash
+cd /path/to/QA-Agent
+npm install
+node bin/qa-agent.mjs install-host cursor \
+  --scope project \
+  --project /path/to/your-app
+```
+
+然后用 Cursor 打开 `/path/to/your-app`，确认以下文件已生成：
+
+```text
+/path/to/your-app/.cursor/rules/qa-agent.mdc
+/path/to/your-app/.cursor/commands/qa-agent.md
+```
+
+在 Cursor 中执行 `/qa-agent` 开始 QA 工作流。首次使用仍需在被测项目中初始化：
+
+```bash
+cd /path/to/your-app
+node /path/to/QA-Agent/bin/qa-agent.mjs init --id my-app --name "My App"
+node /path/to/QA-Agent/bin/qa-agent.mjs doctor
+```
+
+Cursor 的用户级 Rule 需要在 **Cursor Settings > Rules** 中手动管理；本 CLI 只生成可提交到项目的 Rule 和 Command。
+
 旧命令 `install-skill` 仍保留，等价于 Codex 安装：
 
 ```bash

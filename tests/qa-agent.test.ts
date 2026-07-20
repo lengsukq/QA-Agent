@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -83,7 +83,7 @@ test('syncs current closure prompts into an initialized project', () => {
   const executionPrompt = join(root, '.qa-agent', 'prompts', 'execution.md');
   writeFileSync(executionPrompt, 'old prompt', 'utf8');
   const result = JSON.parse(run(root, 'prompts', 'sync'));
-  assert.ok(result.prompts.includes(executionPrompt));
+  assert.ok(result.prompts.map((prompt: string) => realpathSync(prompt)).includes(realpathSync(executionPrompt)));
   const text = readFileSync(executionPrompt, 'utf8');
   assert.match(text, /passed run step.*never substitutes for run observe/i);
   assert.match(text, /operationCandidateIssues/);
@@ -615,7 +615,7 @@ test('bootstraps a Task before UI execution and stores one self-contained Run pa
   assert.ok(existsSync(join(packageRoot, completed.screenshots[0].path)));
   assert.ok(existsSync(join(taskRoot, 'runs', 'index.json')));
   assert.ok(existsSync(join(taskRoot, 'runs', 'latest.json')));
-  assert.equal(run(root, 'run', 'report', started.runId).trim(), join(packageRoot, 'report.md'));
+  assert.equal(realpathSync(run(root, 'run', 'report', started.runId).trim()), realpathSync(join(packageRoot, 'report.md')));
 
   const status = JSON.parse(run(root, 'workflow', 'status', '--module', 'profile', '--task', 'edit-profile-all-fields'));
   assert.equal(status.workflowStatus, 'completed');
