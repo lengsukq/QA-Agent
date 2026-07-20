@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { capabilityAdvice, capabilitySnapshot, checkCapabilities, platformCapabilities } from './capabilities.ts';
-import { checkpointRun, gitMetadata, qaPath, readProjectPromptBundle, readRunById, readTask, saveRun, saveTask, taskDirectory, taskEvidenceDirectory, taskReportDirectory } from './project.ts';
+import { checkpointRun, gitMetadata, qaPath, readProjectPromptBundle, readRunById, readTask, saveRun, saveTask, taskEvidenceDirectory, taskRunDirectory, taskRunIndexPath, taskRunLatestPath } from './project.ts';
 import { rebuildIndexes } from './indexer.ts';
 import { hasSecrets, now, readJson, writeJsonAtomic } from './store.ts';
 import { writeReport } from './report.ts';
@@ -14,6 +14,10 @@ import { assertRecoveryAction, assertSafeAction, type RecoveryAction } from './s
 import { newRegressionRun, saveRegressionRun, suitePreflight, writeRegressionReport } from './regression.ts';
 
 type RunContextInput = Partial<ExecutionSnapshot> & { operationId?: string; scenarioId?: string };
+
+function childReportRef(run: TestRun): string | undefined {
+  return run.reportPath ? `modules/${run.moduleId}/tasks/${run.taskId}/${run.reportPath}` : undefined;
+}
 
 export function buildExecutionSnapshot(root: string, task: TestTask, input: RunContextInput = {}): ExecutionSnapshot {
   const platform = input.platform ?? task.scope.platforms[0] ?? 'web';
@@ -49,7 +53,7 @@ export function beginRegressionRun(root: string, suite: RegressionSuite, context
   for (const member of suite.members) {
     const task = readTask(root, member.moduleId, member.taskId);
     const child = beginAgentGuidedRun(root, task, { ...context, scenarioId: member.scenarioId, operationId: member.operationPlanId });
-    run.childRuns.push({ runId: child.id, taskId: member.taskId, moduleId: member.moduleId, scenarioId: member.scenarioId, operationPlanId: member.operationPlanId, priority: member.priority, releaseGate: member.releaseGate, status: child.status, reportPath: child.reportPath, detail: child.conclusion });
+    run.childRuns.push({ runId: child.id, taskId: member.taskId, moduleId: member.moduleId, scenarioId: member.scenarioId, operationPlanId: member.operationPlanId, priority: member.priority, releaseGate: member.releaseGate, status: child.status, reportPath: childReportRef(child), detail: child.conclusion });
   }
   saveRegressionRun(root, run); return run;
 }
@@ -57,7 +61,7 @@ export function beginRegressionRun(root: string, suite: RegressionSuite, context
 export function completeRegressionRun(root: string, run: RegressionRun): RegressionRun {
   for (const child of run.childRuns) {
     if (!child.runId) continue;
-    try { const childRun = readRunById(root, child.runId); child.status = childRun.status; child.reportPath = childRun.reportPath; child.detail = childRun.conclusion; } catch { /* Child may not have been started by the host yet. */ }
+    try { const childRun = readRunById(root, child.runId); child.status = childRun.status; child.reportPath = childReportRef(childRun); child.detail = childRun.conclusion; } catch { /* Child may not have been started by the host yet. */ }
   }
   if (run.childRuns.some(child => child.status === 'running' || child.status === 'pending')) return run;
   const statuses = run.childRuns.map(child => child.status);
@@ -84,15 +88,14 @@ function finish(root: string, task: TestTask, run: TestRun): TestRun {
       run.conclusion = `${run.conclusion ?? 'Business verification completed.'} No OperationPlan candidate was generated because the replay contract is incomplete. ${summary}`;
     }
   }
-  run.reportPath = `reports/${run.id}.md`;
+  run.reportPath = `runs/${run.id}/report.md`;
   task.runRefs ??= []; const runRef = `runs/${run.id}/run.json`; if (!task.runRefs.includes(runRef)) task.runRefs.push(runRef); task.updatedAt = now();
   writeReport(root, task, run); saveRun(root, run); saveTask(root, task);
-  const reportDirectory = taskReportDirectory(root, task.metadata.moduleId, task.metadata.id);
-  const reportIndexPath = join(reportDirectory, 'index.json');
+  const reportIndexPath = taskRunIndexPath(root, task.metadata.moduleId, task.metadata.id);
   const reportIndex = existsSync(reportIndexPath) ? readJson<{ runs: Array<Record<string, unknown>> }>(reportIndexPath) : { runs: [] };
   reportIndex.runs = [{ runId: run.id, status: run.status, reportPath: run.reportPath, completedAt: run.completedAt }, ...reportIndex.runs.filter(item => item.runId !== run.id)];
   writeJsonAtomic(reportIndexPath, { version: 1, updatedAt: now(), runs: reportIndex.runs });
-  writeJsonAtomic(join(reportDirectory, 'latest.json'), { runId: run.id, reportPath: run.reportPath, status: run.status, updatedAt: now() });
+  writeJsonAtomic(taskRunLatestPath(root, task.metadata.moduleId, task.metadata.id), { runId: run.id, reportPath: run.reportPath, status: run.status, updatedAt: now() });
   rebuildIndexes(root); return run;
 }
 
@@ -156,8 +159,8 @@ export function recordAgentStep(root: string, runId: string, input: { action: st
 
 function captureScreenshot(root: string, run: TestRun, stepId: string, sourcePath: string, visualInspection: VisualInspectionStatus, summary: string): string {
   if (!existsSync(sourcePath)) throw new Error(`Screenshot does not exist: ${sourcePath}`);
-  const destination = join(taskEvidenceDirectory(root, run.moduleId, run.taskId, run.id), 'screenshots', 'steps', `${stepId}-${basename(sourcePath)}`); mkdirSync(join(destination, '..'), { recursive: true }); copyFileSync(sourcePath, destination);
-  const relativePath = destination.slice(taskDirectory(root, run.moduleId, run.taskId).length + 1); run.screenshots.push({ stepId, path: relativePath, capturedAt: now(), visualInspection, summary }); run.evidence.push({ type: 'screenshot', path: relativePath, summary: `Screenshot captured: ${summary}` }); if (run.replayStatus !== 'not_replay') run.replayStage = 'screenshot_captured'; return relativePath;
+  const destination = join(taskRunDirectory(root, run.moduleId, run.taskId, run.id), 'screenshots', 'steps', `${stepId}-${basename(sourcePath)}`); mkdirSync(join(destination, '..'), { recursive: true }); copyFileSync(sourcePath, destination);
+  const relativePath = destination.slice(taskRunDirectory(root, run.moduleId, run.taskId, run.id).length + 1); run.screenshots.push({ stepId, path: relativePath, capturedAt: now(), visualInspection, summary }); run.evidence.push({ type: 'screenshot', path: relativePath, summary: `Screenshot captured: ${summary}` }); if (run.replayStatus !== 'not_replay') run.replayStage = 'screenshot_captured'; return relativePath;
 }
 
 /** Import an artifact produced by the host tool; this runtime never captures it itself. */
@@ -171,7 +174,7 @@ export function recordHostEvidence(root: string, runId: string, input: { type: s
     if (!existsSync(input.artifactPath)) throw new Error(`Evidence artifact does not exist: ${input.artifactPath}`);
     const destination = join(taskEvidenceDirectory(root, run.moduleId, run.taskId, run.id), 'artifacts', `${run.evidence.length + 1}-${basename(input.artifactPath)}`);
     mkdirSync(join(destination, '..'), { recursive: true }); copyFileSync(input.artifactPath, destination);
-    path = destination.slice(taskDirectory(root, run.moduleId, run.taskId).length + 1);
+    path = destination.slice(taskRunDirectory(root, run.moduleId, run.taskId, run.id).length + 1);
   }
   run.evidence.push({ type: input.type, path, summary: input.summary });
   checkpointRun(root, run);

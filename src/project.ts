@@ -111,7 +111,9 @@ export function taskOperationDirectory(root: string, moduleId: string, taskId: s
 export function taskRegressionSuitePath(root: string, moduleId: string, taskId: string): string { return join(taskDirectory(root, moduleId, taskId), 'regression-suite.json'); }
 export function taskRunDirectory(root: string, moduleId: string, taskId: string, runId: string): string { assertSafeId(runId, 'run id'); return join(taskDirectory(root, moduleId, taskId), 'runs', runId); }
 export function taskRunPath(root: string, moduleId: string, taskId: string, runId: string): string { return join(taskRunDirectory(root, moduleId, taskId, runId), 'run.json'); }
-export function taskReportDirectory(root: string, moduleId: string, taskId: string): string { return join(taskDirectory(root, moduleId, taskId), 'reports'); }
+export function taskRunReportPath(root: string, moduleId: string, taskId: string, runId: string): string { return join(taskRunDirectory(root, moduleId, taskId, runId), 'report.md'); }
+export function taskRunIndexPath(root: string, moduleId: string, taskId: string): string { return join(taskDirectory(root, moduleId, taskId), 'runs', 'index.json'); }
+export function taskRunLatestPath(root: string, moduleId: string, taskId: string): string { return join(taskDirectory(root, moduleId, taskId), 'runs', 'latest.json'); }
 export function moduleReportDirectory(root: string, moduleId: string): string { return join(modulePath(root, moduleId), 'reports'); }
 export function taskEvidenceDirectory(root: string, moduleId: string, taskId: string, runId: string): string { return join(taskRunDirectory(root, moduleId, taskId, runId), 'evidence'); }
 
@@ -156,9 +158,10 @@ export function saveTask(root: string, task: TestTask): void {
   withFileLock(qaPath(root, '.locks', 'tasks.lock'), () => {
     const module = readModule(root, task.metadata.moduleId);
     const directory = taskDirectory(root, task.metadata.moduleId, task.metadata.id);
-    for (const child of ['scenarios', 'operation-plans', 'runs', 'reports', 'memory']) ensureDir(join(directory, child));
+    for (const child of ['scenarios', 'operation-plans', 'runs', 'memory']) ensureDir(join(directory, child));
     task.moduleSnapshot ??= buildModuleSnapshot(module); task.requirements ??= buildRequirements(task, module);
     task.scenarioRefs = task.scenarios.map(scenario => `scenarios/${scenario.id}.json`);
+    task.reportIndexRef = 'runs/index.json';
     const approvalCurrent = approvalIsCurrent(task);
     task.testPlan ??= { $schema: '../../../../schemas/test-plan.schema.json', apiVersion: 'qa-agent/v2', kind: 'TestPlan', taskId: task.metadata.id, moduleId: task.metadata.moduleId, version: task.metadata.version, planHash: approvalCurrent ? task.metadata.approval!.planHash : '', scenarioRefs: task.scenarioRefs, requiredSkills: task.requiredSkills, capabilities: task.capabilities, safety: task.safety, evidencePolicy: task.evidencePolicy, recoveryPolicy: task.recoveryPolicy, status: approvalCurrent ? 'approved' : 'draft', approvedBy: approvalCurrent ? task.metadata.approval!.confirmedBy : undefined, approvedAt: approvalCurrent ? task.metadata.approval!.confirmedAt : undefined, createdAt: task.createdAt, updatedAt: task.updatedAt };
     writeJsonAtomic(taskModuleSnapshotPath(root, task.metadata.moduleId, task.metadata.id), task.moduleSnapshot);

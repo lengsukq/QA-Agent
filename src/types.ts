@@ -17,6 +17,26 @@ export type RegressionProfile = 'fast' | 'normal' | 'full';
 export type RegressionSuiteScope = 'task' | 'module' | 'release';
 export type RegressionSuiteStatus = 'draft' | 'active' | 'stale' | 'superseded';
 export type RegressionSelectionPolicy = 'all-active-operation-plans' | 'priority-filtered' | 'impact-filtered' | 'release-gate-plus-impact';
+export type WorkflowStatus = 'setup_required' | 'approval_required' | 'ready_to_run' | 'running' | 'completed' | 'blocked';
+export type WorkflowTodoStatus = 'pending' | 'in_progress' | 'blocked' | 'completed';
+
+export interface WorkflowTodo { id: string; title: string; status: WorkflowTodoStatus; blocking?: boolean; }
+
+export interface QaWorkflowState {
+  apiVersion: 'qa-agent/v2';
+  kind: 'WorkflowState';
+  request?: string;
+  moduleId: string;
+  taskId: string;
+  taskDirectory?: string;
+  workflowStatus: WorkflowStatus;
+  uiExecutionAllowed: boolean;
+  runId?: string;
+  plan?: object;
+  promptBundle: { bundleHash: string; current: boolean; missing: string[]; stale: string[] };
+  todoList: WorkflowTodo[];
+  nextAllowedAction: string;
+}
 
 export interface Locator {
   strategy: LocatorStrategy;

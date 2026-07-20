@@ -1,10 +1,11 @@
 #!/usr/bin/env node
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { availableCapabilities, capabilityAdvice } from './capabilities.ts';
 import { beginAgentGuidedRun, beginRegressionRun, buildExecutionSnapshot, completeAgentGuidedRun, completeRegressionRun, recordAgentStep, recordCleanupFinding, recordHostEvidence, recordRecoveryAttempt, recordVisualFinding } from './engine.ts';
 import { readIndex, rebuildIndexes } from './indexer.ts';
 import { createTaskSkeleton, planModule, taskPlan } from './planning.ts';
-import { createModule, findProjectRoot, initializeProject, modulePath, qaPath, readModule, readProjectPromptBundle, readRunById, readTask, requireProjectRoot, saveTask, syncProjectPrompts, taskReportDirectory } from './project.ts';
+import { createModule, findProjectRoot, initializeProject, modulePath, qaPath, readModule, readProjectPromptBundle, readRunById, readTask, requireProjectRoot, saveTask, syncProjectPrompts, taskRunReportPath } from './project.ts';
 import { readProject } from './project.ts';
 import { assertSafeId, listFiles, now, readJson, writeJsonAtomic } from './store.ts';
 import type { ExecutionSnapshot, Locator, PermissionStatus, ProjectMemory, RegressionProfile, RegressionRun, ReleaseCheck, RunStatus, StepExecutionMode, TestPriority, TestTask } from './types.ts';
@@ -17,6 +18,7 @@ import { operationSummary, readOperation, reviewOperation } from './operations.t
 import { buildModuleRegressionSuite, buildReleaseRegressionSuite, readTaskRegressionSuite, syncTaskRegressionSuite } from './regression.ts';
 import { analyzeProjectImpact } from './impact-analysis.ts';
 import { attachRegressionRun, createReleaseCheck, finalizeReleaseCheck, readReleaseCheck, saveReleaseCheck, writeReleaseReport } from './release.ts';
+import { bootstrapWorkflow, workflowStatus } from './workflow.ts';
 
 const args = process.argv.slice(2);
 const usage = `qa-agent — local-first QA Agent MVP
@@ -26,6 +28,8 @@ Commands:
   install-skill [--path SKILLS_DIRECTORY] [--force]   (Codex compatibility alias)
   install-host <codex|claude|cursor|opencode|copilot|gemini|agents> [--scope project|user] [--project PROJECT_DIRECTORY] [--path SKILLS_DIRECTORY] [--force]
   doctor | validate | index rebuild | prompts sync
+  workflow bootstrap --request TEXT --module ID --task ID [--module-name NAME] [--task-name NAME] [--platforms web,android,ios] [--risk low|medium|high|critical]
+  workflow status --module ID --task ID
   impact analyze [--base REF] [--head REF] [--changed-files FILE1,FILE2]
   release check [--profile fast|normal|full] [--base REF] [--head REF] [--changed-files FILE1,FILE2] [--plan-only] [execution context flags]
   release list | release show|complete|report CHECK_ID
@@ -151,6 +155,25 @@ async function main(): Promise<void> {
     if (!projectRoot) return output({ ok: false, message: 'No QA project found. Run qa-agent init.' });
     const available = availableCapabilities(projectRoot);
     output({ ok: true, projectRoot, availableCapabilities: available, notes: available.includes('browser.interact') ? [] : capabilityAdvice(['browser.interact']) }); return;
+  }
+  if (group === 'workflow') {
+    const projectRoot = root();
+    const moduleId = requiredFlag('--module');
+    const taskId = requiredFlag('--task');
+    if (action === 'bootstrap') {
+      const risk = flag('--risk');
+      if (risk && !['low', 'medium', 'high', 'critical'].includes(risk)) throw new Error('--risk must be low, medium, high, or critical.');
+      const state = bootstrapWorkflow(projectRoot, {
+        request: requiredFlag('--request'), moduleId, taskId,
+        moduleName: flag('--module-name'), taskName: flag('--task-name'),
+        platforms: listFlag('--platforms'), riskLevel: risk as 'low' | 'medium' | 'high' | 'critical' | undefined,
+      });
+      output(state); return;
+    }
+    if (action === 'status') { output(workflowStatus(projectRoot, moduleId, taskId)); return; }
+    throw new Error(`Unsupported command.
+
+${usage}`);
   }
   if (group === 'host') {
     const projectRoot = root(); const path = qaPath(projectRoot, 'mcp.json');
@@ -321,7 +344,8 @@ ${usage}`);
     if (action === 'run') {
       const started = beginAgentGuidedRun(projectRoot, task, runContextFromFlags());
       rebuildIndexes(projectRoot);
-      output({ ...started, canonicalPrompts: readProjectPromptBundle(projectRoot), next: 'Host Agent must apply the returned canonicalPrompts, then operate approved tools and record run step, run evidence, run observe, run cleanup, and run complete internally.' });
+      const workflow = workflowStatus(projectRoot, moduleId, taskId);
+      output({ ...started, workflow, uiExecutionAllowed: workflow.uiExecutionAllowed, runId: workflow.runId, canonicalPrompts: readProjectPromptBundle(projectRoot), next: workflow.nextAllowedAction });
       return;
     }
   }
@@ -351,7 +375,7 @@ ${usage}`);
     if (!subject) throw new Error('run id is required. Start a Task with task run TASK --module MODULE.');
     const run = readRunById(projectRoot, subject);
     if (action === 'show') return output(run);
-    if (action === 'report') return output(join(taskReportDirectory(projectRoot, run.moduleId, run.taskId), `${subject}.md`));
+    if (action === 'report') { const current = taskRunReportPath(projectRoot, run.moduleId, run.taskId, subject); const legacy = join(modulePath(projectRoot, run.moduleId), 'tasks', run.taskId, 'reports', `${subject}.md`); return output(existsSync(current) || !existsSync(legacy) ? current : legacy); }
     if (action === 'step') {
       const executionMode = (flag('--execution-mode') ?? 'host-automated') as StepExecutionMode;
       if (!['host-automated', 'user-assisted', 'system-component-blocked', 'preseeded-test-data'].includes(executionMode)) throw new Error('--execution-mode is invalid.');

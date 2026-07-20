@@ -1,11 +1,11 @@
-import { readProject, taskReportDirectory } from './project.ts';
-import { join } from 'node:path';
+import { readProject, taskRunReportPath } from './project.ts';
 import { writeTextAtomic } from './store.ts';
 import type { TestRun, TestTask } from './types.ts';
 
 export function writeReport(root: string, task: TestTask, run: TestRun): string {
   const project = readProject(root);
-  const screenshotMarkdown = (path: string, alt: string) => `![${alt}](../${path})`;
+  const runRelativePath = (path: string) => path.startsWith(`runs/${run.id}/`) ? path.slice(`runs/${run.id}/`.length) : path;
+  const screenshotMarkdown = (path: string, alt: string) => `![${alt}](./${runRelativePath(path)})`;
   const visualFailures = (run.visualFindings ?? []).filter(item => item.status === 'failed');
   const scenarioFailures = run.scenarioResults.filter(item => item.status === 'failed');
   const defectCandidates = [
@@ -34,7 +34,7 @@ export function writeReport(root: string, task: TestTask, run: TestRun): string 
     ...(run.memoryCandidates?.length ? ['## 候选项目记忆', '', ...run.memoryCandidates.map(item => `- ${item}`), ''] : []),
     '## 源码辅助分析', '', '未在本次运行中执行源码诊断。业务结论应以实际页面、接口和运行证据为准。', '',
   ];
-  const path = join(taskReportDirectory(root, task.metadata.moduleId, task.metadata.id), `${run.id}.md`);
+  const path = taskRunReportPath(root, task.metadata.moduleId, task.metadata.id, run.id);
   writeTextAtomic(path, `${lines.join('\n')}\n`);
   return path;
 }

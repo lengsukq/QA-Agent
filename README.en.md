@@ -100,7 +100,7 @@ The host supplies and invokes browser, simulator, device, log, database, and sou
 ## Start the runtime
 
 ```bash
-cd /Users/leo/Documents/code/QA-Agent
+cd /path/to/QA-Agent
 npm install
 npm test
 npm run qa-agent -- help
@@ -141,12 +141,12 @@ Initialize each tested project separately. All project memory, evidence, and rep
 
 ```bash
 cd /path/to/your-app
-node /Users/leo/Documents/code/QA-Agent/bin/qa-agent.mjs init \
+node /path/to/QA-Agent/bin/qa-agent.mjs init \
   --id my-app \
   --name "My App" \
   --description "Business application QA project"
 
-node /Users/leo/Documents/code/QA-Agent/bin/qa-agent.mjs doctor
+node /path/to/QA-Agent/bin/qa-agent.mjs doctor
 ```
 
 ```text
@@ -161,7 +161,7 @@ node /Users/leo/Documents/code/QA-Agent/bin/qa-agent.mjs doctor
 
 ## Recommended workflow
 
-The examples below assume `qa-agent` is on `PATH`. During local development, replace it with `node /Users/leo/Documents/code/QA-Agent/bin/qa-agent.mjs`.
+The examples below assume `qa-agent` is on `PATH`. During local development, replace it with `node /path/to/QA-Agent/bin/qa-agent.mjs`.
 
 ### The QA Agent closed loop
 
@@ -180,32 +180,57 @@ Load the active project's memory and Module
 
 Source code can reveal candidate rules and aid diagnosis, but never replaces real business validation. Candidate memory always enters the active project's review queue; it never becomes cross-project or global knowledge automatically.
 
-### 1. Create a module and test plan
+### 1. Bootstrap the Task and Test Plan
+
+Every new QA request starts with Workflow Bootstrap. Mirror the returned `todoList` into the host IDE TodoList. Browser, simulator, device, and UI tools are forbidden until the runtime returns both `uiExecutionAllowed: true` and a `runId`.
 
 ```bash
-qa-agent module create checkout \
-  --name "Checkout" \
-  --description "Users confirm items, pricing, and delivery information before checkout" \
+qa-agent workflow bootstrap \
+  --request "Verify that the user can review and submit correct checkout information" \
+  --module checkout \
+  --task checkout-basic-flow \
+  --module-name "Checkout" \
+  --task-name "Basic checkout flow" \
+  --platforms web \
   --risk high
-
-qa-agent module plan checkout
-qa-agent task create checkout-basic-flow --module checkout
-qa-agent task plan checkout-basic-flow --module checkout
 ```
 
-Planning covers core flows, boundaries, permissions, state transitions, exceptions, idempotency, dependencies, and regression history. `task plan` is the reviewable test-case contract: business logic, preconditions, data, scenarios, expected outcomes, visual assertions, evidence, and safety stops.
+The first response is an approval gate:
 
-Before drafting a new plan, the host Agent may use approved read-only source or MCP tools to understand routes, components, APIs, permissions, and state transitions. Source findings are **inferred planning context**, not proof that the business behavior is correct; final conclusions still require real run evidence.
+```json
+{
+  "workflowStatus": "approval_required",
+  "uiExecutionAllowed": false,
+  "taskDirectory": ".qa-agent/modules/checkout/tasks/checkout-basic-flow",
+  "todoList": [],
+  "plan": {}
+}
+```
 
-### 2. Obtain user approval before execution
-
-No browser or APP action may begin until the user confirms the generated test cases and business logic.
+The host may use read-only source analysis to refine the plan, then presents the current `plan` and `planHash`. A real human reviewer must approve it before any UI operation:
 
 ```bash
-qa-agent task review checkout-basic-flow --module checkout --approve --confirmed-by "leo"
+qa-agent task review checkout-basic-flow \
+  --module checkout \
+  --approve \
+  --confirmed-by "qa-reviewer"
 ```
 
-Approval is tied to the current test-plan hash. Changing business logic, expected results, an OperationPlan, test data, capabilities, or safety boundaries invalidates the approval and returns the Task to `needs_review`. An unchanged approved plan can run repeatedly for regression work without asking again.
+After the host capability snapshot is verified, start the Run:
+
+```bash
+qa-agent task run checkout-basic-flow --module checkout
+```
+
+```json
+{
+  "uiExecutionAllowed": true,
+  "runId": "run-...",
+  "workflow": { "workflowStatus": "running" }
+}
+```
+
+When the plan, approval, capabilities, or Prompt Bundle are not current, `uiExecutionAllowed` remains `false`.
 
 ### 3. Import a host capability snapshot
 
@@ -234,7 +259,7 @@ qa-agent run observe <run-id> \
 qa-agent run complete <run-id>
 ```
 
-`run complete` first enforces a strict closure check: every declared `visualAssertions` id for every selected Scenario must have a matching `run observe`. A PASSED `run step`, including one recorded with `operationAction=assert`, does not replace a business assertion. When an assertion is missing, completion is rejected and the Run remains `running`, so the host can record the missing observations and retry. Only then is the report written to `reports/<run-id>.md` and the Task report indexes updated.
+`run complete` first enforces a strict closure check: every declared `visualAssertions` id for every selected Scenario must have a matching `run observe`. A PASSED `run step`, including one recorded with `operationAction=assert`, does not replace a business assertion. When an assertion is missing, completion is rejected and the Run remains `running`, so the host can record the missing observations and retry. Only then is the report written to `runs/<run-id>/report.md`, while `runs/index.json` and `runs/latest.json` are updated.
 
 A successful first Run also receives an OperationPlan replay-quality check. `navigate/click/input/fill` steps need explicit actions and locators, while `input/fill` steps also need structured redacted `inputRefs`. Business verification may PASS while replay readiness fails; in that case the report lists `OperationPlan candidate issues` instead of generating an unstable JSON contract. Existing projects can run `qa-agent prompts sync` to refresh `.qa-agent/prompts/`.
 
@@ -251,8 +276,14 @@ Each Task is a self-contained test asset directory:
 ├── scenarios/
 ├── operation-plans/
 ├── regression-suite.json
-├── runs/<run-id>/
-├── reports/
+├── runs/
+│   ├── index.json
+│   ├── latest.json
+│   └── <run-id>/
+│       ├── run.json
+│       ├── report.md
+│       ├── screenshots/
+│       └── evidence/
 └── memory/
 ```
 

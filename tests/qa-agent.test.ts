@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { beginAgentGuidedRun, beginRegressionRun, buildExecutionSnapshot, completeAgentGuidedRun, completeRegressionRun, recordAgentStep, recordCleanupFinding, recordRecoveryAttempt, recordVisualFinding } from '../src/engine.ts';
 import { listOperations, reviewOperation } from '../src/operations.ts';
-import { createModule, initializeProject, readRunById, readTask, saveTask, taskDirectory, taskReportDirectory } from '../src/project.ts';
+import { createModule, initializeProject, readRunById, readTask, saveTask, taskDirectory, taskRunDirectory, taskRunReportPath } from '../src/project.ts';
 import { createTaskSkeleton } from '../src/planning.ts';
 import { reviewMemory } from '../src/memory.ts';
 import { testPlanHash } from '../src/approval.ts';
@@ -39,7 +39,7 @@ test('initializes, plans, persists, validates, and requires host-driven executio
   run(root, 'init', '--id', 'shop', '--name', 'Shop');
   assert.ok(existsSync(join(root, '.qa-agent', 'project.json')));
   assert.ok(existsSync(join(root, '.qa-agent', 'prompts', 'qa-main.md')));
-  assert.match(readFileSync(join(root, '.qa-agent', 'prompts', 'execution.md'), 'utf8'), /Before execution/);
+  assert.match(readFileSync(join(root, '.qa-agent', 'prompts', 'execution.md'), 'utf8'), /uiExecutionAllowed=true/);
   assert.doesNotMatch(readFileSync(join(root, '.qa-agent', 'prompts', 'execution.md'), 'utf8'), /[\u3400-\u9fff]/);
   assert.ok(existsSync(join(root, '.qa-agent', 'skills', 'built-in', 'execution-contract.json')));
   assert.equal(JSON.parse(run(root, 'skill', 'list')).length, 5);
@@ -61,7 +61,8 @@ test('initializes, plans, persists, validates, and requires host-driven executio
   assert.equal(JSON.parse(run(root, 'host', 'doctor')).healthy, true);
   const taskRun = JSON.parse(run(root, 'task', 'run', 'checkout-basic-flow', '--module', 'checkout'));
   assert.equal(taskRun.status, 'running');
-  assert.match(taskRun.next, /Host Agent/);
+  assert.equal(taskRun.uiExecutionAllowed, true);
+  assert.ok(taskRun.runId);
   for (const oldCommand of [['capability', 'list'], ['mcp', 'list'], ['mobile', 'doctor', '--platform', 'android'], ['task', 'runbook', 'checkout-basic-flow', '--module', 'checkout'], ['run', 'start', 'checkout-basic-flow', '--module', 'checkout'], ['run', 'replay', 'checkout-basic-flow', '--module', 'checkout', '--operation', 'op']]) {
     const result = spawnSync(process.execPath, ['--experimental-strip-types', cli, ...oldCommand], { cwd: root, encoding: 'utf8' });
     assert.notEqual(result.status, 0, `${oldCommand.join(' ')} must be removed`);
@@ -164,8 +165,8 @@ test('records agent-guided visual business verification with screenshot evidence
   assert.match(completed.memoryCandidates?.[0] ?? '', /^observed-/);
   assert.equal(completed.operationCandidates, undefined);
   assert.ok(completed.operationCandidateIssues?.[0]?.reasons.some(reason => /operationAction is missing/.test(reason)));
-  assert.ok(existsSync(join(taskDirectory(root, 'checkout', 'checkout-visual-flow'), completed.visualFindings[0]!.screenshotPath!)));
-  const report = readFileSync(join(taskReportDirectory(root, 'checkout', 'checkout-visual-flow'), `${agentRun.id}.md`), 'utf8');
+  assert.ok(existsSync(join(taskRunDirectory(root, 'checkout', 'checkout-visual-flow', agentRun.id), completed.visualFindings[0]!.screenshotPath!)));
+  const report = readFileSync(taskRunReportPath(root, 'checkout', 'checkout-visual-flow', agentRun.id), 'utf8');
   assert.match(report, /测试用例与业务逻辑/);
   assert.match(report, /视觉业务验证/);
   assert.match(report, /!\[happy-path business-outcome\]/);
@@ -262,7 +263,7 @@ test('creates, approves, and replays a project-local Operation JSON with adaptiv
   assert.equal(replayed.status, 'passed');
   assert.equal(replayed.replayStatus, 'replayed');
   assert.ok(replayed.screenshots.some(item => item.visualInspection === 'not-required'));
-  const report = readFileSync(join(taskReportDirectory(root, 'checkout', 'checkout-replay-flow'), `${replay.id}.md`), 'utf8');
+  const report = readFileSync(taskRunReportPath(root, 'checkout', 'checkout-replay-flow', replay.id), 'utf8');
   assert.match(report, /Screenshot captured/);
   assert.match(report, /Visual inspection: performed/);
   assert.match(report, /Recovery/);
@@ -497,7 +498,7 @@ test('requires declared Scenario cleanup before Run completion', () => {
   const completed = completeAgentGuidedRun(root, task, runState.id);
   assert.equal(completed.status, 'passed');
   assert.equal(completed.cleanupFindings.length, 1);
-  const report = readFileSync(join(taskReportDirectory(root, 'catalog', 'publish-item'), `${runState.id}.md`), 'utf8');
+  const report = readFileSync(taskRunReportPath(root, 'catalog', 'publish-item', runState.id), 'utf8');
   assert.match(report, /Scenario Cleanup/);
 });
 
@@ -520,4 +521,47 @@ test('keeps user-assisted evidence but does not create a fully automated Operati
 
   const blockedRun = beginAgentGuidedRun(root, task);
   assert.throws(() => recordAgentStep(root, blockedRun.id, { action: 'Open system picker', detail: 'System picker could not be controlled.', screenshotPath: screenshot, executionMode: 'system-component-blocked', status: 'passed' }), /cannot be recorded as passed/i);
+});
+
+test('bootstraps a Task before UI execution and stores one self-contained Run package', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-workflow-'));
+  run(root, 'init', '--id', 'workflow-fixture');
+  const bootstrapped = JSON.parse(run(root, 'workflow', 'bootstrap', '--request', 'Edit all supported profile fields', '--module', 'profile', '--task', 'edit-profile-all-fields', '--module-name', 'Profile', '--task-name', 'Edit profile fields', '--platforms', 'web'));
+  assert.equal(bootstrapped.workflowStatus, 'approval_required');
+  assert.equal(bootstrapped.uiExecutionAllowed, false);
+  assert.equal(bootstrapped.plan.approvalRequired, true);
+  assert.ok(bootstrapped.todoList.some((item: { id: string; status: string }) => item.id === 'approval' && item.status === 'blocked'));
+  const taskRoot = taskDirectory(root, 'profile', 'edit-profile-all-fields');
+  for (const file of ['task.json', 'requirements.json', 'test-plan.json', 'module-snapshot.json', 'scenarios/happy-path.json']) assert.ok(existsSync(join(taskRoot, file)), file);
+
+  run(root, 'task', 'review', 'edit-profile-all-fields', '--module', 'profile', '--approve', '--confirmed-by', 'profile-owner');
+  const capabilityBlocked = JSON.parse(run(root, 'workflow', 'status', '--module', 'profile', '--task', 'edit-profile-all-fields'));
+  assert.equal(capabilityBlocked.workflowStatus, 'blocked');
+  assert.equal(capabilityBlocked.uiExecutionAllowed, false);
+  assert.ok(capabilityBlocked.todoList.some((item: { id: string; status: string }) => item.id === 'capabilities' && item.status === 'blocked'));
+  importHostSnapshot(root, [{ id: 'browser-mcp', capabilities: ['browser.interact', 'browser.inspect'], permissionStatus: 'verified' }]);
+  const started = JSON.parse(run(root, 'task', 'run', 'edit-profile-all-fields', '--module', 'profile'));
+  assert.equal(started.uiExecutionAllowed, true);
+  assert.equal(started.workflow.workflowStatus, 'running');
+  assert.ok(started.runId);
+
+  const screenshot = join(root, 'profile.png');
+  writeFileSync(screenshot, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'));
+  run(root, 'run', 'step', started.runId, '--scenario', 'happy-path', '--action', 'Open edit profile', '--detail', 'The host opened the approved profile form.', '--operation-action', 'click', '--locator-strategy', 'text', '--locator-value', 'Edit Profile', '--expected-state', 'The edit profile form is visible.', '--actual-state', 'The edit profile form is visible.', '--screenshot', screenshot);
+  run(root, 'run', 'observe', started.runId, '--scenario', 'happy-path', '--assertion', 'business-outcome', '--expected', 'The visible result matches the approved request: Edit all supported profile fields', '--actual', 'The approved profile form and editable fields are visible.', '--status', 'passed', '--screenshot', screenshot);
+  const completed = JSON.parse(run(root, 'run', 'complete', started.runId));
+  assert.equal(completed.reportPath, `runs/${started.runId}/report.md`);
+
+  const packageRoot = taskRunDirectory(root, 'profile', 'edit-profile-all-fields', started.runId);
+  assert.ok(existsSync(join(packageRoot, 'run.json')));
+  assert.ok(existsSync(join(packageRoot, 'report.md')));
+  assert.ok(existsSync(join(packageRoot, completed.screenshots[0].path)));
+  assert.ok(existsSync(join(taskRoot, 'runs', 'index.json')));
+  assert.ok(existsSync(join(taskRoot, 'runs', 'latest.json')));
+  assert.equal(run(root, 'run', 'report', started.runId).trim(), join(packageRoot, 'report.md'));
+
+  const status = JSON.parse(run(root, 'workflow', 'status', '--module', 'profile', '--task', 'edit-profile-all-fields'));
+  assert.equal(status.workflowStatus, 'completed');
+  assert.equal(status.uiExecutionAllowed, false);
+  assert.ok(status.todoList.some((item: { id: string; status: string }) => item.id === 'finish' && item.status === 'completed'));
 });
