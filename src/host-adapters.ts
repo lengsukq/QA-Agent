@@ -45,12 +45,13 @@ function copySkill(destination: string, force: boolean): void {
 
 const sharedGuidance = `# QA Agent
 
-1. Start with \`qa-agent start --request "<request>" --module <id> --task <id>\`. Confirm the returned \`taskDirectory\`, \`taskAssets\`, \`planHash\`, and mirror \`todoList\` into the IDE TodoList when available.
-2. Show the returned plan and wait for explicit human approval. The Agent cannot approve its own plan.
-3. After approval run \`qa-agent test --module <module> --task <task> [--scenario <scenario>]\`; it automatically selects explore or replay. Never call UI tools unless the response contains \`uiExecutionAllowed: true\`, \`mustStop: false\`, and a \`runId\`.
-4. If a response is BLOCKED, NEEDS_CONFIRMATION, or \`mustStop: true\`, stop immediately. Resolve its \`next\`/\`nextAllowedAction\`; never bypass preflight, continue simulator/browser actions, claim PASS, or write a report manually.
-5. During the Run, record each UI action with a screenshot, record declared assertions with \`run observe\`, cleanup with \`run cleanup\`, then call \`run complete\`. Only the Runtime report under \`tasks/<task>/runs/<run-id>/report.md\` is formal. Never write \`.qa-agent/reports/<name>.md\` or \`Task/reports/\`.
-6. Treat the runtime verdict as authoritative and never fabricate a PASS. After a successful Run use \`qa-agent archive --module <module> --task <task>\`; it is a strict completeness gate. Stop before production writes, payments, refunds, deletion, notifications, or permission changes.
+1. Start with \`qa-agent start --request "<request>" --module <id> --task <task>\`. This one CLI call creates the complete Task directory and assets. Never create Task JSON/Markdown files one by one. Confirm \`taskDirectory\`, \`taskAssets\`, \`planHash\`, and mirror \`todoList\`.
+2. Show the returned plan and wait for explicit human approval. Approval must not start a Run. The Agent cannot approve its own plan.
+3. After approval, call only \`qa-agent task review <task> --module <module> --approve --confirmed-by <human>\` to persist approval. Verify \`metadata.status: ready\`; do not call UI tools or a Run command in this action.
+4. Only after review succeeds, run \`qa-agent test --module <module> --task <task> [--scenario <scenario>]\`; it automatically selects explore or replay. \`task plan\` displays planning suggestions, \`task operation list/show/review\` manages replay plans, \`task regression sync/run/complete\` manages regression suites, and \`archive\` validates and archives completed assets.
+5. Internal Run commands are \`run step\`, \`run evidence\`, \`run observe\`, \`run cleanup\`, \`run recover\`, and \`run complete\`; they persist the existing \`runId\` and do not create a Task or start a second Run.
+6. Never call UI tools unless the response contains \`uiExecutionAllowed: true\`, \`mustStop: false\`, and a \`runId\`. If a response is BLOCKED, NEEDS_CONFIRMATION, or \`mustStop: true\`, stop immediately. Only the Runtime report under \`tasks/<task>/runs/<run-id>/report.md\` is formal. Never write reports manually.
+7. Treat the runtime verdict as authoritative and never fabricate a PASS. After a successful Run use \`qa-agent archive --module <module> --task <task>\`; stop before production writes, payments, refunds, deletion, notifications, or permission changes.
 `;
 
 function cursorRule(): string {

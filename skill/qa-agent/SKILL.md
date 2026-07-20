@@ -16,6 +16,33 @@ The host Skill is one entry point; the CLI owns configuration, state, execution,
 
 The compatibility commands `workflow bootstrap`, `task explore`, `task run`, `operation replay`, and `task archive` remain available for existing projects.
 
+## CLI command reference
+
+Use the CLI for all project and Task mutations. Do not manually create or edit the JSON/Markdown assets listed below.
+
+| Command | Purpose | Starts UI Run? |
+| --- | --- | --- |
+| `qa-agent init` | Create the project `.qa-agent/` runtime boundary only. | No |
+| `qa-agent configure --project PATH --host HOST` | Initialize a project if needed and inject the host Skill/Rule/Command. | No |
+| `qa-agent doctor` | Show the host capabilities known to the project. | No |
+| `qa-agent context module MODULE` | Load project, Module, Task, memory, policy, prompts, and capability context. | No |
+| `qa-agent start --request TEXT --module MODULE --task TASK` | Create or reuse the Module and create the complete Task directory, planning assets, Scenarios, plan hash, and TodoList. Stops at `approval_required`. | No |
+| `qa-agent task plan TASK --module MODULE` | Recalculate/display planning suggestions for an existing Task. It does not approve or run the Task. | No |
+| `qa-agent task review TASK --module MODULE --approve --confirmed-by HUMAN` | Persist explicit human approval and mark the Task ready. This command never starts a Run. | No |
+| `qa-agent test --module MODULE --task TASK [--scenario SCENARIO]` | Start the approved Task; automatically selects first-run explore or compatible replay. | Yes, only when the Runtime gate allows it |
+| `qa-agent operation replay OPERATION --module MODULE --task TASK` | Compatibility/direct replay entry for an approved OperationPlan. | Yes, only when preflight allows it |
+| `qa-agent run step/evidence/observe/cleanup/recover/complete RUN ...` | Internal Run persistence commands used by the host Agent to record actions, evidence, assertions, cleanup, recovery, and completion. | No; these continue an existing Run |
+| `qa-agent task operation list/show/review ...` | List, inspect, or approve an OperationPlan candidate after a successful Run. | No |
+| `qa-agent task regression sync/show/run/complete ...` | Build or execute a Task RegressionSuite from approved active OperationPlans. | `run` starts regression child Runs |
+| `qa-agent impact analyze ...` | Map changed files to affected Modules and Tasks. | No |
+| `qa-agent release check ...` | Build and optionally start an impact-aware release regression check. | Only without `--plan-only` and after gates pass |
+| `qa-agent archive --module MODULE --task TASK` | Validate complete Task background, plans, OperationPlans, RegressionSuite, Runtime report, and screenshot evidence, then archive. | No |
+| `qa-agent validate` | Validate project JSON, reports, OperationPlans, Runs, and indexes. | No |
+| `qa-agent prompts sync` | Synchronize the five current mode prompts and remove obsolete prompt files. | No |
+| `qa-agent index rebuild` | Rebuild project indexes after data changes or migration. | No |
+
+The normal Agent path is exactly `start → review → test → archive`. `task create`, `workflow bootstrap`, `task explore`, and `task run` are lower-level compatibility commands; do not substitute them for `start` in a new host conversation.
+
 Use this skill as a local-first QA operating system. Treat real business results as the source of truth; source code only assists diagnosis.
 
 ## Mandatory CLI state gate
