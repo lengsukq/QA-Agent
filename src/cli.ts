@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { availableCapabilities, capabilityAdvice } from './capabilities.ts';
 import { beginAgentGuidedRun, beginRegressionRun, buildExecutionSnapshot, completeAgentGuidedRun, completeRegressionRun, recordAgentStep, recordCleanupFinding, recordHostEvidence, recordRecoveryAttempt, recordVisualFinding } from './engine.ts';
 import { readIndex, rebuildIndexes } from './indexer.ts';
@@ -22,10 +22,13 @@ import { bootstrapWorkflow, workflowStatus } from './workflow.ts';
 import { migrateProjectArtifacts } from './migration.ts';
 
 const args = process.argv.slice(2);
+const packageMetadata = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
 const usage = `qa-agent — local-first QA Agent MVP
 
 Commands:
+  --help, -h, help | --version, -v, version
   init [--id ID] [--name NAME] [--description TEXT] [--platforms web,android,ios]
+  configure --project PROJECT_DIRECTORY --host <codex|claude|cursor|opencode|copilot|gemini|agents> [--scope project|user] [init options] [--force]
   install-skill [--path SKILLS_DIRECTORY] [--force]   (Codex compatibility alias)
   install-host <codex|claude|cursor|opencode|copilot|gemini|agents> [--scope project|user] [--project PROJECT_DIRECTORY] [--path SKILLS_DIRECTORY] [--force]
   doctor | validate | migrate | index rebuild | prompts sync
@@ -195,9 +198,20 @@ function root(): string { return requireProjectRoot(); }
 async function main(): Promise<void> {
   const [group, action, subject] = args;
   if (!group || group === '--help' || group === '-h' || group === 'help') return output(usage);
+  if (group === '--version' || group === '-v' || group === 'version') return output(packageMetadata.version);
   if (group === 'init') {
     const project = initializeProject(process.cwd(), { id: flag('--id'), name: flag('--name'), description: flag('--description'), platforms: listFlag('--platforms') });
     output({ message: 'Initialized .qa-agent', project: project.project, path: qaPath(process.cwd()) }); return;
+  }
+  if (group === 'configure') {
+    const projectPath = resolve(requiredFlag('--project'));
+    const host = requiredFlag('--host');
+    if (!supportedHosts.includes(host as typeof supportedHosts[number])) throw new Error(`Host is required and must be one of: ${supportedHosts.join(', ')}.`);
+    const projectFile = join(projectPath, '.qa-agent', 'project.json');
+    const initialized = !existsSync(projectFile);
+    const project = initialized ? initializeProject(projectPath, { id: flag('--id'), name: flag('--name'), description: flag('--description'), platforms: listFlag('--platforms') }) : undefined;
+    const hostIntegration = installHostIntegration({ host: host as typeof supportedHosts[number], projectPath, path: flag('--path'), scope: flag('--scope') as 'project' | 'user' | undefined, force: args.includes('--force') });
+    output({ projectPath, projectInitialized: initialized, project: project?.project, projectDataPath: join(projectPath, '.qa-agent'), hostIntegration }); return;
   }
   if (group === 'install-skill') {
     const result = installHostIntegration({ host: 'codex', path: flag('--path'), force: args.includes('--force') });

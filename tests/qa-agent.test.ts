@@ -105,6 +105,18 @@ test('validates the installable skill', () => {
   assert.ok(existsSync(join(target, 'qa-agent', 'SKILL.md')));
 });
 
+test('exposes CLI help and version flags', () => {
+  const version = JSON.parse(readFileSync(join(repository, 'package.json'), 'utf8')).version as string;
+  for (const flag of ['--version', '-v', 'version']) {
+    const result = spawnSync(process.execPath, [installedCli, flag], { cwd: repository, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(result.stdout.trim(), version);
+  }
+  const help = spawnSync(process.execPath, [installedCli, '--help'], { cwd: repository, encoding: 'utf8' });
+  assert.equal(help.status, 0, help.stderr || help.stdout);
+  assert.match(help.stdout, /workflow bootstrap/);
+});
+
 test('installs native host integrations without changing the host-neutral runtime', () => {
   const target = mkdtempSync(join(tmpdir(), 'qa-agent-hosts-'));
   for (const host of ['claude', 'cursor', 'opencode', 'copilot', 'gemini', 'agents']) {
@@ -131,6 +143,18 @@ test('validates explicit installation scopes and host limitations', () => {
   const invalidScope = spawnSync(process.execPath, [installedCli, 'install-host', 'opencode', '--scope', 'workspace', '--project', target], { cwd: repository, encoding: 'utf8' });
   assert.notEqual(invalidScope.status, 0);
   assert.match(invalidScope.stderr, /scope must be project or user/);
+});
+
+test('configures a project and injects the selected host integration in one CLI command', () => {
+  const target = mkdtempSync(join(tmpdir(), 'qa-agent-configure-'));
+  const result = spawnSync(process.execPath, [installedCli, 'configure', '--project', target, '--host', 'cursor', '--scope', 'project', '--id', 'configured-app', '--name', 'Configured App'], { cwd: repository, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const configured = JSON.parse(result.stdout);
+  assert.equal(configured.projectInitialized, true);
+  assert.equal(configured.project.id, 'configured-app');
+  assert.ok(existsSync(join(target, '.qa-agent', 'project.json')));
+  assert.ok(existsSync(join(target, '.cursor', 'rules', 'qa-agent.mdc')));
+  assert.ok(existsSync(join(target, '.cursor', 'commands', 'qa-agent.md')));
 });
 
 test('requires confirmation when the reviewed business contract changes', () => {

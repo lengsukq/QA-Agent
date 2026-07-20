@@ -2,9 +2,59 @@
 
 [简体中文](README.md)
 
-AI-powered QA Engineer for business validation and regression testing.
+AI-powered QA Engineer CLI for business validation and regression testing.
 
-QA Agent is an AI QA Engineer designed for real business validation and regression testing.
+QA Agent is a CLI-first AI QA Engineer designed for real business validation and regression testing. The CLI initializes projects, plans Tasks, executes Runs, generates reports, and runs regressions; Codex, Cursor, and other host Skills connect host tools to that CLI workflow.
+
+## CLI Quick Start
+
+Use the CLI from a source checkout:
+
+```bash
+cd /path/to/QA-Agent
+npm install
+npm link
+qa-agent --help
+```
+
+Initialize the tested project:
+
+```bash
+cd /path/to/your-app
+qa-agent init --id my-app --name "My App" --description "Business application QA project"
+qa-agent doctor
+```
+
+You can also initialize the project and inject the host Skill/prompts in one command:
+
+```bash
+# Cursor: writes the project .cursor/ Rule and Command
+qa-agent configure \
+  --project /path/to/your-app \
+  --host cursor \
+  --scope project \
+  --id my-app \
+  --name "My App"
+
+# Codex: installs the user-level Codex Skill and initializes project data
+qa-agent configure \
+  --project /path/to/your-app \
+  --host codex \
+  --scope user \
+  --id my-app \
+  --name "My App"
+```
+
+`configure` only initializes the project and injects the host integration. Use `qa-agent workflow`, `qa-agent task`, `qa-agent run`, and `qa-agent operation` for the QA lifecycle afterward.
+
+If the package has been published to npm, install the CLI directly:
+
+```bash
+npm install --global qa-agent-skill
+qa-agent --help
+```
+
+The CLI is the execution entry point. Host Skills tell Codex, Cursor, and other Agents when to call the CLI and how to use approved browser, simulator, and diagnostic tools. Project data, Tasks, Runs, screenshots, and reports always remain inside the tested project's `.qa-agent/` boundary.
 
 It is not a traditional test script runner. It helps teams work like real QA engineers: understand projects, analyze impact, design test plans, validate business workflows, collect evidence, generate reports, and continuously build regression knowledge.
 

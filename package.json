@@ -1,16 +1,36 @@
 {
   "name": "qa-agent-skill",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
-  "description": "Local-first QA agent skill MVP",
+  "description": "CLI-first local QA Agent with Codex, Cursor, and other host Skill integrations",
   "bin": {
     "qa-agent": "./bin/qa-agent.mjs"
   },
+  "files": [
+    "bin/",
+    "src/",
+    "skill/",
+    "README.md",
+    "README.en.md",
+    "package.json",
+    "package-lock.json"
+  ],
   "scripts": {
     "qa-agent": "node --experimental-strip-types src/cli.ts",
-    "test": "node --experimental-strip-types --test tests/*.test.ts"
+    "cli": "node --experimental-strip-types src/cli.ts",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "validate": "npm run cli -- skill validate",
+    "pack:check": "npm pack --dry-run"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lengsukq/QA-Agent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/lengsukq/QA-Agent/issues"
+  },
+  "homepage": "https://github.com/lengsukq/QA-Agent#readme",
+  "keywords": ["qa", "testing", "agent", "skills", "cli", "regression"],
   "engines": {
     "node": ">=22.6"
   }

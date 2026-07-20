@@ -2,11 +2,61 @@
 
 [English](README.en.md)
 
-AI-powered QA Engineer for business validation and regression testing.
+AI-powered QA Engineer CLI for business validation and regression testing.
 
 QA Agent 是一个面向真实业务验证和回归测试的 AI QA Agent。
 
-它不是传统测试脚本执行器，而是帮助团队模拟真实 QA 工程师的工作方式：理解项目、分析影响范围、设计测试计划、执行业务流程、验证结果，并持续沉淀回归经验。
+它是一个 CLI-first 的 QA Agent：命令行负责初始化项目、规划 Task、执行 Run、生成报告和回归；Codex、Cursor 等宿主 Skill 负责把宿主能力接入 CLI 工作流。它不是传统测试脚本执行器，而是帮助团队模拟真实 QA 工程师的工作方式：理解项目、分析影响范围、设计测试计划、执行业务流程、验证结果，并持续沉淀回归经验。
+
+## CLI 快速开始
+
+从源码使用：
+
+```bash
+cd /path/to/QA-Agent
+npm install
+npm link
+qa-agent --help
+```
+
+初始化被测项目：
+
+```bash
+cd /path/to/your-app
+qa-agent init --id my-app --name "My App" --description "业务应用 QA 项目"
+qa-agent doctor
+```
+
+也可以用一条命令同时初始化项目并把 QA 提示词/Skill 注入宿主：
+
+```bash
+# Cursor：写入被测项目的 .cursor/ Rule 和 Command
+qa-agent configure \
+  --project /path/to/your-app \
+  --host cursor \
+  --scope project \
+  --id my-app \
+  --name "My App"
+
+# Codex：安装到当前用户的 Codex Skill 目录，并初始化项目数据
+qa-agent configure \
+  --project /path/to/your-app \
+  --host codex \
+  --scope user \
+  --id my-app \
+  --name "My App"
+```
+
+`configure` 只负责项目初始化和宿主注入；后续通过 `qa-agent workflow`、`qa-agent task`、`qa-agent run`、`qa-agent operation` 等命令执行 QA 工作流。
+
+如果已发布到 npm，可直接安装 CLI：
+
+```bash
+npm install --global qa-agent-skill
+qa-agent --help
+```
+
+CLI 是执行入口；宿主 Skill 只负责让 Codex、Cursor 等 Agent 知道何时调用哪些 CLI 命令，以及如何使用浏览器、模拟器和其他已批准工具。项目数据、Task、Run、截图和报告始终保存在被测项目的 `.qa-agent/` 内。
 
 ## 为什么需要 QA Agent
 
