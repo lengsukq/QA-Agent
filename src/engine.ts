@@ -2,12 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { capabilityAdvice, capabilitySnapshot, checkCapabilities, platformCapabilities } from './capabilities.ts';
-import { checkpointRun, gitMetadata, qaPath, readRunById, readTask, saveRun, saveTask, taskDirectory, taskEvidenceDirectory, taskReportDirectory } from './project.ts';
+import { checkpointRun, gitMetadata, qaPath, readProjectPromptBundle, readRunById, readTask, saveRun, saveTask, taskDirectory, taskEvidenceDirectory, taskReportDirectory } from './project.ts';
 import { rebuildIndexes } from './indexer.ts';
 import { hasSecrets, now, readJson, writeJsonAtomic } from './store.ts';
 import { writeReport } from './report.ts';
 import { curateFailedRun, curateObservedBusinessRules } from './memory.ts';
-import type { ExecutionSnapshot, Locator, OperationAction, RegressionRun, RegressionSuite, RunStatus, TestRun, TestTask, VisualInspectionStatus } from './types.ts';
+import type { ExecutionSnapshot, Locator, OperationAction, RegressionRun, RegressionSuite, RunStatus, StepExecutionMode, TestRun, TestTask, VisualInspectionStatus } from './types.ts';
 import { approvalIsCurrent } from './approval.ts';
 import { approvedOperationForReplay, createOperationCandidates, readOperation } from './operations.ts';
 import { assertRecoveryAction, assertSafeAction, type RecoveryAction } from './safety.ts';
@@ -34,7 +34,7 @@ function newRun(root: string, task: TestTask, input: RunContextInput = {}): Test
     $schema: '../../../../schemas/run.schema.json', id: `run-${startedAt.replace(/[-:.TZ]/g, '').slice(0, 14)}-${randomUUID().slice(0, 8)}`,
     taskId: task.metadata.id, moduleId: task.metadata.moduleId, context, git: gitMetadata(root), status: 'pending', safeMode: policy.safeMode,
     steps: [], scenarioResults: [], evidence: [], visualFindings: [], replayStatus: 'not_replay', replayStage: 'idle', replayCursor: 0,
-    scenarioId: input.scenarioId, screenshots: [], recoveryAttempts: [], startedAt,
+    scenarioId: input.scenarioId, screenshots: [], recoveryAttempts: [], cleanupFindings: [], startedAt,
   };
 }
 
@@ -111,6 +111,8 @@ function block(root: string, task: TestTask, run: TestRun, detail: string, statu
 
 export function beginAgentGuidedRun(root: string, task: TestTask, context: RunContextInput = {}): TestRun {
   const run = newRun(root, task, context);
+  const promptBundle = readProjectPromptBundle(root);
+  if (!promptBundle.current) return block(root, task, run, `Canonical project prompts are missing or stale. Run qa-agent prompts sync before execution. Missing: ${promptBundle.missing.join(', ') || 'none'}. Stale: ${promptBundle.stale.join(', ') || 'none'}.`, 'needs_confirmation');
   if (!['ready', 'active'].includes(task.metadata.status)) return block(root, task, run, `Task status is ${task.metadata.status}; review and mark it ready before execution.`);
   if (!approvalIsCurrent(task)) return block(root, task, run, 'Generated test cases are unapproved or changed after approval. Present the current plan and obtain user confirmation before execution.', 'needs_confirmation');
   const required = [...new Set([...task.capabilities.required, ...platformCapabilities(run.context.platform)])];
@@ -129,11 +131,12 @@ export function beginAgentGuidedRun(root: string, task: TestTask, context: RunCo
   checkpointRun(root, run); return run;
 }
 
-export function recordAgentStep(root: string, runId: string, input: { action: string; operationAction?: OperationAction; safetyAction?: string; detail: string; status?: RunStatus; screenshotPath?: string; visualInspection?: VisualInspectionStatus; source?: TestRun['steps'][number]['source']; operationStepId?: string; scenarioId?: string; locator?: Locator; actualLocator?: Locator; inputRefs?: Record<string, string>; expectedState?: string; actualState?: string; adaptation?: string }): TestRun {
+export function recordAgentStep(root: string, runId: string, input: { action: string; operationAction?: OperationAction; safetyAction?: string; detail: string; status?: RunStatus; screenshotPath?: string; visualInspection?: VisualInspectionStatus; source?: TestRun['steps'][number]['source']; executionMode?: StepExecutionMode; operationStepId?: string; scenarioId?: string; locator?: Locator; actualLocator?: Locator; inputRefs?: Record<string, string>; expectedState?: string; actualState?: string; adaptation?: string }): TestRun {
   const run = readRunById(root, runId); if (run.status !== 'running') throw new Error(`Run ${runId} is not running.`);
   const task = readTask(root, run.moduleId, run.taskId); const scenarioId = input.scenarioId ?? run.scenarioId ?? (task.scenarios.length === 1 ? task.scenarios[0]?.id : undefined);
   if (!scenarioId) throw new Error('A UI step must specify --scenario when the Task contains multiple scenarios.');
-  const source = input.source ?? (run.replayStatus === 'replayed' || run.replayStatus === 'adapted' ? 'operation-replay' : 'ui'); const visualInspection = input.visualInspection ?? 'not-required';
+  const source = input.source ?? (run.replayStatus === 'replayed' || run.replayStatus === 'adapted' ? 'operation-replay' : 'ui'); const visualInspection = input.visualInspection ?? 'not-required'; const executionMode = input.executionMode ?? 'host-automated';
+  if (executionMode === 'system-component-blocked' && ['passed', 'adapted'].includes(input.status ?? 'passed')) throw new Error('A system-component-blocked step cannot be recorded as passed or adapted. Use blocked, paused, or inconclusive.');
   assertSafeAction(root, input.action, input.safetyAction);
   if (hasSecrets({ inputRefs: input.inputRefs, detail: input.detail, locator: input.locator, actualLocator: input.actualLocator })) throw new Error('Operation step contains a potential secret. Use an env: reference instead.');
   const stepId = `agent-${run.steps.length + 1}`;
@@ -146,7 +149,7 @@ export function recordAgentStep(root: string, runId: string, input: { action: st
     run.replayStage = 'executing';
   }
   const screenshotPath = input.screenshotPath ? captureScreenshot(root, run, stepId, input.screenshotPath, visualInspection, `${input.action}: ${input.detail}`) : undefined;
-  run.steps.push({ id: stepId, action: input.action, operationAction: input.operationAction, safetyAction: input.safetyAction, status: input.status ?? 'passed', detail: input.detail, at: now(), scenarioId, screenshotPath, visualInspection, source, operationStepId: input.operationStepId, locator: input.locator, actualLocator: input.actualLocator, inputRefs: input.inputRefs, expectedState: input.expectedState, actualState: input.actualState, adaptation: input.adaptation });
+  run.steps.push({ id: stepId, action: input.action, operationAction: input.operationAction, safetyAction: input.safetyAction, status: input.status ?? 'passed', detail: input.detail, at: now(), scenarioId, screenshotPath, visualInspection, source, executionMode, operationStepId: input.operationStepId, locator: input.locator, actualLocator: input.actualLocator, inputRefs: input.inputRefs, expectedState: input.expectedState, actualState: input.actualState, adaptation: input.adaptation });
   if (run.replayStatus !== 'not_replay') { if (input.status === 'adapted' || input.adaptation) run.replayStatus = 'adapted'; run.replayCursor = (run.replayCursor ?? 0) + 1; run.replayStage = visualInspection === 'performed' ? 'assertion_checked' : 'visual_check_optional'; }
   checkpointRun(root, run); return run;
 }
@@ -198,6 +201,23 @@ export function recordVisualFinding(root: string, runId: string, input: { scenar
   if (run.replayStatus !== 'not_replay' && input.status === 'adapted') run.replayStatus = 'adapted'; run.replayStage = 'assertion_checked'; checkpointRun(root, run); return run;
 }
 
+
+export function recordCleanupFinding(root: string, runId: string, input: { scenarioId: string; cleanup: string; actual: string; status: RunStatus; screenshotPath?: string }): TestRun {
+  const run = readRunById(root, runId); if (run.status !== 'running') throw new Error(`Run ${runId} is not running.`);
+  const task = readTask(root, run.moduleId, run.taskId); const scenario = task.scenarios.find(item => item.id === input.scenarioId);
+  if (!scenario) throw new Error(`Scenario ${input.scenarioId} does not belong to task ${run.taskId}.`);
+  if (run.scenarioId && run.scenarioId !== input.scenarioId) throw new Error(`Run is scoped to scenario ${run.scenarioId}; received cleanup for ${input.scenarioId}.`);
+  if (!scenario.cleanup.includes(input.cleanup)) throw new Error(`Cleanup ${input.cleanup} is not declared for scenario ${input.scenarioId}.`);
+  if (!['passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable', 'needs_confirmation'].includes(input.status)) throw new Error('Cleanup must use a terminal status.');
+  let screenshotPath: string | undefined;
+  if (input.screenshotPath) screenshotPath = captureScreenshot(root, run, `cleanup-${run.cleanupFindings.length + 1}`, input.screenshotPath, 'performed', `Cleanup: ${input.cleanup}`);
+  const finding = { scenarioId: input.scenarioId, cleanup: input.cleanup, actual: input.actual, status: input.status, screenshotPath, at: now() };
+  run.cleanupFindings.push(finding);
+  run.steps.push({ id: `cleanup-${run.cleanupFindings.length}`, action: 'Scenario cleanup', status: input.status, detail: `Cleanup: ${input.cleanup}
+Actual: ${input.actual}`, at: finding.at, scenarioId: input.scenarioId, source: 'internal', executionMode: 'host-automated', screenshotPath, visualInspection: screenshotPath ? 'performed' : 'not-required' });
+  checkpointRun(root, run); return run;
+}
+
 export function completeAgentGuidedRun(root: string, task: TestTask, runId: string): TestRun {
   const run = readRunById(root, runId); if (run.status !== 'running') throw new Error(`Run ${runId} is not running.`);
   if (run.replayStatus !== 'not_replay' && run.operationPlanId) { const operation = readOperation(root, task, run.operationPlanId); if ((run.replayCursor ?? 0) < operation.steps.length) return block(root, task, run, `Replay is incomplete: ${operation.steps.length - (run.replayCursor ?? 0)} Operation steps remain.`, 'blocked'); }
@@ -206,13 +226,19 @@ export function completeAgentGuidedRun(root: string, task: TestTask, runId: stri
     const findings = run.visualFindings.filter(item => item.scenarioId === scenario.id);
     if (!findings.length) return [`${scenario.id}: no run observe result was recorded. A passed run step does not satisfy a business assertion.`];
     const missing = (scenario.visualAssertions ?? []).filter(assertion => !findings.some(finding => finding.assertionId === assertion.id));
-    return missing.map(assertion => `${scenario.id}: missing run observe for visual assertion ${assertion.id}.`);
+    const cleanupFindings = run.cleanupFindings.filter(item => item.scenarioId === scenario.id);
+    const missingCleanup = scenario.cleanup.filter(cleanup => !cleanupFindings.some(finding => finding.cleanup === cleanup));
+    return [
+      ...missing.map(assertion => `${scenario.id}: missing run observe for visual assertion ${assertion.id}.`),
+      ...missingCleanup.map(cleanup => `${scenario.id}: missing cleanup result for ${cleanup}.`),
+    ];
   });
   if (closureIssues.length) throw new Error(`Run ${runId} cannot complete. ${closureIssues.join(' ')} Record every declared assertion with run observe, including expected, actual, terminal status, and screenshot when passing or failing; then retry run complete.`);
   run.scenarioResults = task.scenarios.map(scenario => {
     if (!active.some(item => item.id === scenario.id)) return { scenarioId: scenario.id, status: 'not_applicable' as const, detail: 'Scenario was not selected for this Run.' };
     const findings = run.visualFindings.filter(item => item.scenarioId === scenario.id);
-    return { scenarioId: scenario.id, status: finalStatus(findings.map(item => item.status)), detail: findings.map(item => `${item.assertionId}: ${item.status}`).join('; ') };
+    const cleanup = run.cleanupFindings.filter(item => item.scenarioId === scenario.id);
+    return { scenarioId: scenario.id, status: finalStatus([...findings.map(item => item.status), ...cleanup.map(item => item.status)]), detail: [...findings.map(item => `${item.assertionId}: ${item.status}`), ...cleanup.map(item => `cleanup ${item.cleanup}: ${item.status}`)].join('; ') };
   });
   run.status = finalStatus(run.scenarioResults.filter(item => item.status !== 'not_applicable').map(item => item.status)); if (run.status === 'passed' && run.replayStatus === 'adapted') run.status = 'adapted'; run.replayStage = 'completed';
   run.conclusion = run.status === 'passed' ? 'All selected scenarios satisfied their declared business assertions.' : run.status === 'adapted' ? 'The replay completed after semantic locator adaptation without changing business meaning.' : run.status === 'failed' ? 'At least one business assertion did not match the observed result.' : 'Run lacks complete evidence or was stopped by a safety or precondition rule.';

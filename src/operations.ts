@@ -62,7 +62,7 @@ function buildStep(task: TestTask, scenario: TestScenario, run: TestRun, step: T
     locator: effectiveLocator, fallbackLocators: effectiveLocator?.fallbacks ?? step.locator?.fallbacks ?? previousStep?.fallbackLocators, inputRefs: step.inputRefs ?? previousStep?.inputRefs,
     expectedState: step.expectedState ?? step.actualState ?? previousStep?.expectedState ?? step.detail, assertionRefs: scenario.visualAssertions?.map(item => item.id),
     screenshotPolicy: 'after-action', visualInspectionPolicy: step.visualInspection === 'performed' ? 'required' : 'adaptive',
-    safetyAction: step.safetyAction, checkpoint: Boolean(step.operationStepId?.includes('checkpoint')),
+    safetyAction: step.safetyAction, checkpoint: Boolean(step.operationStepId?.includes('checkpoint')), executionMode: step.executionMode,
   };
 }
 
@@ -71,6 +71,8 @@ function operationCandidateQualityIssues(scenario: TestScenario, run: TestRun, s
   const targetActions = new Set<OperationAction>(['navigate', 'click', 'input', 'fill']);
   for (const step of scenarioSteps) {
     const previousStep = previous?.steps.find(item => item.id === step.operationStepId);
+    if (step.executionMode === 'user-assisted') reasons.push(`${step.id}: user-assisted execution is valid evidence but is not fully automated replay.`);
+    if (step.executionMode === 'system-component-blocked') reasons.push(`${step.id}: system component was blocked and cannot be replayed automatically.`);
     const action = step.operationAction ?? previousStep?.action;
     if (!action) reasons.push(`${step.id}: operationAction is missing; replay actions must be explicit.`);
     if (action && targetActions.has(action) && !(step.actualLocator ?? step.locator ?? previousStep?.locator)) reasons.push(`${step.id}: ${action} requires a planned or actual locator.`);

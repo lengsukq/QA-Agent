@@ -1,3 +1,56 @@
-node_modules/
-coverage/
+# --- OS files ---
+.DS_Store
+Thumbs.db
+
+# --- IDE / Editor ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*.iml
+
+# --- AI / Tooling config (not part of project source) ---
+.trellis/
 .qa-agent/
+.claude/
+.agents/
+.cursor/
+.opencode/
+
+# --- Dependencies ---
+node_modules/
+
+# --- Build output ---
+dist/
+build/
+target/
+coverage/
+
+# --- Logs / Temp ---
+*.log
+.tmp-*
+.tmp*
+
+# --- Environment / Secrets ---
+.env
+.env.local
+.env.*.local
+
+# --- Android config (contains keystore & secrets) ---
+android-config/
+
+# --- Subproject: Admin (React) ---
+rechic-admin/
+
+# --- Subproject: App (Flutter) ---
+rechic-app/
+
+# --- Subproject: Backend (Java/Spring) ---
+rechic-backend/
+
+# --- Root project auxiliary directories ---
+backup/
+plan/
+screenshots/
+test/
+docs/

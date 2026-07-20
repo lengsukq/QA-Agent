@@ -265,6 +265,8 @@ qa-agent run complete <run-id>
 
 首次成功运行还会检查 OperationPlan 的可回放质量。`navigate/click/input/fill` 需要明确的操作类型和定位器，`input/fill` 还需要结构化且脱敏的 `inputRefs`。业务验证可以 PASS，但如果这些字段不完整，报告会输出 `OperationPlan 未生成原因`，而不会生成不可稳定回放的 JSON。旧项目可运行 `qa-agent prompts sync` 更新 `.qa-agent/prompts/`。
 
+升级已有项目时，先运行 `qa-agent prompts sync`。旧版审批没有 `confirmationSource`，需要由真实审核人重新执行 `task review --approve --confirmed-by <reviewer>`；`qa-agent`、`assistant`、`system` 等自动身份不能审批自己的计划。创建或修改状态的 Scenario 应声明 Cleanup，并在完成前使用 `run cleanup` 记录结果。人工操作系统 Picker 等步骤应使用 `--execution-mode user-assisted`，此类证据可用于业务结论，但不会生成全自动 OperationPlan。
+
 每个 Task 是一个自包含测试资产目录：
 
 ```text

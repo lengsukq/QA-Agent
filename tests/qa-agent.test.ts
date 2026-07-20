@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
-import { beginAgentGuidedRun, beginRegressionRun, buildExecutionSnapshot, completeAgentGuidedRun, completeRegressionRun, recordAgentStep, recordRecoveryAttempt, recordVisualFinding } from '../src/engine.ts';
+import { beginAgentGuidedRun, beginRegressionRun, buildExecutionSnapshot, completeAgentGuidedRun, completeRegressionRun, recordAgentStep, recordCleanupFinding, recordRecoveryAttempt, recordVisualFinding } from '../src/engine.ts';
 import { listOperations, reviewOperation } from '../src/operations.ts';
 import { createModule, initializeProject, readRunById, readTask, saveTask, taskDirectory, taskReportDirectory } from '../src/project.ts';
 import { createTaskSkeleton } from '../src/planning.ts';
@@ -25,7 +25,7 @@ function run(cwd: string, ...arguments_: string[]): string {
 
 function approveTask(task: TestTask): void {
   task.metadata.status = 'ready';
-  task.metadata.approval = { confirmedBy: 'test-user', confirmedAt: new Date().toISOString(), statement: 'Confirmed.', planHash: testPlanHash(task) };
+  task.metadata.approval = { confirmedBy: 'test-user', confirmedAt: new Date().toISOString(), confirmationSource: 'external-review-record', statement: 'Confirmed.', planHash: testPlanHash(task) };
 }
 
 function importHostSnapshot(root: string, connections: Array<{ id: string; capabilities: string[]; status?: 'available' | 'unavailable'; permissionStatus?: 'verified' | 'missing' | 'unknown' }>): void {
@@ -417,4 +417,107 @@ test('plans and completes an impact-aware fast release check with Golden Path ga
   const full = JSON.parse(run(root, 'release', 'check', '--profile', 'full', '--changed-files', 'lib/payment/payment_service.dart', '--plan-only'));
   assert.deepEqual([...new Set(full.suite.members.map((member: { taskId: string }) => member.taskId))].sort(), ['buyer-payment', 'profile-settings']);
   assert.equal(JSON.parse(run(root, 'validate')).valid, true);
+});
+
+
+test('loads the canonical project Prompt Bundle and blocks stale prompts', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-canonical-prompts-'));
+  initializeProject(root, { id: 'canonical-prompts' });
+  const module = createModule(root, { id: 'catalog', name: 'Catalog', description: 'Catalog flow' });
+  const task = createTaskSkeleton(module, 'catalog-flow'); approveTask(task); saveTask(root, task);
+  importHostSnapshot(root, [{ id: 'browser-mcp', capabilities: ['browser.interact', 'browser.inspect'], permissionStatus: 'verified' }]);
+
+  const context = JSON.parse(run(root, 'context', 'module', 'catalog'));
+  assert.equal(context.canonicalPrompts.current, true);
+  assert.match(context.canonicalPrompts.prompts['execution.md'], /run cleanup/);
+
+  writeFileSync(join(root, '.qa-agent', 'prompts', 'execution.md'), 'stale prompt', 'utf8');
+  const blocked = JSON.parse(run(root, 'task', 'run', 'catalog-flow', '--module', 'catalog'));
+  assert.equal(blocked.status, 'needs_confirmation');
+  assert.equal(blocked.canonicalPrompts.current, false);
+  assert.ok(blocked.canonicalPrompts.stale.includes('execution.md'));
+
+  run(root, 'prompts', 'sync');
+  const started = JSON.parse(run(root, 'task', 'run', 'catalog-flow', '--module', 'catalog'));
+  assert.equal(started.status, 'running');
+  assert.equal(started.canonicalPrompts.current, true);
+});
+
+test('rejects automated identities as Test Plan approvers', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-human-approval-'));
+  run(root, 'init', '--id', 'approval-fixture');
+  run(root, 'module', 'create', 'checkout', '--name', 'Checkout');
+  run(root, 'task', 'create', 'checkout-flow', '--module', 'checkout');
+
+  const rejected = spawnSync(process.execPath, ['--experimental-strip-types', cli, 'task', 'review', 'checkout-flow', '--module', 'checkout', '--approve', '--confirmed-by', 'qa-agent'], { cwd: root, encoding: 'utf8' });
+  assert.notEqual(rejected.status, 0);
+  assert.match(rejected.stderr, /real human reviewer/i);
+
+  const approved = JSON.parse(run(root, 'task', 'review', 'checkout-flow', '--module', 'checkout', '--approve', '--confirmed-by', 'project-owner', '--confirmation-source', 'current-chat-explicit-approval'));
+  assert.equal(approved.metadata.approval.confirmedBy, 'project-owner');
+  assert.equal(approved.metadata.approval.confirmationSource, 'current-chat-explicit-approval');
+});
+
+test('marks a required release gate without an active OperationPlan as NO-GO', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-release-gap-'));
+  initializeProject(root, { id: 'release-gap' });
+  const module = createModule(root, { id: 'payment', name: 'Payment', description: 'Payment release gate', riskLevel: 'critical', sourceHints: ['src/payment'] });
+  const task = createTaskSkeleton(module, 'payment-gate');
+  task.metadata.priority = 'p0'; task.metadata.releaseGate = true; task.metadata.frequency = 'every-release'; task.metadata.tags = ['payment', 'golden-path'];
+  approveTask(task); saveTask(root, task);
+
+  const check = JSON.parse(run(root, 'release', 'check', '--profile', 'fast', '--changed-files', 'src/payment/service.ts', '--plan-only'));
+  assert.equal(check.releaseDecision, 'no-go');
+  assert.equal(check.status, 'blocked');
+  assert.equal(check.requiredAssetGaps.length, 1);
+  assert.equal(check.requiredAssetGaps[0].taskId, 'payment-gate');
+  assert.equal(check.suite.members.length, 0);
+  const report = readFileSync(join(root, '.qa-agent', 'reports', `${check.id}.md`), 'utf8');
+  assert.match(report, /Required QA Asset Gaps/);
+  assert.match(report, /payment-gate/);
+});
+
+test('requires declared Scenario cleanup before Run completion', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-cleanup-'));
+  initializeProject(root, { id: 'cleanup-fixture' });
+  const module = createModule(root, { id: 'catalog', name: 'Catalog', description: 'Catalog mutation' });
+  const task = createTaskSkeleton(module, 'publish-item');
+  task.scenarios[0]!.cleanup = ['Delete the created test item'];
+  approveTask(task); saveTask(root, task);
+  importHostSnapshot(root, [{ id: 'browser-mcp', capabilities: ['browser.interact', 'browser.inspect'], permissionStatus: 'verified' }]);
+  const screenshot = join(root, 'cleanup.png');
+  writeFileSync(screenshot, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'));
+
+  const runState = beginAgentGuidedRun(root, task);
+  recordAgentStep(root, runState.id, { action: 'Publish item', operationAction: 'click', detail: 'Published fixture item.', screenshotPath: screenshot, locator: { strategy: 'text', value: 'Publish' } });
+  recordVisualFinding(root, runState.id, { scenarioId: 'happy-path', assertionId: 'business-outcome', expected: 'Item is published.', actual: 'Item is published.', status: 'passed', screenshotPath: screenshot });
+  assert.throws(() => completeAgentGuidedRun(root, task, runState.id), /missing cleanup result/i);
+
+  recordCleanupFinding(root, runState.id, { scenarioId: 'happy-path', cleanup: 'Delete the created test item', actual: 'The fixture item was removed and the list returned to baseline.', status: 'passed', screenshotPath: screenshot });
+  const completed = completeAgentGuidedRun(root, task, runState.id);
+  assert.equal(completed.status, 'passed');
+  assert.equal(completed.cleanupFindings.length, 1);
+  const report = readFileSync(join(taskReportDirectory(root, 'catalog', 'publish-item'), `${runState.id}.md`), 'utf8');
+  assert.match(report, /Scenario Cleanup/);
+});
+
+test('keeps user-assisted evidence but does not create a fully automated OperationPlan', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-assisted-'));
+  initializeProject(root, { id: 'assisted-fixture' });
+  const module = createModule(root, { id: 'catalog', name: 'Catalog', description: 'System picker flow' });
+  const task = createTaskSkeleton(module, 'upload-item'); approveTask(task); saveTask(root, task);
+  importHostSnapshot(root, [{ id: 'browser-mcp', capabilities: ['browser.interact', 'browser.inspect'], permissionStatus: 'verified' }]);
+  const screenshot = join(root, 'assisted.png');
+  writeFileSync(screenshot, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'));
+
+  const runState = beginAgentGuidedRun(root, task);
+  recordAgentStep(root, runState.id, { action: 'Choose fixture image', operationAction: 'click', detail: 'A human selected an image in the system picker.', screenshotPath: screenshot, locator: { strategy: 'text', value: 'Choose image' }, executionMode: 'user-assisted' });
+  recordVisualFinding(root, runState.id, { scenarioId: 'happy-path', assertionId: 'business-outcome', expected: 'Image is attached.', actual: 'Image is attached.', status: 'passed', screenshotPath: screenshot });
+  const completed = completeAgentGuidedRun(root, task, runState.id);
+  assert.equal(completed.status, 'passed');
+  assert.equal(completed.operationCandidates, undefined);
+  assert.ok(completed.operationCandidateIssues?.[0]?.reasons.some(reason => /user-assisted/.test(reason)));
+
+  const blockedRun = beginAgentGuidedRun(root, task);
+  assert.throws(() => recordAgentStep(root, blockedRun.id, { action: 'Open system picker', detail: 'System picker could not be controlled.', screenshotPath: screenshot, executionMode: 'system-component-blocked', status: 'passed' }), /cannot be recorded as passed/i);
 });

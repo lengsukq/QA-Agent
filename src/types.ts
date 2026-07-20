@@ -6,6 +6,7 @@ export type VisualInspectionStatus = 'performed' | 'not-required' | 'not-applica
 export type ReplayStage = 'idle' | 'ready' | 'preflight_passed' | 'step_pending' | 'executing' | 'screenshot_captured' | 'visual_check_optional' | 'assertion_checked' | 'next_step' | 'completed' | 'blocked' | 'needs_confirmation';
 export type KnowledgeLevel = 'confirmed' | 'observed' | 'inferred' | 'suspected' | 'deprecated';
 export type OperationAction = 'launch' | 'navigate' | 'click' | 'input' | 'fill' | 'swipe' | 'back' | 'wait' | 'assert' | 'screenshot' | 'reset' | 'restart-app';
+export type StepExecutionMode = 'host-automated' | 'user-assisted' | 'system-component-blocked' | 'preseeded-test-data';
 export type LocatorStrategy = 'test-id' | 'accessibility' | 'role' | 'label' | 'text' | 'css' | 'xpath' | 'coordinate' | 'semantic' | 'none';
 export type ScreenshotPolicy = 'after-action' | 'on-state-change' | 'none';
 export type VisualInspectionPolicy = 'required' | 'adaptive' | 'not-required';
@@ -127,6 +128,7 @@ export interface OperationStep {
   visualInspectionPolicy: VisualInspectionPolicy;
   safetyAction?: string;
   checkpoint?: boolean;
+  executionMode?: StepExecutionMode;
 }
 
 export interface OperationPlan {
@@ -211,7 +213,7 @@ export interface TestTask {
     id: string; name: string; moduleId: string; version: number; status: TaskStatus;
     priority: TestPriority; tags: string[];
     frequency?: RegressionFrequency; releaseGate?: boolean; estimatedDurationMinutes?: number;
-    approval?: { confirmedBy: string; confirmedAt: string; statement: string; planHash: string };
+    approval?: { confirmedBy: string; confirmedAt: string; confirmationSource: 'current-chat-explicit-approval' | 'external-review-record'; statement: string; planHash: string };
   };
   moduleSnapshotRef: string;
   requirementsRef: string;
@@ -277,6 +279,7 @@ export interface RegressionSuite {
   estimatedDurationMinutes: number;
   impactedModules?: string[];
   selectionReasons?: string[];
+  requiredAssetGaps?: Array<{ moduleId: string; taskId: string; priority: TestPriority; releaseGate: boolean; goldenPath: boolean; reason: string }>;
   failurePolicy: 'continue-independent';
   contextPolicy: 'current-context';
   suiteHash: string;
@@ -339,6 +342,7 @@ export interface ReleaseCheck {
   status: 'planned' | 'running' | 'passed' | 'failed' | 'blocked' | 'needs_confirmation' | 'review';
   releaseDecision: 'pending' | 'go' | 'no-go' | 'review';
   blockers: Array<{ moduleId: string; taskId: string; scenarioId: string; status: RunStatus; detail?: string }>;
+  requiredAssetGaps: Array<{ moduleId: string; taskId: string; priority: TestPriority; releaseGate: boolean; goldenPath: boolean; reason: string }>;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
@@ -375,7 +379,7 @@ export interface TestRun {
   git: { branch?: string; commit?: string; dirtyWorkspace: boolean; changedFiles: string[] };
   status: RunStatus;
   safeMode: boolean;
-  steps: Array<{ id: string; action: string; operationAction?: OperationAction; safetyAction?: string; status: RunStatus; detail: string; at: string; scenarioId?: string; screenshotPath?: string; visualInspection?: VisualInspectionStatus; source?: 'ui' | 'internal' | 'recovery' | 'operation-replay'; operationStepId?: string; locator?: Locator; actualLocator?: Locator; inputRefs?: Record<string, string>; expectedState?: string; actualState?: string; adaptation?: string }>;
+  steps: Array<{ id: string; action: string; operationAction?: OperationAction; safetyAction?: string; status: RunStatus; detail: string; at: string; scenarioId?: string; screenshotPath?: string; visualInspection?: VisualInspectionStatus; source?: 'ui' | 'internal' | 'recovery' | 'operation-replay'; executionMode?: StepExecutionMode; operationStepId?: string; locator?: Locator; actualLocator?: Locator; inputRefs?: Record<string, string>; expectedState?: string; actualState?: string; adaptation?: string }>;
   scenarioResults: Array<{ scenarioId: string; status: RunStatus; detail?: string }>;
   evidence: Array<{ type: string; path?: string; summary: string }>;
   conclusion?: string;
@@ -389,6 +393,7 @@ export interface TestRun {
   replayCursor?: number;
   screenshots: Array<{ stepId: string; path: string; capturedAt: string; visualInspection: VisualInspectionStatus; summary: string }>;
   recoveryAttempts: Array<{ id: string; reason: string; action: string; outcome: 'continued' | 'blocked' | 'paused' | 'failed'; detail: string; failedStepId?: string; at: string }>;
+  cleanupFindings: Array<{ scenarioId: string; cleanup: string; actual: string; status: RunStatus; screenshotPath?: string; at: string }>;
   operationCandidates?: string[];
   operationCandidateIssues?: Array<{ scenarioId: string; reasons: string[] }>;
   memoryCandidates?: string[];

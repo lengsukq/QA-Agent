@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { qaPath } from './project.ts';
 import { hasSecrets, isSafeId, listFiles, readJson } from './store.ts';
+import { isHumanApprover } from './approval.ts';
 
 export interface ValidationResult { valid: boolean; errors: string[]; checked: number; }
 
@@ -19,7 +20,7 @@ function validateDomainObject(path: string): string[] {
   if (/\/tasks\/[^/]+\/task\.json$/.test(path)) {
     if (value.apiVersion !== 'qa-agent/v2') errors.push(`${path}: Task must use qa-agent/v2.`);
     if (!value.metadata || !isSafeId(value.metadata.id) || !isSafeId(value.metadata.moduleId)) errors.push(`${path}: invalid task metadata.`);
-    if (['ready', 'active'].includes(value.metadata?.status) && (!value.metadata.approval?.confirmedBy || !value.metadata.approval?.confirmedAt || !value.metadata.approval?.planHash)) errors.push(`${path}: ready or active task requires current explicit user approval.`);
+    if (['ready', 'active'].includes(value.metadata?.status) && (!isHumanApprover(value.metadata.approval?.confirmedBy) || !value.metadata.approval?.confirmedAt || !value.metadata.approval?.confirmationSource || !value.metadata.approval?.planHash)) errors.push(`${path}: ready or active task requires explicit approval from a real human reviewer with confirmation source.`);
     if (!Array.isArray(value.scenarioRefs) || !value.scenarioRefs.length) errors.push(`${path}: scenarioRefs must be a non-empty array.`);
   }
   if (/\/scenarios\/[^/]+\.json$/.test(path) && (!isSafeId(value.id) || typeof value.intent !== 'string' || !value.expected || !Array.isArray(value.preconditions))) errors.push(`${path}: invalid Scenario contract.`);

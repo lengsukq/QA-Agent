@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -7,6 +7,7 @@ import type { ModuleSnapshot, ProjectConfig, QaModule, TestPlan, TestRequirement
 import { schemas } from './schemas.ts';
 import { prompts } from './prompts.ts';
 import { builtInSkills } from './built-in-skills.ts';
+import { approvalIsCurrent } from './approval.ts';
 
 export const QA_DIRECTORY = '.qa-agent';
 
@@ -37,6 +38,25 @@ export function syncProjectPrompts(root: string): string[] {
     written.push(path);
   }
   return written;
+}
+
+
+export function readProjectPromptBundle(root: string): {
+  apiVersion: 'qa-agent/v2'; kind: 'PromptBundle'; bundleHash: string; current: boolean; missing: string[]; stale: string[]; prompts: Record<string, string>;
+} {
+  const entries = Object.keys(prompts).sort().map(name => {
+    const path = qaPath(root, 'prompts', name);
+    const content = existsSync(path) ? readFileSync(path, 'utf8').trimEnd() : '';
+    return { name, content, expected: prompts[name] ?? '' };
+  });
+  const missing = entries.filter(entry => !entry.content).map(entry => entry.name);
+  const stale = entries.filter(entry => entry.content && entry.content !== entry.expected).map(entry => entry.name);
+  const promptMap = Object.fromEntries(entries.map(entry => [entry.name, entry.content]));
+  return {
+    apiVersion: 'qa-agent/v2', kind: 'PromptBundle',
+    bundleHash: createHash('sha256').update(JSON.stringify(promptMap)).digest('hex'),
+    current: !missing.length && !stale.length, missing, stale, prompts: promptMap,
+  };
 }
 
 export function initializeProject(root: string, options: { id?: string; name?: string; description?: string; platforms?: string[] } = {}): ProjectConfig {
@@ -139,11 +159,14 @@ export function saveTask(root: string, task: TestTask): void {
     for (const child of ['scenarios', 'operation-plans', 'runs', 'reports', 'memory']) ensureDir(join(directory, child));
     task.moduleSnapshot ??= buildModuleSnapshot(module); task.requirements ??= buildRequirements(task, module);
     task.scenarioRefs = task.scenarios.map(scenario => `scenarios/${scenario.id}.json`);
-    task.testPlan ??= { $schema: '../../../../schemas/test-plan.schema.json', apiVersion: 'qa-agent/v2', kind: 'TestPlan', taskId: task.metadata.id, moduleId: task.metadata.moduleId, version: task.metadata.version, planHash: task.metadata.approval?.planHash ?? '', scenarioRefs: task.scenarioRefs, requiredSkills: task.requiredSkills, capabilities: task.capabilities, safety: task.safety, evidencePolicy: task.evidencePolicy, recoveryPolicy: task.recoveryPolicy, status: task.metadata.approval ? 'approved' : 'draft', approvedBy: task.metadata.approval?.confirmedBy, approvedAt: task.metadata.approval?.confirmedAt, createdAt: task.createdAt, updatedAt: task.updatedAt };
+    const approvalCurrent = approvalIsCurrent(task);
+    task.testPlan ??= { $schema: '../../../../schemas/test-plan.schema.json', apiVersion: 'qa-agent/v2', kind: 'TestPlan', taskId: task.metadata.id, moduleId: task.metadata.moduleId, version: task.metadata.version, planHash: approvalCurrent ? task.metadata.approval!.planHash : '', scenarioRefs: task.scenarioRefs, requiredSkills: task.requiredSkills, capabilities: task.capabilities, safety: task.safety, evidencePolicy: task.evidencePolicy, recoveryPolicy: task.recoveryPolicy, status: approvalCurrent ? 'approved' : 'draft', approvedBy: approvalCurrent ? task.metadata.approval!.confirmedBy : undefined, approvedAt: approvalCurrent ? task.metadata.approval!.confirmedAt : undefined, createdAt: task.createdAt, updatedAt: task.updatedAt };
     writeJsonAtomic(taskModuleSnapshotPath(root, task.metadata.moduleId, task.metadata.id), task.moduleSnapshot);
     writeJsonAtomic(taskRequirementsPath(root, task.metadata.moduleId, task.metadata.id), task.requirements);
-    task.testPlan.planHash = task.metadata.approval?.planHash ?? task.testPlan.planHash;
-    task.testPlan.status = task.metadata.approval ? 'approved' : task.testPlan.status === 'approved' ? 'awaiting_confirmation' : task.testPlan.status;
+    task.testPlan.planHash = approvalCurrent ? task.metadata.approval!.planHash : task.testPlan.planHash;
+    task.testPlan.status = approvalCurrent ? 'approved' : task.testPlan.status === 'approved' ? 'awaiting_confirmation' : task.testPlan.status;
+    task.testPlan.approvedBy = approvalCurrent ? task.metadata.approval!.confirmedBy : undefined;
+    task.testPlan.approvedAt = approvalCurrent ? task.metadata.approval!.confirmedAt : undefined;
     task.testPlan.updatedAt = task.updatedAt;
     writeJsonAtomic(taskPlanPath(root, task.metadata.moduleId, task.metadata.id), task.testPlan);
     for (const scenario of task.scenarios) writeJsonAtomic(taskScenarioPath(root, task.metadata.moduleId, task.metadata.id, scenario.id), scenario);
@@ -160,11 +183,12 @@ export function saveRun(root: string, run: TestRun): void {
     appendJsonl(qaPath(root, 'index', 'runs.jsonl'), { runId: run.id, taskId: run.taskId, moduleId: run.moduleId, status: run.status, startedAt: run.startedAt, completedAt: run.completedAt, reportPath: run.reportPath });
   });
 }
-export function readRun(root: string, moduleId: string, taskId: string, runId: string): TestRun { return readJson<TestRun>(taskRunPath(root, moduleId, taskId, runId)); }
+function normalizeRun(run: TestRun): TestRun { run.cleanupFindings ??= []; return run; }
+export function readRun(root: string, moduleId: string, taskId: string, runId: string): TestRun { return normalizeRun(readJson<TestRun>(taskRunPath(root, moduleId, taskId, runId))); }
 export function readRunById(root: string, runId: string): TestRun {
   const path = listFiles(qaPath(root, 'modules'), candidate => candidate.endsWith(`/runs/${runId}/run.json`))[0];
   if (!path) throw new Error(`Run ${runId} was not found in a Task folder.`);
-  return readJson<TestRun>(path);
+  return normalizeRun(readJson<TestRun>(path));
 }
 
 export function gitMetadata(root: string): TestRun['git'] {

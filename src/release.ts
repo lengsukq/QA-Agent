@@ -11,6 +11,8 @@ export function createReleaseCheck(
   const timestamp = now();
   const timestampId = timestamp.replace(/[-:.TZ]/g, '').slice(0, 14);
   const id = `release-${timestampId}-${createHash('sha1').update(`${profile}:${suite.id}:${suite.suiteHash}:${timestamp}`).digest('hex').slice(0, 8)}`;
+  const requiredAssetGaps = suite.requiredAssetGaps ?? [];
+  const hasCriticalAssetGap = requiredAssetGaps.some(gap => gap.releaseGate || gap.priority === 'p0');
   return {
     $schema: './schemas/release-check.schema.json',
     apiVersion: 'qa-agent/v2',
@@ -24,9 +26,10 @@ export function createReleaseCheck(
     priorityThreshold: suite.priorityThreshold,
     impactAnalysis: impact,
     suite,
-    status: 'planned',
-    releaseDecision: 'pending',
+    status: hasCriticalAssetGap ? 'blocked' : requiredAssetGaps.length ? 'review' : 'planned',
+    releaseDecision: hasCriticalAssetGap ? 'no-go' : requiredAssetGaps.length ? 'review' : 'pending',
     blockers: [],
+    requiredAssetGaps,
     reportPath: `reports/${id}.md`,
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -42,7 +45,7 @@ export function saveReleaseCheck(root: string, check: ReleaseCheck): void {
 }
 
 export function readReleaseCheck(root: string, id: string): ReleaseCheck {
-  return readJson<ReleaseCheck>(releaseCheckPath(root, id));
+  const check = readJson<ReleaseCheck>(releaseCheckPath(root, id)); check.requiredAssetGaps ??= []; return check;
 }
 
 export function attachRegressionRun(check: ReleaseCheck, run: RegressionRun): ReleaseCheck {
@@ -64,13 +67,21 @@ export function finalizeReleaseCheck(check: ReleaseCheck, run: RegressionRun): R
       detail: child.detail,
     }));
 
+  const hasCriticalAssetGap = check.requiredAssetGaps.some(gap => gap.releaseGate || gap.priority === 'p0');
+  const hasAnyAssetGap = check.requiredAssetGaps.length > 0;
   const hasFailed = run.childRuns.some(child => child.status === 'failed');
   const hasGateBlocker = run.childRuns.some(child =>
     (child.releaseGate || child.priority === 'p0')
     && !['passed', 'adapted', 'not_applicable'].includes(child.status),
   );
 
-  if (run.status === 'passed') {
+  if (hasCriticalAssetGap) {
+    check.status = 'blocked';
+    check.releaseDecision = 'no-go';
+  } else if (hasAnyAssetGap && ['passed', 'adapted'].includes(run.status)) {
+    check.status = 'review';
+    check.releaseDecision = 'review';
+  } else if (run.status === 'passed') {
     check.status = 'passed';
     check.releaseDecision = 'go';
   } else if (run.status === 'adapted') {
@@ -123,6 +134,12 @@ export function writeReleaseReport(root: string, check: ReleaseCheck, run?: Regr
     ...check.suite.members.map(member =>
       `  - ${member.moduleId}/${member.taskId}/${member.scenarioId} — ${member.priority.toUpperCase()}${member.releaseGate ? ' — RELEASE GATE' : ''}${member.tags.includes('golden-path') ? ' — GOLDEN PATH' : ''}\n    - Reason: ${member.selectionReason ?? 'Selected by suite policy.'}`,
     ),
+    '',
+    '## Required QA Asset Gaps',
+    '',
+    ...(check.requiredAssetGaps.length
+      ? check.requiredAssetGaps.map(gap => `- ${gap.moduleId}/${gap.taskId}: ${gap.priority.toUpperCase()}${gap.releaseGate ? ' — RELEASE GATE' : ''}${gap.goldenPath ? ' — GOLDEN PATH' : ''} — ${gap.reason}`)
+      : ['- No required QA asset gap recorded.']),
     '',
     '## Blocking Issues',
     '',
