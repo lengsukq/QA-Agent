@@ -18,13 +18,14 @@ The compatibility commands `workflow bootstrap`, `task explore`, `task run`, `op
 
 Use this skill as a local-first QA operating system. Treat real business results as the source of truth; source code only assists diagnosis.
 
-## Mandatory bootstrap gate
+## Mandatory CLI state gate
 
-1. First call `qa-agent workflow bootstrap --request "..." --module <id> --task <id> ...`.
-2. Confirm the returned `bootstrap.taskDirectory` and `bootstrap.taskAssets`, then mirror `todoList` into the host IDE TodoList when that tool exists.
-3. Show the returned plan and wait for explicit approval from a real human reviewer. The Agent cannot approve its own plan.
-4. Use `task explore` for the first approved execution. Use `operation replay` when an active OperationPlan already exists.
-5. Do not use browser, simulator, device, or UI tools unless the latest response contains `uiExecutionAllowed: true`, `mustStop: false`, and `runId`. If the response is `BLOCKED`, `NEEDS_CONFIRMATION`, or `mustStop: true`, stop immediately and follow only `next` or `nextAllowedAction`.
+1. Before presenting a plan, call `qa-agent start --request "..." --module <id> --task <id> ...` and verify that the response contains `bootstrap.taskDirectory`, `bootstrap.taskAssets`, `plan`, `planHash`, and `workflowStatus: approval_required`. This command creates the complete Task directory and its planning assets.
+2. Mirror the returned `todoList` into the host IDE TodoList. Do not present a plan invented only in the conversation, and do not claim that a Task exists until the CLI has returned its Task directory.
+3. Show the CLI-generated plan and wait for explicit approval from a real human reviewer. Approval must not start a Run.
+4. After approval, call the internal persistence command `qa-agent task review <task> --module <id> --approve --confirmed-by <human>`. Verify that this response is a Task record with `metadata.status: ready`; do not call UI tools or a Run command in the same approval action.
+5. Only after the user has approved and `task review` has completed, call `qa-agent test --module <id> --task <id>`. This is the sole semantic command that starts the Run. It returns `uiExecutionAllowed: true`, `mustStop: false`, and `runId` only when execution is allowed.
+6. The compatibility commands `workflow bootstrap` and `task explore` are for existing automation only; do not use them as the host conversation's primary flow. If the response is `BLOCKED`, `NEEDS_CONFIRMATION`, or `mustStop: true`, stop immediately and follow only `next` or `nextAllowedAction`.
 
 Read-only source exploration is allowed before approval only to refine the Test Plan. UI execution is not.
 
@@ -60,7 +61,7 @@ Treat Run completion as a strict protocol, not a report-writing shortcut:
 6. After `run complete`, inspect `status`, `operationCandidates`, and `operationCandidateIssues`. A passed business result with no candidate is valid QA evidence but is not fast-replay ready. Report the exact missing replay fields instead of producing a separate manual PASS report.
 7. Review and approve a candidate OperationPlan before adding it to a RegressionSuite.
 
-For initialized projects created with an older QA-Agent version, run `qa-agent prompts sync` so `.qa-agent/prompts/` receives the latest closure and replay-quality instructions.
+For initialized projects created with an older QA-Agent version, run `qa-agent prompts sync` so obsolete planning prompts are removed and `.qa-agent/prompts/` contains only `start.md`, `test.md`, `review.md`, `archive.md`, and `report.md`.
 
 ## Release regression
 
@@ -102,7 +103,7 @@ Use the hierarchy `Project → Module → Test Task → Scenario → Run → Ste
 2. Check capabilities before any external action. Required gaps create a `BLOCKED` run, not a pass or a guessed result.
 3. Verify the environment, platform, role, page state, and unique element locator before acting. Prefer test id, accessibility role/name, label, visible text, stable attribute, CSS, XPath, then coordinates. DOM inspection supports a conclusion but never replaces checking the rendered business result.
 4. Capture a screenshot after every real UI action. Inspect only the adaptive checkpoints required by the Task evidence policy (baseline, key business state, failure/exception, locator adaptation, and final result); record whether visual inspection was performed or not required.
-5. Use `task run` (with `--operation` for replay) to start a single Task interaction trail. The host then uses `run step`, `run evidence`, `run observe`, `run cleanup`, `run recover`, and `run complete` internally. For normal regression, use `task regression run` or `module regression run`; the latter dynamically aggregates active Task OperationPlans and creates host-driven child runs. Replay `run step` calls must reference the next `operationStepId`; a visual observation must name the Scenario, assertion, expected business result, actual rendered result, status, and screenshot.
+5. Use `qa-agent test --module <module> --task <task>` to start a single Task interaction trail. The host then uses the Runtime's `run step`, `run evidence`, `run observe`, `run cleanup`, `run recover`, and `run complete` operations internally. Never create `task.json`, Scenario files, plans, or reports one by one from the Agent; `qa-agent start` is the one-shot Task package creation command.
 6. Compare actual results with the Task's explicit expectations. Mark outcomes as passed, failed, adapted, blocked, paused, or needs_confirmation; never manufacture a passing result. Generate a Markdown report and retain only its evidence paths in the Run.
 
 When using Agent-guided mode, invoke the Run lifecycle commands yourself as part of execution; they are persistence operations for the Agent, not instructions for the user to carry out.
@@ -123,12 +124,12 @@ Read [operating model](references/operating-model.md) when creating a task, revi
 npm run qa-agent -- init
 npm run qa-agent -- module create checkout --name "Checkout" --description "Order settlement"
 npm run qa-agent -- module plan checkout
-npm run qa-agent -- task create checkout-basic-flow --module checkout
+npm run qa-agent -- start --request "Validate Checkout" --module checkout --task checkout-basic-flow
 npm run qa-agent -- task plan checkout-basic-flow --module checkout
 npm run qa-agent -- memory add checkout-total-rule --module checkout --title "Total rule" --content "..."
 npm run qa-agent -- memory review checkout-total-rule --module checkout --approve
   npm run qa-agent -- host import --file /absolute/path/host-capabilities.json
-  npm run qa-agent -- task run checkout-basic-flow --module checkout
+  npm run qa-agent -- test --module checkout --task checkout-basic-flow
   npm run qa-agent -- task operation list checkout-basic-flow --module checkout
   npm run qa-agent -- task operation review checkout-basic-flow --module checkout --operation OPERATION_ID --approve
   npm run qa-agent -- task regression sync checkout-basic-flow --module checkout
@@ -138,7 +139,7 @@ npm run qa-agent -- memory review checkout-total-rule --module checkout --approv
   npm run qa-agent -- release check --profile fast --base origin/main --head HEAD --plan-only
   npm run qa-agent -- release check --profile fast --base origin/main --head HEAD
   npm run qa-agent -- release complete RELEASE_CHECK_ID
-  npm run qa-agent -- task run checkout-basic-flow --module checkout --operation OPERATION_ID
+  npm run qa-agent -- test --module checkout --task checkout-basic-flow --scenario happy-path
   npm run qa-agent -- run step run-... --action "Tap checkout" --detail "Checkout page opened" --operation-action click --locator-strategy accessibility --locator-value "Checkout" --expected-state "Checkout page is visible" --actual-state "Checkout page is visible" --screenshot /absolute/path/step.png --visual-inspection not-required
   npm run qa-agent -- run step run-... --action "Fill checkout" --detail "Entered reviewed test data" --operation-action fill --locator-strategy accessibility --locator-value "Checkout form" --input-refs email=fixture:buyer-email,address=fixture:shipping-address --expected-state "Required fields contain test data" --actual-state "Required fields contain test data" --screenshot /absolute/path/form.png --visual-inspection not-required
   npm run qa-agent -- run evidence run-... --type console --summary "Host console output" --file /absolute/path/console.log

@@ -38,10 +38,10 @@ test('initializes, plans, persists, validates, and requires host-driven executio
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-'));
   run(root, 'init', '--id', 'shop', '--name', 'Shop');
   assert.ok(existsSync(join(root, '.qa-agent', 'project.json')));
-  assert.ok(existsSync(join(root, '.qa-agent', 'prompts', 'qa-main.md')));
+  assert.equal(existsSync(join(root, '.qa-agent', 'prompts', 'qa-main.md')), false);
   for (const mode of ['start.md', 'test.md', 'review.md', 'archive.md', 'report.md']) assert.ok(existsSync(join(root, '.qa-agent', 'prompts', mode)));
-  assert.match(readFileSync(join(root, '.qa-agent', 'prompts', 'execution.md'), 'utf8'), /uiExecutionAllowed=true/);
-  assert.doesNotMatch(readFileSync(join(root, '.qa-agent', 'prompts', 'execution.md'), 'utf8'), /[\u3400-\u9fff]/);
+  assert.match(readFileSync(join(root, '.qa-agent', 'prompts', 'test.md'), 'utf8'), /uiExecutionAllowed=true/);
+  assert.doesNotMatch(readFileSync(join(root, '.qa-agent', 'prompts', 'test.md'), 'utf8'), /[\u3400-\u9fff]/);
   assert.ok(existsSync(join(root, '.qa-agent', 'skills', 'built-in', 'execution-contract.json')));
   assert.equal(JSON.parse(run(root, 'skill', 'list')).length, 5);
   run(root, 'module', 'create', 'checkout', '--name', 'Checkout', '--description', 'Checkout flow', '--risk', 'high');
@@ -83,14 +83,29 @@ test('initializes, plans, persists, validates, and requires host-driven executio
 test('syncs current closure prompts into an initialized project', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-prompts-'));
   initializeProject(root, { id: 'prompt-fixture' });
-  const executionPrompt = join(root, '.qa-agent', 'prompts', 'execution.md');
+  const executionPrompt = join(root, '.qa-agent', 'prompts', 'test.md');
   writeFileSync(executionPrompt, 'old prompt', 'utf8');
   const result = JSON.parse(run(root, 'prompts', 'sync'));
   assert.ok(result.prompts.map((prompt: string) => realpathSync(prompt)).includes(realpathSync(executionPrompt)));
   const text = readFileSync(executionPrompt, 'utf8');
-  assert.match(text, /passed run step.*never substitutes for run observe/i);
-  assert.match(text, /operationCandidateIssues/);
-  assert.match(text, /operation replay/i);
+  assert.match(text, /selects explore.*replay/i);
+  assert.match(text, /manual report/i);
+  assert.equal(existsSync(join(root, '.qa-agent', 'prompts', 'execution.md')), false);
+});
+
+test('start creates the Task package before approval and review does not start a Run', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-start-'));
+  run(root, 'init', '--id', 'start-fixture');
+  const started = JSON.parse(run(root, 'start', '--request', '验证登录流程', '--module', 'auth', '--task', 'login-flow'));
+  assert.equal(started.workflowStatus, 'approval_required');
+  assert.ok(started.bootstrap.taskDirectory);
+  assert.ok(existsSync(join(root, started.bootstrap.taskDirectory, 'task.json')));
+  assert.ok(existsSync(join(root, started.bootstrap.taskDirectory, 'test-plan.json')));
+  assert.equal(readTask(root, 'auth', 'login-flow').metadata.status, 'draft');
+  const reviewed = JSON.parse(run(root, 'task', 'review', 'login-flow', '--module', 'auth', '--approve', '--confirmed-by', 'human-reviewer'));
+  assert.equal(reviewed.metadata.status, 'ready');
+  assert.equal(existsSync(join(root, reviewed.metadata.moduleId, 'run.json')), false);
+  assert.equal(existsSync(join(root, '.qa-agent', 'modules', 'auth', 'tasks', 'login-flow', 'runs')), true);
 });
 
 test('validates the installable skill', () => {
@@ -495,13 +510,13 @@ test('loads the canonical project Prompt Bundle and blocks stale prompts', () =>
 
   const context = JSON.parse(run(root, 'context', 'module', 'catalog'));
   assert.equal(context.canonicalPrompts.current, true);
-  assert.match(context.canonicalPrompts.prompts['execution.md'], /run cleanup/);
+  assert.match(context.canonicalPrompts.prompts['test.md'], /screenshots/);
 
-  writeFileSync(join(root, '.qa-agent', 'prompts', 'execution.md'), 'stale prompt', 'utf8');
+  writeFileSync(join(root, '.qa-agent', 'prompts', 'test.md'), 'stale prompt', 'utf8');
   const blocked = JSON.parse(run(root, 'task', 'run', 'catalog-flow', '--module', 'catalog'));
   assert.equal(blocked.status, 'needs_confirmation');
   assert.equal(blocked.canonicalPrompts.current, false);
-  assert.ok(blocked.canonicalPrompts.stale.includes('execution.md'));
+  assert.ok(blocked.canonicalPrompts.stale.includes('test.md'));
 
   run(root, 'prompts', 'sync');
   const started = JSON.parse(run(root, 'task', 'run', 'catalog-flow', '--module', 'catalog'));

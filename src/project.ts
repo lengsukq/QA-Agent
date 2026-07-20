@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, unlinkSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -32,6 +32,11 @@ export function qaPath(root: string, ...parts: string[]): string { return join(r
 export function syncProjectPrompts(root: string): string[] {
   const written: string[] = [];
   ensureDir(qaPath(root, 'prompts'));
+  const obsolete = ['qa-main.md', 'module-planner.md', 'task-planner.md', 'execution.md', 'assertion.md', 'impact-analysis.md', 'source-verification.md', 'memory-curator.md'];
+  for (const name of obsolete) {
+    const path = qaPath(root, 'prompts', name);
+    if (existsSync(path)) unlinkSync(path);
+  }
   for (const [name, prompt] of Object.entries(prompts)) {
     const path = qaPath(root, 'prompts', name);
     writeTextAtomic(path, `${prompt}\n`);

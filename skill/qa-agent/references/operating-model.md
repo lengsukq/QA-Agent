@@ -15,11 +15,11 @@ State explicitly when a conclusion is blocked, inferred, or needs confirmation.
 ## State machine
 
 ```text
-workflow bootstrap
+start (creates the complete Task directory and planning assets in one CLI call)
 → Module and Task directory
 → Test Plan
-→ human approval
-→ task explore or operation replay returns uiExecutionAllowed=true + mustStop=false + runId
+→ human approval persisted by task review (no Run starts)
+→ test or compatible OperationPlan replay returns uiExecutionAllowed=true + mustStop=false + runId
 → UI steps and screenshots
 → assertions
 → cleanup
