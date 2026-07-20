@@ -2,7 +2,7 @@ import { now } from './store.ts';
 import { createHash } from 'node:crypto';
 import type { ModuleSnapshot, ProjectMemory, QaModule, TestRequirements, TestScenario, TestTask } from './types.ts';
 import { platformCapabilities } from './capabilities.ts';
-import { testPlanHash } from './approval.ts';
+import { approvalIsCurrent, testPlanHash } from './approval.ts';
 
 const coverageDimensions = [
   ['core-flow', '完成核心业务流程'], ['boundary', '覆盖输入、金额、数量、时间等边界'], ['permission', '覆盖不同角色的可见性和操作权限'],
@@ -37,7 +37,7 @@ export function createTaskSkeleton(module: QaModule, id: string, name?: string):
   return {
     $schema: '../../../../schemas/task.schema.json', apiVersion: 'qa-agent/v2', kind: 'TestTask',
     metadata: { id, name: name ?? `${module.name} 核心流程`, moduleId: module.id, version: 1, status: 'draft', priority: module.riskLevel === 'critical' ? 'p0' : 'p1', tags: [module.id, 'regression'], frequency: ['critical', 'high'].includes(module.riskLevel) ? 'every-release' : 'manual', releaseGate: module.riskLevel === 'critical', estimatedDurationMinutes: 5 },
-    moduleSnapshotRef: 'module-snapshot.json', requirementsRef: 'requirements.json', testPlanRef: 'test-plan.json', scenarioRefs: ['scenarios/happy-path.json'], regressionSuiteRef: 'regression-suite.json', reportIndexRef: 'reports/index.json', runRefs: [],
+    moduleSnapshotRef: 'module-snapshot.json', requirementsRef: 'requirements.json', testPlanRef: 'test-plan.json', scenarioRefs: ['scenarios/happy-path.json'], regressionSuiteRef: 'regression-suite.json', reportIndexRef: 'runs/index.json', runRefs: [],
     description: `验证 ${module.name} 的核心业务目标。`, objectives: businessObjectives.length ? businessObjectives : [`完成 ${module.name} 核心业务流程`],
     scope: { platforms: module.platforms, environments: ['local'], roles: module.roles }, preconditions: module.entryPoints?.length ? [`Entry points: ${module.entryPoints.join(', ')}`] : [], memoryRefs: [], scenarios: [scenario],
     requiredSkills: ['execution.contract', 'evidence.record', 'operation.replay'], capabilities: { required: [...new Set(module.platforms.flatMap(platformCapabilities))], optional: ['network.read', 'source.readonly', 'logs.read'] },
@@ -50,7 +50,7 @@ export function createTaskSkeleton(module: QaModule, id: string, name?: string):
 
 export function taskPlan(task: TestTask): object {
   return {
-    apiVersion: 'qa-agent/v2', taskId: task.metadata.id, planHash: testPlanHash(task), businessLogic: { description: task.description, objectives: task.objectives, memoryRefs: task.memoryRefs }, approvalRequired: !task.metadata.approval || task.metadata.approval.planHash !== testPlanHash(task), approval: task.metadata.approval,
+    apiVersion: 'qa-agent/v2', taskId: task.metadata.id, planHash: testPlanHash(task), businessLogic: { description: task.description, objectives: task.objectives, memoryRefs: task.memoryRefs }, approvalRequired: !approvalIsCurrent(task), approval: task.metadata.approval,
     preconditions: task.preconditions, scenarios: task.scenarios.map(scenario => ({ id: scenario.id, title: scenario.title, intent: scenario.intent, preconditions: scenario.preconditions, input: scenario.input, expected: scenario.expected, visualAssertions: scenario.visualAssertions ?? [], evidence: scenario.evidence })),
     requiredSkills: task.requiredSkills, requiredCapabilities: task.capabilities, safety: task.safety, stopConditions: task.safety.stopBefore, cleanup: task.scenarios.flatMap(scenario => scenario.cleanup), evidencePolicy: task.evidencePolicy, operationPlanRefs: task.operationPlanRefs, recoveryPolicy: task.recoveryPolicy,
   };

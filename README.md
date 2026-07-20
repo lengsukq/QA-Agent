@@ -102,7 +102,7 @@ Project → Module → Test Task → Scenario → Run → Step / Evidence / Repo
 先安装依赖并验证运行时：
 
 ```bash
-cd /Users/leo/Documents/code/QA-Agent
+cd /path/to/QA-Agent
 npm install
 npm test
 npm run qa-agent -- help
@@ -152,12 +152,12 @@ node bin/qa-agent.mjs install-skill
 
 ```bash
 cd /path/to/your-app
-node /Users/leo/Documents/code/QA-Agent/bin/qa-agent.mjs init \
+node /path/to/QA-Agent/bin/qa-agent.mjs init \
   --id my-app \
   --name "My App" \
   --description "业务应用 QA 项目"
 
-node /Users/leo/Documents/code/QA-Agent/bin/qa-agent.mjs doctor
+node /path/to/QA-Agent/bin/qa-agent.mjs doctor
 ```
 
 初始化后会生成：
@@ -174,7 +174,7 @@ node /Users/leo/Documents/code/QA-Agent/bin/qa-agent.mjs doctor
 
 ## 推荐工作流
 
-以下示例将 `qa-agent` 视为已加入 `PATH` 的命令。开发本仓库时可把每个 `qa-agent` 替换为 `node /Users/leo/Documents/code/QA-Agent/bin/qa-agent.mjs`，或执行 `npm link` 后再使用短命令。
+以下示例将 `qa-agent` 视为已加入 `PATH` 的命令。开发本仓库时可把每个 `qa-agent` 替换为 `node /path/to/QA-Agent/bin/qa-agent.mjs`，或执行 `npm link` 后再使用短命令。
 
 ### QA Agent 主闭环
 
@@ -193,30 +193,57 @@ node /Users/leo/Documents/code/QA-Agent/bin/qa-agent.mjs doctor
 
 源码可以帮助发现待验证规则和定位问题，但不能代替真实业务验证；候选记忆永远先进入当前项目的审核队列，不会自动成为跨项目或全局知识。
 
-### 1. 建立业务模块与测试任务
+### 1. 使用 Workflow Bootstrap 创建 Task 和计划
+
+每次新的 QA 请求都先进入 Bootstrap。宿主应把返回的 `todoList` 同步到 IDE TodoList；在返回 `uiExecutionAllowed: true` 和 `runId` 之前，禁止调用浏览器、模拟器或设备工具。
 
 ```bash
-qa-agent module create checkout \
-  --name "结算" \
-  --description "用户确认商品、价格和配送信息后完成结算" \
+qa-agent workflow bootstrap \
+  --request "验证用户可以查看并提交正确的结算信息" \
+  --module checkout \
+  --task checkout-basic-flow \
+  --module-name "结算" \
+  --task-name "基础结算流程" \
+  --platforms web \
   --risk high
-
-qa-agent module plan checkout
-qa-agent task create checkout-basic-flow --module checkout
-qa-agent task plan checkout-basic-flow --module checkout
 ```
 
-模块规划会提示核心路径、边界、角色/权限、状态迁移、异常、幂等性、跨模块依赖和历史回归等覆盖维度。`task plan` 会输出可给用户确认的测试用例，包括业务目标/规则、前置条件、测试数据、场景、预期结果、视觉断言和证据。
+首次返回类似：
 
-生成新用例前，宿主 Agent 可以用已批准的只读源码/MCP 能力了解路由、组件、接口、权限和状态流转，并将其作为**推断性的规划上下文**；源码本身不能证明业务正确，最终结论仍必须来自真实运行证据。
+```json
+{
+  "workflowStatus": "approval_required",
+  "uiExecutionAllowed": false,
+  "taskDirectory": ".qa-agent/modules/checkout/tasks/checkout-basic-flow",
+  "todoList": [],
+  "plan": {}
+}
+```
 
-**任何浏览器或 APP 操作之前，必须先由用户确认测试用例和业务逻辑。** 确认后记录确认人并将任务标记为可运行：
+宿主可以在此阶段只读分析源码以完善计划，然后向用户展示当前 `plan` 和 `planHash`。任何 UI 操作之前必须由真实用户审批：
 
 ```bash
-qa-agent task review checkout-basic-flow --module checkout --approve --confirmed-by "leo"
+qa-agent task review checkout-basic-flow \
+  --module checkout \
+  --approve \
+  --confirmed-by "qa-reviewer"
 ```
 
-确认会绑定当前测试计划的哈希。后续如果修改业务逻辑、预期结果、OperationPlan、测试数据、能力或安全边界，旧确认会自动失效，任务回到 `needs_review`；只有未变更的已确认计划才可重复自动回归运行。
+审批后仍需验证宿主能力。只有 `task run` 返回正式门禁字段后才可开始 UI 操作：
+
+```bash
+qa-agent task explore checkout-basic-flow --module checkout
+```
+
+```json
+{
+  "uiExecutionAllowed": true,
+  "runId": "run-...",
+  "workflow": { "workflowStatus": "running" }
+}
+```
+
+计划、审批、能力或 Prompt Bundle 不满足时，`uiExecutionAllowed` 必须为 `false`。
 
 ### 2. 导入宿主能力快照
 
@@ -261,7 +288,7 @@ qa-agent run observe <run-id> \
 qa-agent run complete <run-id>
 ```
 
-`run complete` 会先执行严格收尾检查：每个已选 Scenario 的每个 `visualAssertions` 都必须已有对应的 `run observe`。普通 `run step` 即使状态为 PASSED、甚至使用 `operationAction=assert`，也不能替代业务断言。缺少断言时完成命令会被拒绝，Run 保持 `running`，补齐观察后可以再次完成。检查通过后才写入 `reports/<run-id>.md`，并更新 `reports/index.json` 与 `reports/latest.json`。
+`run complete` 会先执行严格收尾检查：每个已选 Scenario 的每个 `visualAssertions` 都必须已有对应的 `run observe`。普通 `run step` 即使状态为 PASSED、甚至使用 `operationAction=assert`，也不能替代业务断言。缺少断言时完成命令会被拒绝，Run 保持 `running`，补齐观察后可以再次完成。检查通过后才写入 `runs/<run-id>/report.md`，并更新 `runs/index.json` 与 `runs/latest.json`。
 
 首次成功运行还会检查 OperationPlan 的可回放质量。`navigate/click/input/fill` 需要明确的操作类型和定位器，`input/fill` 还需要结构化且脱敏的 `inputRefs`。业务验证可以 PASS，但如果这些字段不完整，报告会输出 `OperationPlan 未生成原因`，而不会生成不可稳定回放的 JSON。旧项目可运行 `qa-agent prompts sync` 更新 `.qa-agent/prompts/`。
 
@@ -278,12 +305,29 @@ qa-agent run complete <run-id>
 ├── scenarios/
 ├── operation-plans/
 ├── regression-suite.json
-├── runs/<run-id>/
-├── reports/
+├── runs/
+│   ├── index.json
+│   ├── latest.json
+│   └── <run-id>/
+│       ├── run.json
+│       ├── report.md
+│       ├── screenshots/
+│       └── evidence/
 └── memory/
 ```
 
 ### 4. 快速回归执行模式
+
+首次 Explore 通过并审核 OperationPlan 后，后续不重新规划或审查源码，直接执行 JSON：
+
+```bash
+qa-agent operation replay OPERATION_ID \
+  --module checkout \
+  --task checkout-basic-flow
+```
+
+返回结果包含完整 `operationPlan`、`nextOperationStep`、`remainingOperationSteps` 和 `checkpoints`。宿主严格按顺序执行；每次 Replay 都创建新的 Run、报告和关键节点截图。
+
 
 首次成功运行后，Agent 会在任务目录生成候选 OperationPlan：`.qa-agent/modules/<module>/tasks/<task>/operation-plans/<scenario>/`。审核后可快速回放同一业务流程：
 

@@ -107,6 +107,7 @@ export function createOperationCandidates(root: string, task: TestTask, run: Tes
       taskId: task.metadata.id, moduleId: task.metadata.moduleId, scenarioId: scenario.id, executionSnapshot: run.context,
       planHash: testPlanHash(task), steps, preconditions: [...task.preconditions, ...scenario.preconditions], cleanup: scenario.cleanup, capabilities: task.capabilities.required,
       sourceRunId: run.id, successfulRuns: 1, supersedes: run.replayStatus === 'adapted' && previous?.status === 'active' ? previous.id : undefined,
+      checkpoints: (scenario.visualAssertions ?? []).map(assertion => ({ id: assertion.id, description: assertion.expected, screenshotRequired: true, reportVisible: true })),
       adaptationHistory: run.replayStatus === 'adapted' ? [{ runId: run.id, detail: 'Semantic/accessibility locator adaptation preserved the business meaning.', at: now() }] : [], createdAt: now(), updatedAt: now(),
     };
     if (hasSecrets(plan)) { issues.push({ scenarioId: scenario.id, reasons: ['Candidate contains a potential secret; replace raw values with env: or fixture references.'] }); continue; }
