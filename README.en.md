@@ -182,7 +182,7 @@ Source code can reveal candidate rules and aid diagnosis, but never replaces rea
 
 ### 1. Bootstrap the Task and Test Plan
 
-Every new QA request starts with Workflow Bootstrap. Mirror the returned `todoList` into the host IDE TodoList. Browser, simulator, device, and UI tools are forbidden until the runtime returns both `uiExecutionAllowed: true` and a `runId`.
+Every new QA request starts with Workflow Bootstrap. Mirror the returned `todoList` into the host IDE TodoList. Browser, simulator, device, and UI tools are forbidden until the runtime returns `uiExecutionAllowed: true`, `mustStop: false`, and a `runId`. Bootstrap immediately creates and returns `bootstrap.taskDirectory` and `bootstrap.taskAssets`.
 
 ```bash
 qa-agent workflow bootstrap \
@@ -201,7 +201,10 @@ The first response is an approval gate:
 {
   "workflowStatus": "approval_required",
   "uiExecutionAllowed": false,
+  "mustStop": true,
+  "manualReportAllowed": false,
   "taskDirectory": ".qa-agent/modules/checkout/tasks/checkout-basic-flow",
+  "bootstrap": { "taskCreated": true, "taskAssets": [] },
   "todoList": [],
   "plan": {}
 }
@@ -225,18 +228,26 @@ qa-agent task explore checkout-basic-flow --module checkout
 ```json
 {
   "uiExecutionAllowed": true,
+  "mustStop": false,
+  "manualReportAllowed": false,
   "runId": "run-...",
   "workflow": { "workflowStatus": "running" }
 }
 ```
 
-When the plan, approval, capabilities, or Prompt Bundle are not current, `uiExecutionAllowed` remains `false`.
+When the plan, approval, capabilities, or Prompt Bundle are not current, the response contains `uiExecutionAllowed: false` and `mustStop: true`. The host must stop UI execution and must not write a separate PASS report.
 
 ### 3. Import a host capability snapshot
 
 The host Agent confirms its connected tools and permissions before a Run, then imports that attestation into the project. `qa-agent` never connects MCPs or verifies system permissions itself.
 
 ```bash
+qa-agent host attest --id browser-mcp \
+  --capabilities browser.interact,browser.inspect \
+  --permission-status verified \
+  --host cursor
+
+# Or import a complete snapshot
 qa-agent host import --file /absolute/path/host-capabilities.json
 ```
 
@@ -246,7 +257,7 @@ This is the preferred business-QA mode. The runtime uses the `qa-agent/v2` data 
 
 ```bash
 qa-agent context module checkout
-qa-agent task run checkout-basic-flow --module checkout
+qa-agent task explore checkout-basic-flow --module checkout
 qa-agent run step <run-id> --action "Open checkout" --detail "The Agent opened the real checkout screen." --screenshot /absolute/path/checkout-open.png --visual-inspection not-required
 qa-agent run evidence <run-id> --type console --summary "Host browser console output" --file /absolute/path/console.log
 qa-agent run observe <run-id> \
@@ -259,11 +270,11 @@ qa-agent run observe <run-id> \
 qa-agent run complete <run-id>
 ```
 
-`run complete` first enforces a strict closure check: every declared `visualAssertions` id for every selected Scenario must have a matching `run observe`. A PASSED `run step`, including one recorded with `operationAction=assert`, does not replace a business assertion. When an assertion is missing, completion is rejected and the Run remains `running`, so the host can record the missing observations and retry. Only then is the report written to `runs/<run-id>/report.md`, while `runs/index.json` and `runs/latest.json` are updated.
+`run complete` first enforces a strict closure check: every declared `visualAssertions` id for every selected Scenario must have a matching `run observe`. A PASSED `run step`, including one recorded with `operationAction=assert`, does not replace a business assertion. When an assertion is missing, completion is rejected and the Run remains `running`, so the host can record the missing observations and retry. Only then is the report written to `runs/<run-id>/report.md`, while `runs/index.json` and `runs/latest.json` are updated. A formal report contains a Runtime ownership marker, Run ID, evidence counts, and inline checkpoint screenshots. `.qa-agent/reports/<name>.md` and `Task/reports/` are not formal Task reports.
 
 A successful first Run also receives an OperationPlan replay-quality check. `navigate/click/input/fill` steps need explicit actions and locators, while `input/fill` steps also need structured redacted `inputRefs`. Business verification may PASS while replay readiness fails; in that case the report lists `OperationPlan candidate issues` instead of generating an unstable JSON contract. Existing projects can run `qa-agent prompts sync` to refresh `.qa-agent/prompts/`.
 
-When upgrading an existing project, run `qa-agent prompts sync` first. Legacy approvals without `confirmationSource` must be reviewed again by a real human through `task review --approve --confirmed-by <reviewer>`; automated identities such as `qa-agent`, `assistant`, or `system` cannot approve their own plans. A state-mutating Scenario should declare Cleanup and persist its result through `run cleanup` before completion. Human interaction with a system picker must use `--execution-mode user-assisted`; it remains valid business evidence but cannot produce a fully automated OperationPlan.
+When upgrading an existing project, first run `qa-agent migrate` to move legacy `Task/reports/` assets into `runs/<run-id>/report.md` and quarantine reports that cannot be tied to a Run under `.qa-agent/orphans/reports/`; then run `qa-agent prompts sync`. Legacy approvals without `confirmationSource` must be reviewed again by a real human through `task review --approve --confirmed-by <reviewer>`; automated identities such as `qa-agent`, `assistant`, or `system` cannot approve their own plans. A state-mutating Scenario should declare Cleanup and persist its result through `run cleanup` before completion. Human interaction with a system picker must use `--execution-mode user-assisted`; it remains valid business evidence but cannot produce a fully automated OperationPlan.
 
 Each Task is a self-contained test asset directory:
 

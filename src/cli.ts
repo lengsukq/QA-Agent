@@ -19,6 +19,7 @@ import { buildModuleRegressionSuite, buildReleaseRegressionSuite, readTaskRegres
 import { analyzeProjectImpact } from './impact-analysis.ts';
 import { attachRegressionRun, createReleaseCheck, finalizeReleaseCheck, readReleaseCheck, saveReleaseCheck, writeReleaseReport } from './release.ts';
 import { bootstrapWorkflow, workflowStatus } from './workflow.ts';
+import { migrateProjectArtifacts } from './migration.ts';
 
 const args = process.argv.slice(2);
 const usage = `qa-agent — local-first QA Agent MVP
@@ -27,14 +28,14 @@ Commands:
   init [--id ID] [--name NAME] [--description TEXT] [--platforms web,android,ios]
   install-skill [--path SKILLS_DIRECTORY] [--force]   (Codex compatibility alias)
   install-host <codex|claude|cursor|opencode|copilot|gemini|agents> [--scope project|user] [--project PROJECT_DIRECTORY] [--path SKILLS_DIRECTORY] [--force]
-  doctor | validate | index rebuild | prompts sync
+  doctor | validate | migrate | index rebuild | prompts sync
   workflow bootstrap --request TEXT --module ID --task ID [--module-name NAME] [--task-name NAME] [--platforms web,android,ios] [--risk low|medium|high|critical]
   workflow status --module ID --task ID
   operation replay OPERATION_ID --module MODULE --task TASK [execution context flags]
   impact analyze [--base REF] [--head REF] [--changed-files FILE1,FILE2]
   release check [--profile fast|normal|full] [--base REF] [--head REF] [--changed-files FILE1,FILE2] [--plan-only] [execution context flags]
   release list | release show|complete|report CHECK_ID
-  host list | host import --file HOST_CAPABILITIES.json | host doctor [--platform android|ios]
+  host list | host attest --id ID --capabilities CAP1,CAP2 --permission-status verified|missing|unknown [--host HOST] [--version VERSION] | host import --file HOST_CAPABILITIES.json | host doctor [--platform android|ios]
   context module MODULE
   module list | module create ID --name NAME [--description TEXT] [--platforms web,android,ios] [--source-hints PATHS] [--entry-points PATHS] [--dependencies MODULES] | module update ID [--name NAME] [--description TEXT] [--risk LEVEL] [same mapping flags] | module archive ID | module plan ID | module coverage ID
   task list | task create ID --module MODULE [--name NAME] [--priority p0|p1|p2|p3] [--frequency every-change|every-release|scheduled|manual] [--release-gate true|false] [--estimated-minutes N] [--tags TAGS] [--triggers PATHS] [--golden-path] | task update ID --module MODULE [same metadata flags] | task plan ID --module MODULE | task explore ID --module MODULE [execution context flags] | task run ID --module MODULE [--operation OPERATION_ID] [--scenario SCENARIO] [--environment ENV] [--platform PLATFORM] [--role ROLE] [--device DEVICE] [--device-model MODEL] [--os-version VERSION] [--app-version VERSION] [--web-build BUILD] [--test-data-fingerprint FINGERPRINT] | task operation list|show|review ID --module MODULE [--approve|--reject] | task regression sync|show|run|complete ID --module MODULE | task review ID --module MODULE --approve --confirmed-by USER [--confirmation-source current-chat-explicit-approval|external-review-record] | task archive ID --module MODULE
@@ -120,15 +121,36 @@ function runContextFromFlags(): Partial<ExecutionSnapshot> & { operationId?: str
 
 function executionEnvelope(projectRoot: string, run: TestRun): Record<string, unknown> {
   const mode = run.mode ?? (run.replayStatus === 'not_replay' ? 'explore' : 'replay');
+  const running = run.status === 'running';
+  const taskDirectory = `.qa-agent/modules/${run.moduleId}/tasks/${run.taskId}`;
+  const runDirectory = `${taskDirectory}/runs/${run.id}`;
+  const assetContract = {
+    taskDirectory,
+    runDirectory,
+    runJson: `${runDirectory}/run.json`,
+    report: `${runDirectory}/report.md`,
+    screenshotsDirectory: `${runDirectory}/screenshots/`,
+    evidenceDirectory: `${runDirectory}/evidence/`,
+  };
+  const common = {
+    ...run,
+    executionMode: mode,
+    uiExecutionAllowed: running,
+    runId: running ? run.id : undefined,
+    mustStop: !running,
+    manualReportAllowed: false,
+    runtimeReportGenerated: run.reportGeneratedBy === 'qa-agent-runtime',
+    assetContract,
+    forbiddenActions: running
+      ? ['manual-report.write', 'pass.claim-before-run-complete']
+      : ['ui.execute', 'manual-report.write', 'pass.claim', 'operation-candidate.fabricate'],
+  };
   if (mode === 'replay' && run.operationPlanId) {
     const task = readTask(projectRoot, run.moduleId, run.taskId);
     const operationPlan = readOperation(projectRoot, task, run.operationPlanId);
     const cursor = run.replayCursor ?? 0;
     return {
-      ...run,
-      executionMode: 'replay',
-      uiExecutionAllowed: run.status === 'running',
-      runId: run.status === 'running' ? run.id : undefined,
+      ...common,
       planningAllowed: false,
       sourceReviewAllowed: false,
       strictStepOrder: true,
@@ -136,18 +158,22 @@ function executionEnvelope(projectRoot: string, run: TestRun): Record<string, un
       nextOperationStep: operationPlan.steps[cursor],
       remainingOperationSteps: Math.max(0, operationPlan.steps.length - cursor),
       checkpoints: operationPlan.checkpoints ?? [],
-      next: run.status === 'running'
+      next: running
         ? (operationPlan.steps[cursor] ? `Execute OperationPlan step ${operationPlan.steps[cursor]!.id}.` : 'Record declared assertions and cleanup, then run complete.')
-        : run.conclusion,
+        : run.reportGeneratedBy === 'qa-agent-runtime'
+          ? `Stop UI execution. Inspect the Runtime report at ${run.reportPath}.`
+          : run.conclusion,
     };
   }
   return {
-    ...run,
-    executionMode: 'explore',
-    uiExecutionAllowed: run.status === 'running',
-    runId: run.status === 'running' ? run.id : undefined,
+    ...common,
     planningAllowed: true,
-    next: run.status === 'running' ? 'Execute the approved exploratory flow and persist steps, assertions, and cleanup.' : run.conclusion,
+    sourceReviewAllowed: true,
+    next: running
+      ? 'Execute the approved exploratory flow and persist every UI action, screenshot, assertion, and cleanup.'
+      : run.reportGeneratedBy === 'qa-agent-runtime'
+        ? `Stop UI execution. Inspect the Runtime report at ${run.reportPath}. Do not write a separate report.`
+        : run.conclusion,
   };
 }
 
@@ -216,9 +242,33 @@ ${usage}`);
     if (action === 'doctor') {
       if (flag('--platform')) { output(hostCapabilityDiagnosis(projectRoot, requiredFlag('--platform'))); return; }
       const checks = config.connections.map(connection => ({ id: connection.id, status: connection.status, permissionStatus: connection.permissionStatus ?? 'unknown', attestedAt: connection.attestedAt, healthy: connection.status === 'available' && connection.capabilities.length > 0 && connection.permissionStatus === 'verified', issue: connection.status !== 'available' ? 'host did not attest this tool as available' : !connection.capabilities.length ? 'no capabilities declared by host' : connection.permissionStatus !== 'verified' ? 'host did not attest required permissions as verified' : undefined }));
-      output({ healthy: checks.every(check => check.healthy), connections: checks }); return;
+      output({ healthy: checks.length > 0 && checks.every(check => check.healthy), connections: checks }); return;
     }
-    if (action !== 'import') throw new Error('Host command must be list, import, or doctor.');
+    if (action === 'attest') {
+      const id = requiredFlag('--id'); assertSafeId(id, 'host connection id');
+      const capabilities = listFlag('--capabilities');
+      if (!capabilities?.length) throw new Error('--capabilities requires at least one verified host capability.');
+      const permissionStatus = requiredFlag('--permission-status') as PermissionStatus;
+      if (!['verified', 'missing', 'unknown'].includes(permissionStatus)) throw new Error('--permission-status must be verified, missing, or unknown.');
+      const connection = {
+        id,
+        capabilities,
+        status: 'available' as const,
+        permissionStatus,
+        version: flag('--version'),
+        host: flag('--host') ?? 'host-agent',
+        attestedAt: now(),
+      };
+      config.connections = [...config.connections.filter(item => item.id !== id), connection];
+      writeJsonAtomic(path, config);
+      output({
+        connection,
+        warning: 'Attestation is a host claim. Use verified only after the host has confirmed the tool exists and required OS permissions are granted.',
+        next: permissionStatus === 'verified' ? 'Run host doctor for the target platform, then retry task explore or operation replay.' : 'Resolve missing or unknown permissions before UI execution.',
+      });
+      return;
+    }
+    if (action !== 'import') throw new Error('Host command must be list, attest, import, or doctor.');
     const snapshot = readJson<{ host?: string; collectedAt?: string; connections?: Array<{ id: string; capabilities: string[]; status?: 'available' | 'unavailable'; permissionStatus?: PermissionStatus; version?: string }> }>(requiredFlag('--file'));
     if (!Array.isArray(snapshot.connections) || snapshot.connections.some(connection => !connection.id || !Array.isArray(connection.capabilities))) throw new Error('Host capability snapshot requires a connections array with id and capabilities.');
     config.connections = snapshot.connections.map(connection => ({ id: connection.id, capabilities: [...new Set(connection.capabilities)], status: connection.status ?? 'available', permissionStatus: connection.permissionStatus ?? 'unknown', version: connection.version, host: snapshot.host, attestedAt: snapshot.collectedAt ?? now() }));
@@ -291,6 +341,13 @@ ${usage}`);
   }
   if (group === 'validate') {
     const result = validateProject(root()); output(result); if (!result.valid) process.exitCode = 1; return;
+  }
+  if (group === 'migrate') {
+    const projectRoot = root();
+    const result = migrateProjectArtifacts(projectRoot);
+    rebuildIndexes(projectRoot);
+    output({ ...result, validation: validateProject(projectRoot) });
+    return;
   }
   if (group === 'context' && action === 'module') {
     if (!subject) throw new Error('module id is required.');

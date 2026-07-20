@@ -1,8 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { qaPath } from './project.ts';
 import { hasSecrets, isSafeId, listFiles, readJson } from './store.ts';
 import { isHumanApprover } from './approval.ts';
+import { hasRuntimeReportMarker, RUNTIME_REPORT_GENERATOR } from './report-contract.ts';
+import type { RegressionRun } from './types.ts';
 
 export interface ValidationResult { valid: boolean; errors: string[]; checked: number; }
 
@@ -22,6 +24,7 @@ function validateDomainObject(path: string): string[] {
     if (!value.metadata || !isSafeId(value.metadata.id) || !isSafeId(value.metadata.moduleId)) errors.push(`${path}: invalid task metadata.`);
     if (['ready', 'active'].includes(value.metadata?.status) && (!isHumanApprover(value.metadata.approval?.confirmedBy) || !value.metadata.approval?.confirmedAt || !value.metadata.approval?.confirmationSource || !value.metadata.approval?.planHash)) errors.push(`${path}: ready or active task requires explicit approval from a real human reviewer with confirmation source.`);
     if (!Array.isArray(value.scenarioRefs) || !value.scenarioRefs.length) errors.push(`${path}: scenarioRefs must be a non-empty array.`);
+    if (value.reportIndexRef !== 'runs/index.json') errors.push(`${path}: reportIndexRef must be runs/index.json; Task reports belong to self-contained Run packages.`);
   }
   if (/\/scenarios\/[^/]+\.json$/.test(path) && (!isSafeId(value.id) || typeof value.intent !== 'string' || !value.expected || !Array.isArray(value.preconditions))) errors.push(`${path}: invalid Scenario contract.`);
   if (path.endsWith('/module-snapshot.json') && (value.apiVersion !== 'qa-agent/v2' || value.kind !== 'ModuleSnapshot' || !isSafeId(value.moduleId) || typeof value.snapshotHash !== 'string')) errors.push(`${path}: invalid module snapshot.`);
@@ -30,7 +33,26 @@ function validateDomainObject(path: string): string[] {
     if (!isSafeId(value.id) || !['candidate', 'active', 'superseded', 'deprecated'].includes(value.status)) errors.push(`${path}: invalid memory id or status.`);
     if (hasSecrets({ content: value.content, structuredRule: value.structuredRule })) errors.push(`${path}: contains a potential secret.`);
   }
-  if (/\/runs\/[^/]+\/run\.json$/.test(path) && !['pending', 'running', 'passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable', 'needs_confirmation', 'adapted'].includes(value.status)) errors.push(`${path}: invalid run status.`);
+  if (/\/runs\/[^/]+\/run\.json$/.test(path)) {
+    if (!['pending', 'running', 'passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable', 'needs_confirmation', 'adapted'].includes(value.status)) errors.push(`${path}: invalid run status.`);
+    if (value.completedAt) {
+      const expectedReportPath = `runs/${value.id}/report.md`;
+      if (value.reportPath !== expectedReportPath) errors.push(`${path}: completed Run reportPath must be ${expectedReportPath}.`);
+      if (value.reportGeneratedBy !== RUNTIME_REPORT_GENERATOR) errors.push(`${path}: completed Run must declare reportGeneratedBy=${RUNTIME_REPORT_GENERATOR}.`);
+      if (!value.reportGeneratedAt) errors.push(`${path}: completed Run must declare reportGeneratedAt.`);
+      const reportPath = join(dirname(path), 'report.md');
+      if (!existsSync(reportPath)) errors.push(`${path}: Runtime report is missing at ${reportPath}.`);
+      else {
+        const report = readFileSync(reportPath, 'utf8');
+        if (!hasRuntimeReportMarker(report, value.id)) errors.push(`${reportPath}: missing QA-Agent Runtime ownership marker for Run ${value.id}.`);
+      }
+    }
+    if (['passed', 'adapted'].includes(value.status)) {
+      if (!Array.isArray(value.screenshots) || value.screenshots.length === 0) errors.push(`${path}: passed or adapted Run requires screenshot evidence.`);
+      const findings = Array.isArray(value.visualFindings) ? value.visualFindings : [];
+      if (!findings.length || findings.some((item: any) => ['passed', 'adapted'].includes(item.status) && !item.screenshotPath)) errors.push(`${path}: passed or adapted Run requires screenshot-backed business findings.`);
+    }
+  }
   if (/\/operation-plans\/[^/]+\/v\d+\.json$/.test(path)) {
     if (value.apiVersion !== 'qa-agent/v2') errors.push(`${path}: OperationPlan must use qa-agent/v2.`);
     if (!isSafeId(value.id) || value.kind !== 'OperationPlan' || !['candidate', 'active', 'superseded', 'deprecated'].includes(value.status)) errors.push(`${path}: invalid OperationPlan identity or status.`);
@@ -86,6 +108,23 @@ export function validateProject(root: string): ValidationResult {
     errors.push(...validateObject(path, fields));
     try { errors.push(...validateDomainObject(path)); } catch (error) { errors.push(`${path}: ${(error as Error).message}`); }
   }
+
+  const legacyTaskReports = listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/reports\/.+\.md$/.test(path));
+  for (const path of legacyTaskReports) errors.push(`${path}: legacy Task report is outside runs/<run-id>/; run qa-agent migrate.`);
+
+  const globalReportRoot = qaPath(root, 'reports');
+  for (const path of listFiles(globalReportRoot, item => item.endsWith('.md'))) {
+    const id = basename(path, '.md');
+    const releaseCheckPath = qaPath(root, 'release-checks', `${id}.json`);
+    const regressionPath = qaPath(root, 'regression-runs', `${id}.json`);
+    let validOwner = existsSync(releaseCheckPath);
+    if (!validOwner && existsSync(regressionPath)) {
+      try { validOwner = readJson<RegressionRun>(regressionPath).suiteScope === 'release'; }
+      catch { validOwner = false; }
+    }
+    if (!validOwner) errors.push(`${path}: orphan or manually written QA report. Formal Task reports must be generated by the Runtime under tasks/<task>/runs/<run-id>/report.md.`);
+  }
+
   return { valid: errors.length === 0, errors, checked: files.length };
 }
 

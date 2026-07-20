@@ -14,7 +14,7 @@ workflow bootstrap
 → Module and Task directory
 → Test Plan
 → human approval
-→ task run returns uiExecutionAllowed=true + runId
+→ task explore or operation replay returns uiExecutionAllowed=true + mustStop=false + runId
 → UI steps and screenshots
 → assertions
 → cleanup
@@ -22,7 +22,7 @@ workflow bootstrap
 → report and OperationPlan readiness
 ```
 
-No UI tool may run before the explicit execution gate. Mirror the workflow `todoList` into the host IDE TodoList, but treat `.qa-agent` data as the authoritative state.
+No UI tool may run before the explicit execution gate. If Runtime returns BLOCKED, NEEDS_CONFIRMATION, or mustStop=true, stop rather than bypassing preflight. Mirror the workflow `todoList` into the host IDE TodoList, but treat `.qa-agent` data as the authoritative state. Formal Task reports are generated only under runs/<run-id>/report.md; manual global reports are invalid.
 
 ## Task and Run storage
 

@@ -195,7 +195,7 @@ node /path/to/QA-Agent/bin/qa-agent.mjs doctor
 
 ### 1. 使用 Workflow Bootstrap 创建 Task 和计划
 
-每次新的 QA 请求都先进入 Bootstrap。宿主应把返回的 `todoList` 同步到 IDE TodoList；在返回 `uiExecutionAllowed: true` 和 `runId` 之前，禁止调用浏览器、模拟器或设备工具。
+每次新的 QA 请求都先进入 Bootstrap。宿主应把返回的 `todoList` 同步到 IDE TodoList；在返回 `uiExecutionAllowed: true`、`mustStop: false` 和 `runId` 之前，禁止调用浏览器、模拟器或设备工具。Bootstrap 会立即创建并返回 `bootstrap.taskDirectory` 与 `bootstrap.taskAssets`。
 
 ```bash
 qa-agent workflow bootstrap \
@@ -214,7 +214,10 @@ qa-agent workflow bootstrap \
 {
   "workflowStatus": "approval_required",
   "uiExecutionAllowed": false,
+  "mustStop": true,
+  "manualReportAllowed": false,
   "taskDirectory": ".qa-agent/modules/checkout/tasks/checkout-basic-flow",
+  "bootstrap": { "taskCreated": true, "taskAssets": [] },
   "todoList": [],
   "plan": {}
 }
@@ -229,7 +232,7 @@ qa-agent task review checkout-basic-flow \
   --confirmed-by "qa-reviewer"
 ```
 
-审批后仍需验证宿主能力。只有 `task run` 返回正式门禁字段后才可开始 UI 操作：
+审批后仍需验证宿主能力。只有 `task explore` 返回正式门禁字段后才可开始 UI 操作：
 
 ```bash
 qa-agent task explore checkout-basic-flow --module checkout
@@ -238,12 +241,14 @@ qa-agent task explore checkout-basic-flow --module checkout
 ```json
 {
   "uiExecutionAllowed": true,
+  "mustStop": false,
+  "manualReportAllowed": false,
   "runId": "run-...",
   "workflow": { "workflowStatus": "running" }
 }
 ```
 
-计划、审批、能力或 Prompt Bundle 不满足时，`uiExecutionAllowed` 必须为 `false`。
+计划、审批、能力或 Prompt Bundle 不满足时，返回 `uiExecutionAllowed: false` 和 `mustStop: true`。宿主必须停止 UI 操作，禁止另写 PASS 报告。
 
 ### 2. 导入宿主能力快照
 
@@ -264,6 +269,12 @@ qa-agent task explore checkout-basic-flow --module checkout
 ```
 
 ```bash
+qa-agent host attest --id browser-mcp \
+  --capabilities browser.interact,browser.inspect \
+  --permission-status verified \
+  --host cursor
+
+# 或导入完整快照
 qa-agent host import --file /absolute/path/host-capabilities.json
 ```
 
@@ -275,7 +286,7 @@ Agent 在后台通过以下命令持久化真实执行轨迹：
 
 ```bash
 qa-agent context module checkout
-qa-agent task run checkout-basic-flow --module checkout
+qa-agent task explore checkout-basic-flow --module checkout
 qa-agent run step <run-id> --action "打开结算页" --detail "已进入真实结算页面" --screenshot /absolute/path/checkout-open.png --visual-inspection not-required
 qa-agent run evidence <run-id> --type console --summary "宿主浏览器控制台输出" --file /absolute/path/console.log
 qa-agent run observe <run-id> \
@@ -288,11 +299,11 @@ qa-agent run observe <run-id> \
 qa-agent run complete <run-id>
 ```
 
-`run complete` 会先执行严格收尾检查：每个已选 Scenario 的每个 `visualAssertions` 都必须已有对应的 `run observe`。普通 `run step` 即使状态为 PASSED、甚至使用 `operationAction=assert`，也不能替代业务断言。缺少断言时完成命令会被拒绝，Run 保持 `running`，补齐观察后可以再次完成。检查通过后才写入 `runs/<run-id>/report.md`，并更新 `runs/index.json` 与 `runs/latest.json`。
+`run complete` 会先执行严格收尾检查：每个已选 Scenario 的每个 `visualAssertions` 都必须已有对应的 `run observe`。普通 `run step` 即使状态为 PASSED、甚至使用 `operationAction=assert`，也不能替代业务断言。缺少断言时完成命令会被拒绝，Run 保持 `running`，补齐观察后可以再次完成。检查通过后才写入 `runs/<run-id>/report.md`，并更新 `runs/index.json` 与 `runs/latest.json`。正式报告包含 Runtime ownership marker、Run ID、证据数量和关键节点内嵌截图；`.qa-agent/reports/<name>.md` 与 `Task/reports/` 不属于正式 Task 报告。
 
 首次成功运行还会检查 OperationPlan 的可回放质量。`navigate/click/input/fill` 需要明确的操作类型和定位器，`input/fill` 还需要结构化且脱敏的 `inputRefs`。业务验证可以 PASS，但如果这些字段不完整，报告会输出 `OperationPlan 未生成原因`，而不会生成不可稳定回放的 JSON。旧项目可运行 `qa-agent prompts sync` 更新 `.qa-agent/prompts/`。
 
-升级已有项目时，先运行 `qa-agent prompts sync`。旧版审批没有 `confirmationSource`，需要由真实审核人重新执行 `task review --approve --confirmed-by <reviewer>`；`qa-agent`、`assistant`、`system` 等自动身份不能审批自己的计划。创建或修改状态的 Scenario 应声明 Cleanup，并在完成前使用 `run cleanup` 记录结果。人工操作系统 Picker 等步骤应使用 `--execution-mode user-assisted`，此类证据可用于业务结论，但不会生成全自动 OperationPlan。
+升级已有项目时，先运行 `qa-agent migrate` 将旧 `Task/reports/` 迁移到 `runs/<run-id>/report.md`，并将无法绑定 Run 的手写报告保留到 `.qa-agent/orphans/reports/`；再运行 `qa-agent prompts sync`。旧版审批没有 `confirmationSource`，需要由真实审核人重新执行 `task review --approve --confirmed-by <reviewer>`；`qa-agent`、`assistant`、`system` 等自动身份不能审批自己的计划。创建或修改状态的 Scenario 应声明 Cleanup，并在完成前使用 `run cleanup` 记录结果。人工操作系统 Picker 等步骤应使用 `--execution-mode user-assisted`，此类证据可用于业务结论，但不会生成全自动 OperationPlan。
 
 每个 Task 是一个自包含测试资产目录：
 

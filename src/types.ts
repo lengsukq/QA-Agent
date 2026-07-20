@@ -30,13 +30,20 @@ export interface QaWorkflowState {
   moduleId: string;
   taskId: string;
   taskDirectory?: string;
+  taskDirectoryAbsolute?: string;
+  taskAssetsReady: boolean;
   workflowStatus: WorkflowStatus;
   uiExecutionAllowed: boolean;
+  mustStop: boolean;
+  manualReportAllowed: false;
   runId?: string;
   plan?: object;
   promptBundle: { bundleHash: string; current: boolean; missing: string[]; stale: string[] };
   todoList: WorkflowTodo[];
+  allowedActions: string[];
+  forbiddenActions: string[];
   nextAllowedAction: string;
+  bootstrap?: { moduleCreated: boolean; taskCreated: boolean; taskDirectory: string; taskAssets: string[] };
 }
 
 export interface Locator {
@@ -414,6 +421,8 @@ export interface TestRun {
   evidence: Array<{ type: string; path?: string; summary: string }>;
   conclusion?: string;
   reportPath?: string;
+  reportGeneratedBy?: 'qa-agent-runtime';
+  reportGeneratedAt?: string;
   retryOf?: string;
   replayStatus: ReplayStatus;
   replayStage: ReplayStage;

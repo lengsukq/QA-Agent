@@ -43,7 +43,15 @@ function copySkill(destination: string, force: boolean): void {
   cpSync(skillSource(), destination, { recursive: true, force, errorOnExist: !force });
 }
 
-const sharedGuidance = `# QA Agent\n\n1. First run \`qa-agent workflow bootstrap --request "<request>" --module <id> --task <id>\`. Mirror the returned \`todoList\` into the IDE TodoList when available.\n2. Show the returned plan and wait for explicit human approval. The Agent cannot approve its own plan.\n3. Use \`task explore\` only for the first approved execution. When an active OperationPlan exists, use \`operation replay\` and follow its JSON without replanning or source review. Never call UI tools unless the response contains \`uiExecutionAllowed: true\` and a \`runId\`.\n4. During the Run, record each UI action with a screenshot, record declared assertions with \`run observe\`, cleanup with \`run cleanup\`, then call \`run complete\`.\n5. Treat the runtime verdict as authoritative. Keep each Run package under the Task directory and never fabricate a PASS.\n6. Stop before production writes, payments, refunds, deletion, notifications, or permission changes.\n`;
+const sharedGuidance = `# QA Agent
+
+1. First run \`qa-agent workflow bootstrap --request "<request>" --module <id> --task <id>\`. Confirm the returned \`bootstrap.taskDirectory\` and \`taskAssets\`, and mirror \`todoList\` into the IDE TodoList when available.
+2. Show the returned plan and wait for explicit human approval. The Agent cannot approve its own plan.
+3. Use \`task explore\` only for the first approved execution. When an active OperationPlan exists, use \`operation replay\` and follow its JSON without replanning or source review. Never call UI tools unless the response contains \`uiExecutionAllowed: true\`, \`mustStop: false\`, and a \`runId\`.
+4. If a response is BLOCKED, NEEDS_CONFIRMATION, or \`mustStop: true\`, stop immediately. Resolve its \`next\`/\`nextAllowedAction\`; never bypass preflight, continue simulator/browser actions, claim PASS, or write a report manually.
+5. During the Run, record each UI action with a screenshot, record declared assertions with \`run observe\`, cleanup with \`run cleanup\`, then call \`run complete\`. Only the Runtime report under \`tasks/<task>/runs/<run-id>/report.md\` is formal. Never write \`.qa-agent/reports/<name>.md\` or \`Task/reports/\`.
+6. Treat the runtime verdict as authoritative and never fabricate a PASS. Stop before production writes, payments, refunds, deletion, notifications, or permission changes.
+`;
 
 function cursorRule(): string {
   return `---\ndescription: Execute project-aware visual QA with the local qa-agent runtime, real browser or simulator interaction, screenshot evidence, and automatic reports.\nalwaysApply: false\n---\n\n${sharedGuidance}`;

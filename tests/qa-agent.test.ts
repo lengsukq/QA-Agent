@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -567,6 +567,12 @@ test('bootstraps a Task before UI execution and stores one self-contained Run pa
   const bootstrapped = JSON.parse(run(root, 'workflow', 'bootstrap', '--request', 'Edit all supported profile fields', '--module', 'profile', '--task', 'edit-profile-all-fields', '--module-name', 'Profile', '--task-name', 'Edit profile fields', '--platforms', 'web'));
   assert.equal(bootstrapped.workflowStatus, 'approval_required');
   assert.equal(bootstrapped.uiExecutionAllowed, false);
+  assert.equal(bootstrapped.mustStop, true);
+  assert.equal(bootstrapped.manualReportAllowed, false);
+  assert.equal(bootstrapped.taskAssetsReady, true);
+  assert.equal(bootstrapped.bootstrap.taskCreated, true);
+  assert.equal(bootstrapped.bootstrap.taskDirectory, '.qa-agent/modules/profile/tasks/edit-profile-all-fields');
+  assert.ok(bootstrapped.bootstrap.taskAssets.some((item: string) => item.endsWith('/task.json')));
   assert.equal(bootstrapped.plan.approvalRequired, true);
   assert.ok(bootstrapped.todoList.some((item: { id: string; status: string }) => item.id === 'approval' && item.status === 'blocked'));
   const taskRoot = taskDirectory(root, 'profile', 'edit-profile-all-fields');
@@ -577,9 +583,14 @@ test('bootstraps a Task before UI execution and stores one self-contained Run pa
   assert.equal(capabilityBlocked.workflowStatus, 'blocked');
   assert.equal(capabilityBlocked.uiExecutionAllowed, false);
   assert.ok(capabilityBlocked.todoList.some((item: { id: string; status: string }) => item.id === 'capabilities' && item.status === 'blocked'));
-  importHostSnapshot(root, [{ id: 'browser-mcp', capabilities: ['browser.interact', 'browser.inspect'], permissionStatus: 'verified' }]);
+  const attested = JSON.parse(run(root, 'host', 'attest', '--id', 'browser-mcp', '--capabilities', 'browser.interact,browser.inspect', '--permission-status', 'verified', '--host', 'test-host'));
+  assert.equal(attested.connection.permissionStatus, 'verified');
+  assert.equal(JSON.parse(run(root, 'host', 'doctor')).healthy, true);
   const started = JSON.parse(run(root, 'task', 'run', 'edit-profile-all-fields', '--module', 'profile'));
   assert.equal(started.uiExecutionAllowed, true);
+  assert.equal(started.mustStop, false);
+  assert.equal(started.manualReportAllowed, false);
+  assert.equal(started.assetContract.taskDirectory, '.qa-agent/modules/profile/tasks/edit-profile-all-fields');
   assert.equal(started.workflow.workflowStatus, 'running');
   assert.ok(started.runId);
 
@@ -589,10 +600,18 @@ test('bootstraps a Task before UI execution and stores one self-contained Run pa
   run(root, 'run', 'observe', started.runId, '--scenario', 'happy-path', '--assertion', 'business-outcome', '--expected', 'The visible result matches the approved request: Edit all supported profile fields', '--actual', 'The approved profile form and editable fields are visible.', '--status', 'passed', '--screenshot', screenshot);
   const completed = JSON.parse(run(root, 'run', 'complete', started.runId));
   assert.equal(completed.reportPath, `runs/${started.runId}/report.md`);
+  assert.equal(completed.reportGeneratedBy, 'qa-agent-runtime');
+  assert.equal(completed.runtimeReportGenerated, true);
+  assert.equal(completed.mustStop, true);
 
   const packageRoot = taskRunDirectory(root, 'profile', 'edit-profile-all-fields', started.runId);
   assert.ok(existsSync(join(packageRoot, 'run.json')));
   assert.ok(existsSync(join(packageRoot, 'report.md')));
+  const runtimeReport = readFileSync(join(packageRoot, 'report.md'), 'utf8');
+  assert.match(runtimeReport, new RegExp(`qa-agent-runtime-report:${started.runId}`));
+  assert.match(runtimeReport, /Runtime generator: qa-agent-runtime/);
+  assert.match(runtimeReport, /Checkpoint business-outcome/);
+  assert.match(runtimeReport, /!\[Checkpoint business-outcome\]/);
   assert.ok(existsSync(join(packageRoot, completed.screenshots[0].path)));
   assert.ok(existsSync(join(taskRoot, 'runs', 'index.json')));
   assert.ok(existsSync(join(taskRoot, 'runs', 'latest.json')));
@@ -602,4 +621,55 @@ test('bootstraps a Task before UI execution and stores one self-contained Run pa
   assert.equal(status.workflowStatus, 'completed');
   assert.equal(status.uiExecutionAllowed, false);
   assert.ok(status.todoList.some((item: { id: string; status: string }) => item.id === 'finish' && item.status === 'completed'));
+});
+
+
+test('stops blocked execution, rejects manual reports, and migrates legacy Task reports', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-report-contract-'));
+  run(root, 'init', '--id', 'report-contract');
+  const bootstrap = JSON.parse(run(root, 'workflow', 'bootstrap', '--request', 'Verify profile preferences', '--module', 'profile', '--task', 'preferences', '--platforms', 'web'));
+  assert.equal(bootstrap.bootstrap.taskCreated, true);
+  run(root, 'task', 'review', 'preferences', '--module', 'profile', '--approve', '--confirmed-by', 'project-owner');
+
+  const blocked = JSON.parse(run(root, 'task', 'explore', 'preferences', '--module', 'profile'));
+  assert.equal(blocked.status, 'blocked');
+  assert.equal(blocked.uiExecutionAllowed, false);
+  assert.equal(blocked.mustStop, true);
+  assert.equal(blocked.manualReportAllowed, false);
+  assert.ok(blocked.forbiddenActions.includes('ui.execute'));
+  assert.ok(blocked.forbiddenActions.includes('manual-report.write'));
+  assert.equal(blocked.reportGeneratedBy, 'qa-agent-runtime');
+  assert.equal(blocked.reportPath, `runs/${blocked.id}/report.md`);
+
+  const taskRoot = taskDirectory(root, 'profile', 'preferences');
+  const runRoot = taskRunDirectory(root, 'profile', 'preferences', blocked.id);
+  const legacyReports = join(taskRoot, 'reports');
+  mkdirSync(legacyReports, { recursive: true });
+  renameSync(join(runRoot, 'report.md'), join(legacyReports, `${blocked.id}.md`));
+  const legacyRunPath = join(runRoot, 'run.json');
+  const legacyRun = JSON.parse(readFileSync(legacyRunPath, 'utf8'));
+  legacyRun.reportPath = `reports/${blocked.id}.md`;
+  delete legacyRun.reportGeneratedBy;
+  delete legacyRun.reportGeneratedAt;
+  writeFileSync(legacyRunPath, `${JSON.stringify(legacyRun, null, 2)}\n`, 'utf8');
+
+  const manualReport = join(root, '.qa-agent', 'reports', 'preferences', 'qa-test-report.md');
+  mkdirSync(join(manualReport, '..'), { recursive: true });
+  writeFileSync(manualReport, '# Hand-written PASS\n', 'utf8');
+
+  const invalid = spawnSync(process.execPath, ['--experimental-strip-types', cli, 'validate'], { cwd: root, encoding: 'utf8' });
+  assert.notEqual(invalid.status, 0);
+  assert.match(invalid.stdout, /legacy Task report/);
+  assert.match(invalid.stdout, /orphan or manually written QA report/);
+
+  const migrated = JSON.parse(run(root, 'migrate'));
+  assert.equal(migrated.migratedTaskReports, 1);
+  assert.equal(migrated.quarantinedOrphanReports, 1);
+  assert.equal(migrated.validation.valid, true);
+  assert.ok(existsSync(join(runRoot, 'report.md')));
+  assert.ok(existsSync(join(root, '.qa-agent', 'orphans', 'reports', 'preferences', 'qa-test-report.md')));
+  const migratedRun = JSON.parse(readFileSync(legacyRunPath, 'utf8'));
+  assert.equal(migratedRun.reportPath, `runs/${blocked.id}/report.md`);
+  assert.equal(migratedRun.reportGeneratedBy, 'qa-agent-runtime');
+  assert.match(readFileSync(join(runRoot, 'report.md'), 'utf8'), new RegExp(`qa-agent-runtime-report:${blocked.id}`));
 });

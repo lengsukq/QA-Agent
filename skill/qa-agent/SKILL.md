@@ -10,11 +10,11 @@ Use `qa-agent/v2` as the QA state machine. The host IDE controls browser, simula
 ## Mandatory bootstrap gate
 
 1. First call `qa-agent workflow bootstrap --request "..." --module <id> --task <id> ...`.
-2. Mirror the returned `todoList` into the IDE TodoList when that tool exists.
+2. Confirm the returned `bootstrap.taskDirectory` and `bootstrap.taskAssets`, then mirror `todoList` into the IDE TodoList when that tool exists.
 3. Read the returned plan and show it to the user.
 4. Wait for explicit approval from a real human reviewer. The Agent cannot approve its own plan.
 5. Use `task explore` for the first approved execution. Use `operation replay` when an active OperationPlan already exists.
-6. Do not use any browser, simulator, device, or UI tool unless the latest response contains both `uiExecutionAllowed: true` and `runId`.
+6. Do not use any browser, simulator, device, or UI tool unless the latest response contains `uiExecutionAllowed: true`, `mustStop: false`, and `runId`. If the response is `BLOCKED`, `NEEDS_CONFIRMATION`, or `mustStop: true`, stop immediately and follow only `next`/`nextAllowedAction`.
 
 Read-only source exploration is allowed before approval only to refine the Test Plan. UI execution is not.
 
@@ -26,7 +26,7 @@ Read-only source exploration is allowed before approval only to refine the Test 
 - Record every declared cleanup action with `run cleanup`.
 - Use `user-assisted` for actual human intervention and `system-component-blocked` for uncontrollable system UI. Neither produces a fully automated OperationPlan.
 - Call `run complete`, then inspect `status`, `operationCandidates`, and `operationCandidateIssues`.
-- Never replace the runtime result with a manually written PASS report.
+- Never replace the runtime result with a manually written PASS report. Never write `.qa-agent/reports/<name>.md` or `Task/reports/`; only `runs/<run-id>/report.md` with the Runtime ownership marker is a formal Task report.
 
 Each Run is self-contained:
 

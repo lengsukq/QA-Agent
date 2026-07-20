@@ -90,6 +90,8 @@ function finish(root: string, task: TestTask, run: TestRun): TestRun {
     }
   }
   run.reportPath = `runs/${run.id}/report.md`;
+  run.reportGeneratedBy = 'qa-agent-runtime';
+  run.reportGeneratedAt = now();
   task.runRefs ??= []; const runRef = `runs/${run.id}/run.json`; if (!task.runRefs.includes(runRef)) task.runRefs.push(runRef); task.updatedAt = now();
   writeReport(root, task, run); saveRun(root, run); saveTask(root, task);
   const reportIndexPath = taskRunIndexPath(root, task.metadata.moduleId, task.metadata.id);
