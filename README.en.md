@@ -6,7 +6,9 @@ AI-powered QA Engineer CLI for business validation and regression testing.
 
 QA Agent is a CLI-first AI QA Engineer designed for real business validation and regression testing. The CLI initializes projects, plans Tasks, executes Runs, generates reports, and runs regressions; Codex, Cursor, and other host Skills connect host tools to that CLI workflow.
 
-## CLI Quick Start
+## Install QA Agent into another project
+
+The typical setup is to initialize `.qa-agent/` inside the project under test and inject the host Skill into Codex, Cursor, or another IDE. You then ask the host Agent for QA in the IDE conversation; the host Skill calls the CLI for planning, execution, reports, and archiving.
 
 ### Install the CLI globally from npm (recommended)
 
@@ -34,6 +36,67 @@ If your npm global directory is not writable, install it locally and run it with
 npm install --save-dev qa-agent-skill
 npx qa-agent --help
 ```
+
+### Initialize a target project in one step
+
+Assume the project under test is `/path/to/your-app`:
+
+```bash
+qa-agent configure \
+  --project /path/to/your-app \
+  --host cursor \
+  --scope project \
+  --id my-app \
+  --name "My App" \
+  --description "My application QA project"
+```
+
+This does two things:
+
+- Creates the target project's `.qa-agent/` runtime directory, Prompt Bundle, built-in Runtime Skills, and indexes.
+- Writes `.cursor/rules/qa-agent.mdc` and `.cursor/commands/qa-agent.md` into the target project.
+
+For Codex, install the user-level Skill while initializing the target project:
+
+```bash
+qa-agent configure \
+  --project /path/to/your-app \
+  --host codex \
+  --scope user \
+  --id my-app \
+  --name "My App"
+```
+
+After setup, open `/path/to/your-app` in the IDE and ask the host Agent: “Test the Checkout core flow.” The host will call `qa-agent start`, wait for your conversation approval, call `qa-agent test`, and finally call `qa-agent archive`.
+
+Other host examples:
+
+```bash
+# Claude Code / OpenCode / Agents: project Skill
+qa-agent configure --project /path/to/your-app --host claude --scope project
+qa-agent configure --project /path/to/your-app --host opencode --scope project
+qa-agent configure --project /path/to/your-app --host agents --scope project
+
+# GitHub Copilot: project Skill + Custom Agent
+qa-agent configure --project /path/to/your-app --host copilot --scope project
+
+# Gemini CLI: project Command
+qa-agent configure --project /path/to/your-app --host gemini --scope project
+```
+
+`configure` does not overwrite existing `.qa-agent/` project data. If host files already exist, pass `--force` explicitly to replace the injected host files.
+
+### Initialize in separate steps
+
+To initialize the project runtime without injecting a host integration:
+
+```bash
+cd /path/to/your-app
+qa-agent init --id my-app --name "My App"
+qa-agent install-host cursor --project /path/to/your-app --scope project
+```
+
+`init` only creates `.qa-agent/`; `install-host` or `configure` injects the host Skill, Rule, or Command.
 
 Use the CLI from a source checkout:
 

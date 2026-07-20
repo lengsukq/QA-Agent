@@ -8,7 +8,9 @@ QA Agent 是一个面向真实业务验证和回归测试的 AI QA Agent。
 
 它是一个 CLI-first 的 QA Agent：命令行负责初始化项目、规划 Task、执行 Run、生成报告和回归；Codex、Cursor 等宿主 Skill 负责把宿主能力接入 CLI 工作流。它不是传统测试脚本执行器，而是帮助团队模拟真实 QA 工程师的工作方式：理解项目、分析影响范围、设计测试计划、执行业务流程、验证结果，并持续沉淀回归经验。
 
-## CLI 快速开始
+## 将 QA Agent 安装到其他项目
+
+QA Agent 的典型用法是：在一个被测项目中初始化 `.qa-agent/`，再把宿主 Skill 注入 Codex、Cursor 等 IDE。之后你在 IDE 对话中提出 QA 请求，宿主 Skill 会调用 CLI 完成规划、测试、报告和归档。
 
 ### 从 npm 全局安装 CLI（推荐）
 
@@ -36,6 +38,67 @@ npm uninstall --global qa-agent-skill
 npm install --save-dev qa-agent-skill
 npx qa-agent --help
 ```
+
+### 一站式初始化目标项目
+
+假设被测项目位于 `/path/to/your-app`：
+
+```bash
+qa-agent configure \
+  --project /path/to/your-app \
+  --host cursor \
+  --scope project \
+  --id my-app \
+  --name "My App" \
+  --description "My application QA project"
+```
+
+这会完成两件事：
+
+- 创建目标项目的 `.qa-agent/` 运行目录、Prompt Bundle、内置 Runtime Skill 和项目索引。
+- 写入目标项目的 `.cursor/rules/qa-agent.mdc` 与 `.cursor/commands/qa-agent.md`。
+
+Codex 使用用户级 Skill 注入：
+
+```bash
+qa-agent configure \
+  --project /path/to/your-app \
+  --host codex \
+  --scope user \
+  --id my-app \
+  --name "My App"
+```
+
+初始化完成后，在 `/path/to/your-app` 中打开对应 IDE，并直接对宿主 Agent 说“帮我测试 Checkout 核心流程”。宿主会依次调用 `qa-agent start`、等待你的对话确认、调用 `qa-agent test`，最后调用 `qa-agent archive`。
+
+其他宿主示例：
+
+```bash
+# Claude Code / OpenCode / Agents：项目级 Skill
+qa-agent configure --project /path/to/your-app --host claude --scope project
+qa-agent configure --project /path/to/your-app --host opencode --scope project
+qa-agent configure --project /path/to/your-app --host agents --scope project
+
+# GitHub Copilot：项目级 Skill + Custom Agent
+qa-agent configure --project /path/to/your-app --host copilot --scope project
+
+# Gemini CLI：项目级 Command
+qa-agent configure --project /path/to/your-app --host gemini --scope project
+```
+
+`configure` 在已经初始化的目标项目上不会覆盖 `.qa-agent/` 业务数据；如果宿主文件已经存在，需要明确加 `--force` 才会替换宿主注入文件。
+
+### 手动分步初始化
+
+如果不希望同时注入宿主，可以先只初始化项目运行边界：
+
+```bash
+cd /path/to/your-app
+qa-agent init --id my-app --name "My App"
+qa-agent install-host cursor --project /path/to/your-app --scope project
+```
+
+`init` 只负责 `.qa-agent/`；`install-host` 或 `configure` 才负责宿主 Skill、Rule 和 Command 注入。
 
 从源码使用：
 
