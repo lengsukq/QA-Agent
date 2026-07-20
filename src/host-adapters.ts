@@ -45,12 +45,12 @@ function copySkill(destination: string, force: boolean): void {
 
 const sharedGuidance = `# QA Agent
 
-1. First run \`qa-agent workflow bootstrap --request "<request>" --module <id> --task <id>\`. Confirm the returned \`bootstrap.taskDirectory\` and \`taskAssets\`, and mirror \`todoList\` into the IDE TodoList when available.
+1. Start with \`qa-agent start --request "<request>" --module <id> --task <id>\`. Confirm the returned \`taskDirectory\`, \`taskAssets\`, \`planHash\`, and mirror \`todoList\` into the IDE TodoList when available.
 2. Show the returned plan and wait for explicit human approval. The Agent cannot approve its own plan.
-3. Use \`task explore\` only for the first approved execution. When an active OperationPlan exists, use \`operation replay\` and follow its JSON without replanning or source review. Never call UI tools unless the response contains \`uiExecutionAllowed: true\`, \`mustStop: false\`, and a \`runId\`.
+3. After approval run \`qa-agent test --module <module> --task <task> [--scenario <scenario>]\`; it automatically selects explore or replay. Never call UI tools unless the response contains \`uiExecutionAllowed: true\`, \`mustStop: false\`, and a \`runId\`.
 4. If a response is BLOCKED, NEEDS_CONFIRMATION, or \`mustStop: true\`, stop immediately. Resolve its \`next\`/\`nextAllowedAction\`; never bypass preflight, continue simulator/browser actions, claim PASS, or write a report manually.
 5. During the Run, record each UI action with a screenshot, record declared assertions with \`run observe\`, cleanup with \`run cleanup\`, then call \`run complete\`. Only the Runtime report under \`tasks/<task>/runs/<run-id>/report.md\` is formal. Never write \`.qa-agent/reports/<name>.md\` or \`Task/reports/\`.
-6. Treat the runtime verdict as authoritative and never fabricate a PASS. Stop before production writes, payments, refunds, deletion, notifications, or permission changes.
+6. Treat the runtime verdict as authoritative and never fabricate a PASS. After a successful Run use \`qa-agent archive --module <module> --task <task>\`; it is a strict completeness gate. Stop before production writes, payments, refunds, deletion, notifications, or permission changes.
 `;
 
 function cursorRule(): string {

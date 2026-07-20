@@ -20,6 +20,7 @@ import { analyzeProjectImpact } from './impact-analysis.ts';
 import { attachRegressionRun, createReleaseCheck, finalizeReleaseCheck, readReleaseCheck, saveReleaseCheck, writeReleaseReport } from './release.ts';
 import { bootstrapWorkflow, workflowStatus } from './workflow.ts';
 import { migrateProjectArtifacts } from './migration.ts';
+import { inspectTaskArchive } from './archive.ts';
 
 const args = process.argv.slice(2);
 const packageMetadata = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
@@ -32,6 +33,9 @@ Commands:
   install-skill [--path SKILLS_DIRECTORY] [--force]   (Codex compatibility alias)
   install-host <codex|claude|cursor|opencode|copilot|gemini|agents> [--scope project|user] [--project PROJECT_DIRECTORY] [--path SKILLS_DIRECTORY] [--force]
   doctor | validate | migrate | index rebuild | prompts sync
+  start --request TEXT --module ID --task ID [--module-name NAME] [--task-name NAME] [--platforms web,android,ios] [--risk low|medium|high|critical]
+  test --module MODULE --task TASK [--scenario SCENARIO] [execution context flags]
+  archive --module MODULE --task TASK
   workflow bootstrap --request TEXT --module ID --task ID [--module-name NAME] [--task-name NAME] [--platforms web,android,ios] [--risk low|medium|high|critical]
   workflow status --module ID --task ID
   operation replay OPERATION_ID --module MODULE --task TASK [execution context flags]
@@ -195,6 +199,28 @@ function addMemory(root: string, id: string, moduleId: string, title: string, co
 
 function root(): string { return requireProjectRoot(); }
 
+function bootstrapFromFlags(projectRoot: string): void {
+  const risk = flag('--risk');
+  if (risk && !['low', 'medium', 'high', 'critical'].includes(risk)) throw new Error('--risk must be low, medium, high, or critical.');
+  output(bootstrapWorkflow(projectRoot, {
+    request: requiredFlag('--request'), moduleId: requiredFlag('--module'), taskId: requiredFlag('--task'),
+    moduleName: flag('--module-name'), taskName: flag('--task-name'), platforms: listFlag('--platforms'),
+    riskLevel: risk as 'low' | 'medium' | 'high' | 'critical' | undefined,
+  }));
+}
+
+function archiveTask(projectRoot: string, moduleId: string, taskId: string): void {
+  const task = readTask(projectRoot, moduleId, taskId);
+  const completeness = inspectTaskArchive(projectRoot, task);
+  if (!completeness.valid) {
+    output({ archived: false, taskDirectory: completeness.taskDirectory, completeness, task });
+    process.exitCode = 1;
+    return;
+  }
+  task.metadata.status = 'archived'; task.metadata.version += 1; task.updatedAt = now(); saveTask(projectRoot, task); rebuildIndexes(projectRoot);
+  output({ ...task, archive: completeness });
+}
+
 async function main(): Promise<void> {
   const [group, action, subject] = args;
   if (!group || group === '--help' || group === '-h' || group === 'help') return output(usage);
@@ -230,19 +256,27 @@ async function main(): Promise<void> {
     const available = availableCapabilities(projectRoot);
     output({ ok: true, projectRoot, availableCapabilities: available, notes: available.includes('browser.interact') ? [] : capabilityAdvice(['browser.interact']) }); return;
   }
+  if (group === 'start') { bootstrapFromFlags(root()); return; }
+  if (group === 'test') {
+    const projectRoot = root(); const moduleId = requiredFlag('--module'); const taskId = requiredFlag('--task'); const task = readTask(projectRoot, moduleId, taskId);
+    const requestedScenario = flag('--scenario');
+    const active = listFiles(join(qaPath(projectRoot, 'modules'), moduleId, 'tasks', taskId, 'operation-plans'), path => /\/v\d+\.json$/.test(path))
+      .map(path => readJson<{ id: string; status: string; scenarioId: string; planHash: string; version: number }>(path))
+      .filter(plan => plan.status === 'active' && plan.planHash === testPlanHash(task) && (!requestedScenario || plan.scenarioId === requestedScenario));
+    if (!requestedScenario && active.length > 1) throw new Error('Multiple active OperationPlans exist; specify --scenario to select one.');
+    const operation = active[0];
+    const started = beginAgentGuidedRun(projectRoot, task, { ...runContextFromFlags(), operationId: operation?.id, scenarioId: operation?.scenarioId ?? requestedScenario });
+    rebuildIndexes(projectRoot);
+    output({ ...executionEnvelope(projectRoot, started), mode: operation ? 'replay' : 'explore', workflow: workflowStatus(projectRoot, moduleId, taskId), canonicalPrompts: readProjectPromptBundle(projectRoot) });
+    return;
+  }
+  if (group === 'archive') { archiveTask(root(), requiredFlag('--module'), requiredFlag('--task')); return; }
   if (group === 'workflow') {
     const projectRoot = root();
     const moduleId = requiredFlag('--module');
     const taskId = requiredFlag('--task');
     if (action === 'bootstrap') {
-      const risk = flag('--risk');
-      if (risk && !['low', 'medium', 'high', 'critical'].includes(risk)) throw new Error('--risk must be low, medium, high, or critical.');
-      const state = bootstrapWorkflow(projectRoot, {
-        request: requiredFlag('--request'), moduleId, taskId,
-        moduleName: flag('--module-name'), taskName: flag('--task-name'),
-        platforms: listFlag('--platforms'), riskLevel: risk as 'low' | 'medium' | 'high' | 'critical' | undefined,
-      });
-      output(state); return;
+      bootstrapFromFlags(projectRoot); return;
     }
     if (action === 'status') { output(workflowStatus(projectRoot, moduleId, taskId)); return; }
     throw new Error(`Unsupported command.
@@ -457,7 +491,7 @@ ${usage}`);
       task.metadata.status = 'ready'; task.metadata.approval = { confirmedBy, confirmedAt: now(), confirmationSource: confirmationSource as 'current-chat-explicit-approval' | 'external-review-record', statement: 'User confirmed the generated test cases and business logic before execution.', planHash: testPlanHash(task) }; task.metadata.version += 1; task.updatedAt = now(); saveTask(projectRoot, task); rebuildIndexes(projectRoot); output(task); return;
     }
     if (action === 'archive') {
-      task.metadata.status = 'archived'; task.metadata.version += 1; task.updatedAt = now(); saveTask(projectRoot, task); rebuildIndexes(projectRoot); output(task); return;
+      archiveTask(projectRoot, moduleId, taskId); return;
     }
     if (action === 'explore') {
       if (flag('--operation')) throw new Error('task explore does not accept --operation. Use operation replay for an active OperationPlan.');

@@ -58,6 +58,23 @@ qa-agent --help
 
 CLI 是执行入口；宿主 Skill 只负责让 Codex、Cursor 等 Agent 知道何时调用哪些 CLI 命令，以及如何使用浏览器、模拟器和其他已批准工具。项目数据、Task、Run、截图和报告始终保存在被测项目的 `.qa-agent/` 内。
 
+## 推荐工作流：start → 对话确认 → test → archive
+
+```bash
+qa-agent configure --project /path/to/your-app --host cursor --scope project
+qa-agent start --request "验证 Checkout 核心流程" --module checkout --task checkout-basic-flow
+# 在 Codex/Cursor 对话中审阅 planHash、Scenario、证据和安全边界，并明确确认
+qa-agent test --module checkout --task checkout-basic-flow
+# Run 完成并生成 Runtime 报告、截图和 OperationPlan 后：
+qa-agent archive --module checkout --task checkout-basic-flow
+```
+
+`start` 只负责创建或复用 Module/Task、生成 Task 目录、Test Plan、Scenario 和 TodoList，并停在 `approval_required`；它不会启动浏览器、模拟器或设备。`test` 只执行已确认的 Task，并自动在首次 `explore` 与兼容的 `replay` 之间选择。`archive` 是严格的可回归门禁：它会检查背景、计划、每个 Scenario 的 active OperationPlan、RegressionSuite、Runtime 报告和实际存在的 Markdown 图片证据；失败时不会改变 Task 状态。
+
+`init` 只初始化被测项目的 `.qa-agent/` 运行边界，不注入宿主 Skill。`configure` 负责“一站式”项目初始化和宿主提示词/Skill 注入；已经初始化的 `.qa-agent` 数据不会被覆盖。宿主 Skill 负责对话确认、TodoList 镜像和实际 UI 工具调用，CLI Runtime 负责状态、证据、报告和归档。
+
+兼容旧项目的底层命令仍保留，包括 `workflow bootstrap`、`task explore`、`task run`、`operation replay`、`task review` 和 `task archive`；新项目优先使用上面的语义入口。
+
 ## 为什么需要 QA Agent
 
 传统自动化测试通常关注：

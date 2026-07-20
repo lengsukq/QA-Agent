@@ -39,6 +39,7 @@ test('initializes, plans, persists, validates, and requires host-driven executio
   run(root, 'init', '--id', 'shop', '--name', 'Shop');
   assert.ok(existsSync(join(root, '.qa-agent', 'project.json')));
   assert.ok(existsSync(join(root, '.qa-agent', 'prompts', 'qa-main.md')));
+  for (const mode of ['start.md', 'test.md', 'review.md', 'archive.md', 'report.md']) assert.ok(existsSync(join(root, '.qa-agent', 'prompts', mode)));
   assert.match(readFileSync(join(root, '.qa-agent', 'prompts', 'execution.md'), 'utf8'), /uiExecutionAllowed=true/);
   assert.doesNotMatch(readFileSync(join(root, '.qa-agent', 'prompts', 'execution.md'), 'utf8'), /[\u3400-\u9fff]/);
   assert.ok(existsSync(join(root, '.qa-agent', 'skills', 'built-in', 'execution-contract.json')));
@@ -73,8 +74,10 @@ test('initializes, plans, persists, validates, and requires host-driven executio
   }
   const validation = JSON.parse(run(root, 'validate'));
   assert.equal(validation.valid, true);
-  const archived = JSON.parse(run(root, 'task', 'archive', 'checkout-basic-flow', '--module', 'checkout'));
-  assert.equal(archived.metadata.status, 'archived');
+  const incompleteArchive = spawnSync(process.execPath, ['--experimental-strip-types', cli, 'task', 'archive', 'checkout-basic-flow', '--module', 'checkout'], { cwd: root, encoding: 'utf8' });
+  assert.notEqual(incompleteArchive.status, 0);
+  assert.match(incompleteArchive.stdout, /Active OperationPlan|successful Runtime Run|RegressionSuite/);
+  assert.equal(readTask(root, 'checkout', 'checkout-basic-flow').metadata.status, 'ready');
 });
 
 test('syncs current closure prompts into an initialized project', () => {

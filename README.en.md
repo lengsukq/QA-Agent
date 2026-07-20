@@ -56,6 +56,23 @@ qa-agent --help
 
 The CLI is the execution entry point. Host Skills tell Codex, Cursor, and other Agents when to call the CLI and how to use approved browser, simulator, and diagnostic tools. Project data, Tasks, Runs, screenshots, and reports always remain inside the tested project's `.qa-agent/` boundary.
 
+## Recommended workflow: start → conversation approval → test → archive
+
+```bash
+qa-agent configure --project /path/to/your-app --host cursor --scope project
+qa-agent start --request "Validate the Checkout core flow" --module checkout --task checkout-basic-flow
+# Review planHash, Scenarios, evidence, and safety boundaries in the Codex/Cursor conversation
+qa-agent test --module checkout --task checkout-basic-flow
+# After the Runtime creates a successful report, screenshots, and OperationPlan:
+qa-agent archive --module checkout --task checkout-basic-flow
+```
+
+`start` creates or reuses the Module/Task, generates the complete Task package and TodoList, and stops at `approval_required`; it never starts a browser, simulator, device, or UI action. `test` executes only an approved Task and automatically selects first-run `explore` or compatible `replay`. `archive` is a strict regression-readiness gate: it checks background, plan, an active current-hash OperationPlan for every Scenario, RegressionSuite coverage, a Runtime-owned report, existing screenshots, Markdown image evidence, and project validation. Failed checks do not change Task state.
+
+`init` only initializes the tested project's `.qa-agent/` runtime boundary and does not inject a host Skill. `configure` performs project initialization plus host Skill/prompt injection and never overwrites an existing `.qa-agent` data set. The host Skill owns conversation approval, TodoList mirroring, and UI tools; the CLI Runtime owns state, evidence, reports, and archiving.
+
+The lower-level commands `workflow bootstrap`, `task explore`, `task run`, `operation replay`, `task review`, and `task archive` remain available for compatibility and automation.
+
 It is not a traditional test script runner. It helps teams work like real QA engineers: understand projects, analyze impact, design test plans, validate business workflows, collect evidence, generate reports, and continuously build regression knowledge.
 
 ## Why QA Agent

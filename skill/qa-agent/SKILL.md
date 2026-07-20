@@ -5,6 +5,17 @@ description: Plan, safely execute, verify, report, and retain project-level QA w
 
 # QA Agent
 
+## CLI-first lifecycle
+
+The host Skill is one entry point; the CLI owns configuration, state, execution, reports, and archiving. The host owns the conversation, TodoList mirror, human confirmation, and UI tools.
+
+1. Run `qa-agent start --request "..." --module <module> --task <task>` and stop at `approval_required`.
+2. Present the plan and wait for explicit user confirmation. Persist it through the internal `qa-agent task review ...` command.
+3. Run `qa-agent test --module <module> --task <task> [--scenario <scenario>]`; it selects explore or replay automatically.
+4. After a successful Runtime Run, run `qa-agent archive --module <module> --task <task>`; it verifies the complete Task package before archiving.
+
+The compatibility commands `workflow bootstrap`, `task explore`, `task run`, `operation replay`, and `task archive` remain available for existing projects.
+
 Use this skill as a local-first QA operating system. Treat real business results as the source of truth; source code only assists diagnosis.
 
 ## Mandatory bootstrap gate
