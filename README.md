@@ -10,6 +10,33 @@ QA Agent 是一个面向真实业务验证和回归测试的 AI QA Agent。
 
 ## CLI 快速开始
 
+### 从 npm 全局安装 CLI（推荐）
+
+```bash
+npm install --global qa-agent-skill
+qa-agent --version
+qa-agent --help
+```
+
+升级到最新版本：
+
+```bash
+npm update --global qa-agent-skill
+```
+
+卸载：
+
+```bash
+npm uninstall --global qa-agent-skill
+```
+
+如果 npm 全局目录没有写权限，可以使用项目级安装并通过 `npx` 运行：
+
+```bash
+npm install --save-dev qa-agent-skill
+npx qa-agent --help
+```
+
 从源码使用：
 
 ```bash
@@ -48,13 +75,6 @@ qa-agent configure \
 ```
 
 `configure` 只负责项目初始化和宿主注入；后续通过 `qa-agent workflow`、`qa-agent task`、`qa-agent run`、`qa-agent operation` 等命令执行 QA 工作流。
-
-如果已发布到 npm，可直接安装 CLI：
-
-```bash
-npm install --global qa-agent-skill
-qa-agent --help
-```
 
 CLI 是执行入口；宿主 Skill 只负责让 Codex、Cursor 等 Agent 知道何时调用哪些 CLI 命令，以及如何使用浏览器、模拟器和其他已批准工具。项目数据、Task、Run、截图和报告始终保存在被测项目的 `.qa-agent/` 内。
 

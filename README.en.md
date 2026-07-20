@@ -8,6 +8,33 @@ QA Agent is a CLI-first AI QA Engineer designed for real business validation and
 
 ## CLI Quick Start
 
+### Install the CLI globally from npm (recommended)
+
+```bash
+npm install --global qa-agent-skill
+qa-agent --version
+qa-agent --help
+```
+
+Upgrade to the latest release:
+
+```bash
+npm update --global qa-agent-skill
+```
+
+Uninstall:
+
+```bash
+npm uninstall --global qa-agent-skill
+```
+
+If your npm global directory is not writable, install it locally and run it with `npx`:
+
+```bash
+npm install --save-dev qa-agent-skill
+npx qa-agent --help
+```
+
 Use the CLI from a source checkout:
 
 ```bash
@@ -46,13 +73,6 @@ qa-agent configure \
 ```
 
 `configure` only initializes the project and injects the host integration. Use `qa-agent workflow`, `qa-agent task`, `qa-agent run`, and `qa-agent operation` for the QA lifecycle afterward.
-
-If the package has been published to npm, install the CLI directly:
-
-```bash
-npm install --global qa-agent-skill
-qa-agent --help
-```
 
 The CLI is the execution entry point. Host Skills tell Codex, Cursor, and other Agents when to call the CLI and how to use approved browser, simulator, and diagnostic tools. Project data, Tasks, Runs, screenshots, and reports always remain inside the tested project's `.qa-agent/` boundary.
 
