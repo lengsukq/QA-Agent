@@ -4,17 +4,19 @@ import { availableCapabilities, capabilityAdvice } from './capabilities.ts';
 import { beginAgentGuidedRun, beginRegressionRun, buildExecutionSnapshot, completeAgentGuidedRun, completeRegressionRun, recordAgentStep, recordHostEvidence, recordRecoveryAttempt, recordVisualFinding } from './engine.ts';
 import { readIndex, rebuildIndexes } from './indexer.ts';
 import { createTaskSkeleton, planModule, taskPlan } from './planning.ts';
-import { createModule, findProjectRoot, initializeProject, modulePath, qaPath, readModule, readRunById, readTask, requireProjectRoot, saveTask, taskReportDirectory } from './project.ts';
+import { createModule, findProjectRoot, initializeProject, modulePath, qaPath, readModule, readRunById, readTask, requireProjectRoot, saveTask, syncProjectPrompts, taskReportDirectory } from './project.ts';
 import { readProject } from './project.ts';
-import { assertSafeId, now, readJson, writeJsonAtomic } from './store.ts';
-import type { ExecutionSnapshot, Locator, PermissionStatus, ProjectMemory, RunStatus } from './types.ts';
+import { assertSafeId, listFiles, now, readJson, writeJsonAtomic } from './store.ts';
+import type { ExecutionSnapshot, Locator, PermissionStatus, ProjectMemory, RegressionProfile, RegressionRun, ReleaseCheck, RunStatus, TestPriority, TestTask } from './types.ts';
 import { validateProject, validateSkill } from './validation.ts';
 import { createMemoryCandidate, reviewMemory } from './memory.ts';
 import { installHostIntegration, supportedHosts } from './host-adapters.ts';
 import { testPlanHash } from './approval.ts';
 import { hostCapabilityDiagnosis } from './capabilities.ts';
 import { operationSummary, readOperation, reviewOperation } from './operations.ts';
-import { buildModuleRegressionSuite, readTaskRegressionSuite, syncTaskRegressionSuite } from './regression.ts';
+import { buildModuleRegressionSuite, buildReleaseRegressionSuite, readTaskRegressionSuite, syncTaskRegressionSuite } from './regression.ts';
+import { analyzeProjectImpact } from './impact-analysis.ts';
+import { attachRegressionRun, createReleaseCheck, finalizeReleaseCheck, readReleaseCheck, saveReleaseCheck, writeReleaseReport } from './release.ts';
 
 const args = process.argv.slice(2);
 const usage = `qa-agent — local-first QA Agent MVP
@@ -23,14 +25,17 @@ Commands:
   init [--id ID] [--name NAME] [--description TEXT] [--platforms web,android,ios]
   install-skill [--path SKILLS_DIRECTORY] [--force]   (Codex compatibility alias)
   install-host <codex|claude|cursor|opencode|copilot|gemini|agents> [--scope project|user] [--project PROJECT_DIRECTORY] [--path SKILLS_DIRECTORY] [--force]
-  doctor | validate | index rebuild
+  doctor | validate | index rebuild | prompts sync
+  impact analyze [--base REF] [--head REF] [--changed-files FILE1,FILE2]
+  release check [--profile fast|normal|full] [--base REF] [--head REF] [--changed-files FILE1,FILE2] [--plan-only] [execution context flags]
+  release list | release show|complete|report CHECK_ID
   host list | host import --file HOST_CAPABILITIES.json | host doctor [--platform android|ios]
   context module MODULE
-  module list | module create ID --name NAME [--description TEXT] [--platforms web,android,ios] | module update ID [--name NAME] [--description TEXT] [--risk LEVEL] | module archive ID | module plan ID | module coverage ID
-  task list | task create ID --module MODULE [--name NAME] | task plan ID --module MODULE | task run ID --module MODULE [--operation OPERATION_ID] [--scenario SCENARIO] [--environment ENV] [--platform PLATFORM] [--role ROLE] [--device DEVICE] [--device-model MODEL] [--os-version VERSION] [--app-version VERSION] [--web-build BUILD] [--test-data-fingerprint FINGERPRINT] | task operation list|show|review ID --module MODULE [--approve|--reject] | task regression sync|show|run|complete ID --module MODULE | task review ID --module MODULE --approve --confirmed-by USER | task archive ID --module MODULE
-  module regression show|run|complete MODULE
+  module list | module create ID --name NAME [--description TEXT] [--platforms web,android,ios] [--source-hints PATHS] [--entry-points PATHS] [--dependencies MODULES] | module update ID [--name NAME] [--description TEXT] [--risk LEVEL] [same mapping flags] | module archive ID | module plan ID | module coverage ID
+  task list | task create ID --module MODULE [--name NAME] [--priority p0|p1|p2|p3] [--frequency every-change|every-release|scheduled|manual] [--release-gate true|false] [--estimated-minutes N] [--tags TAGS] [--triggers PATHS] [--golden-path] | task update ID --module MODULE [same metadata flags] | task plan ID --module MODULE | task run ID --module MODULE [--operation OPERATION_ID] [--scenario SCENARIO] [--environment ENV] [--platform PLATFORM] [--role ROLE] [--device DEVICE] [--device-model MODEL] [--os-version VERSION] [--app-version VERSION] [--web-build BUILD] [--test-data-fingerprint FINGERPRINT] | task operation list|show|review ID --module MODULE [--approve|--reject] | task regression sync|show|run|complete ID --module MODULE | task review ID --module MODULE --approve --confirmed-by USER | task archive ID --module MODULE
+  module regression show|run|complete MODULE [--priority p0|p1|p2|p3]
   memory list | memory search TEXT | memory add ID --module MODULE [--task TASK] --title TEXT --content TEXT | memory review ID --module MODULE [--task TASK] --approve|--reject
-  run step RUN --action TEXT --detail TEXT --screenshot PATH [--operation-action launch|navigate|click|input|fill|swipe|back|wait|assert|screenshot|reset|restart-app] [--safety-action ACTION] [--scenario SCENARIO] [--status passed|failed|paused|blocked|adapted] [--visual-inspection performed|not-required|skipped] [--operation-step STEP] [--locator-strategy STRATEGY] [--locator-value VALUE] [--actual-locator-strategy STRATEGY] [--actual-locator-value VALUE] [--adaptation TEXT]
+  run step RUN --action TEXT --detail TEXT --screenshot PATH [--operation-action launch|navigate|click|input|fill|swipe|back|wait|assert|screenshot|reset|restart-app] [--safety-action ACTION] [--scenario SCENARIO] [--status passed|failed|paused|blocked|adapted] [--visual-inspection performed|not-required|skipped] [--operation-step STEP] [--locator-strategy STRATEGY] [--locator-value VALUE] [--actual-locator-strategy STRATEGY] [--actual-locator-value VALUE] [--input-refs key=ref,key=ref] [--expected-state TEXT] [--actual-state TEXT] [--adaptation TEXT]
   run evidence RUN --type TYPE --summary TEXT [--file PATH]
   run recover RUN --action wait|refresh|back|restart-app|reset-sandbox-data|reconnect-mcp|fallback-locator|resume-checkpoint --reason TEXT --detail TEXT --outcome continued|blocked|paused|failed [--failed-step STEP]
   run observe RUN --scenario ID --assertion ID --expected TEXT --actual TEXT --status passed|failed|paused|blocked [--screenshot PATH]
@@ -41,7 +46,61 @@ Commands:
 function flag(name: string): string | undefined { const position = args.indexOf(name); return position === -1 ? undefined : args[position + 1]; }
 function requiredFlag(name: string): string { const value = flag(name); if (!value || value.startsWith('--')) throw new Error(`${name} is required.`); return value; }
 function listFlag(name: string): string[] | undefined { const value = flag(name); return value ? [...new Set(value.split(',').map(item => item.trim()).filter(Boolean))] : undefined; }
+function recordFlag(name: string): Record<string, string> | undefined {
+  const entries = listFlag(name); if (!entries) return undefined;
+  const output: Record<string, string> = {};
+  for (const entry of entries) {
+    const separator = entry.indexOf('=');
+    if (separator <= 0 || separator === entry.length - 1) throw new Error(`${name} entries must use key=value.`);
+    output[entry.slice(0, separator).trim()] = entry.slice(separator + 1).trim();
+  }
+  return output;
+}
 function output(value: unknown): void { console.log(typeof value === 'string' ? value : JSON.stringify(value, null, 2)); }
+
+function regressionProfile(): RegressionProfile {
+  const value = flag('--profile') ?? 'fast';
+  if (!['fast', 'normal', 'full'].includes(value)) throw new Error('--profile must be fast, normal, or full.');
+  return value as RegressionProfile;
+}
+
+function priorityValue(value = flag('--priority')): TestPriority | undefined {
+  if (!value) return undefined;
+  if (!['p0', 'p1', 'p2', 'p3'].includes(value)) throw new Error('--priority must be p0, p1, p2, or p3.');
+  return value as TestPriority;
+}
+
+function booleanFlag(name: string): boolean | undefined {
+  const value = flag(name);
+  if (value === undefined) return undefined;
+  if (!['true', 'false'].includes(value)) throw new Error(`${name} must be true or false.`);
+  return value === 'true';
+}
+
+function applyTaskRegressionMetadata(task: TestTask): TestTask {
+  const priority = priorityValue(); if (priority) task.metadata.priority = priority;
+  const frequency = flag('--frequency');
+  if (frequency) {
+    if (!['every-change', 'every-release', 'scheduled', 'manual'].includes(frequency)) throw new Error('--frequency must be every-change, every-release, scheduled, or manual.');
+    task.metadata.frequency = frequency as NonNullable<TestTask['metadata']['frequency']>;
+  }
+  const releaseGate = booleanFlag('--release-gate'); if (releaseGate !== undefined) task.metadata.releaseGate = releaseGate;
+  const estimated = flag('--estimated-minutes');
+  if (estimated !== undefined) {
+    const value = Number(estimated); if (!Number.isFinite(value) || value <= 0) throw new Error('--estimated-minutes must be a positive number.');
+    task.metadata.estimatedDurationMinutes = value;
+  }
+  const tags = listFlag('--tags'); if (tags) task.metadata.tags = tags;
+  const triggers = listFlag('--triggers'); if (triggers) task.regression.triggers = triggers;
+  if (args.includes('--golden-path')) {
+    task.metadata.tags = [...new Set([...(task.metadata.tags ?? []), 'golden-path'])];
+    task.metadata.releaseGate = true;
+    task.metadata.frequency = 'every-release';
+    task.metadata.priority = 'p0';
+  }
+  task.updatedAt = now();
+  return task;
+}
 function locatorFromFlags(prefix = ''): Locator | undefined {
   const strategy = flag(`--${prefix}locator-strategy`); const value = flag(`--${prefix}locator-value`);
   if (!strategy && !value) return undefined;
@@ -107,6 +166,57 @@ async function main(): Promise<void> {
     config.connections = snapshot.connections.map(connection => ({ id: connection.id, capabilities: [...new Set(connection.capabilities)], status: connection.status ?? 'available', permissionStatus: connection.permissionStatus ?? 'unknown', version: connection.version, host: snapshot.host, attestedAt: snapshot.collectedAt ?? now() }));
     writeJsonAtomic(path, config); output(config); return;
   }
+  if (group === 'impact') {
+    if (action !== 'analyze') throw new Error(`Unsupported command.
+
+${usage}`);
+    const analysis = analyzeProjectImpact(root(), { base: flag('--base'), head: flag('--head'), changedFiles: listFlag('--changed-files') });
+    output(analysis); return;
+  }
+  if (group === 'release') {
+    const projectRoot = root();
+    if (action === 'list') {
+      const checks = listFiles(qaPath(projectRoot, 'release-checks'), path => path.endsWith('.json')).map(path => readJson<ReleaseCheck>(path)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      output(checks); return;
+    }
+    if (action === 'check') {
+      const profile = regressionProfile();
+      const impact = analyzeProjectImpact(projectRoot, { base: flag('--base'), head: flag('--head'), changedFiles: listFlag('--changed-files') });
+      const suite = buildReleaseRegressionSuite(projectRoot, impact, profile);
+      const check = createReleaseCheck(suite, impact, profile);
+      saveReleaseCheck(projectRoot, check);
+      writeReleaseReport(projectRoot, check);
+      if (args.includes('--plan-only')) { output(check); return; }
+      const first = suite.members[0];
+      if (!first) {
+        check.status = 'blocked'; check.releaseDecision = 'review'; check.updatedAt = now();
+        saveReleaseCheck(projectRoot, check); writeReleaseReport(projectRoot, check); output(check); return;
+      }
+      const task = readTask(projectRoot, first.moduleId, first.taskId);
+      const context = buildExecutionSnapshot(projectRoot, task, { environment: flag('--environment'), platform: flag('--platform'), role: flag('--role'), device: flag('--device'), deviceModel: flag('--device-model'), osVersion: flag('--os-version'), appVersion: flag('--app-version'), webBuild: flag('--web-build'), testDataFingerprint: flag('--test-data-fingerprint') });
+      const regressionRun = beginRegressionRun(projectRoot, suite, context);
+      attachRegressionRun(check, regressionRun);
+      if (!['running', 'pending'].includes(regressionRun.status)) finalizeReleaseCheck(check, regressionRun);
+      saveReleaseCheck(projectRoot, check); writeReleaseReport(projectRoot, check, regressionRun); rebuildIndexes(projectRoot);
+      output({ releaseCheck: check, regressionRun }); return;
+    }
+    if (!subject) throw new Error('release check id is required.');
+    const check = readReleaseCheck(projectRoot, subject);
+    if (action === 'show') { output(check); return; }
+    if (action === 'report') { output(qaPath(projectRoot, 'reports', `${check.id}.md`)); return; }
+    if (action === 'complete') {
+      if (!check.regressionRunId) throw new Error(`Release check ${check.id} has no regression run.`);
+      const regressionRun = readJson<RegressionRun>(qaPath(projectRoot, 'regression-runs', `${check.regressionRunId}.json`));
+      const completed = completeRegressionRun(projectRoot, regressionRun);
+      attachRegressionRun(check, completed);
+      if (!['running', 'pending'].includes(completed.status)) finalizeReleaseCheck(check, completed);
+      saveReleaseCheck(projectRoot, check); writeReleaseReport(projectRoot, check, completed); rebuildIndexes(projectRoot);
+      output({ releaseCheck: check, regressionRun: completed }); return;
+    }
+    throw new Error(`Unsupported command.
+
+${usage}`);
+  }
   if (group === 'validate') {
     const result = validateProject(root()); output(result); if (!result.valid) process.exitCode = 1; return;
   }
@@ -119,12 +229,13 @@ async function main(): Promise<void> {
     output({ project: readProject(projectRoot), module, memories, tasks, skills: readIndex(projectRoot, 'skills'), capabilities: availableCapabilities(projectRoot), policy: readJson(qaPath(projectRoot, 'policies.json')) }); return;
   }
   if (group === 'index' && action === 'rebuild') { output(rebuildIndexes(root())); return; }
+  if (group === 'prompts' && action === 'sync') { output({ prompts: syncProjectPrompts(root()) }); return; }
   if (group === 'module') {
     const projectRoot = root();
     if (action === 'list') return output(readIndex(projectRoot, 'modules'));
     if (action === 'create') {
       if (!subject) throw new Error('module id is required.');
-      const module = createModule(projectRoot, { id: subject, name: requiredFlag('--name'), description: flag('--description') ?? '', platforms: listFlag('--platforms'), riskLevel: (flag('--risk') as 'low' | 'medium' | 'high' | 'critical' | undefined) });
+      const module = createModule(projectRoot, { id: subject, name: requiredFlag('--name'), description: flag('--description') ?? '', platforms: listFlag('--platforms'), riskLevel: (flag('--risk') as 'low' | 'medium' | 'high' | 'critical' | undefined), sourceHints: listFlag('--source-hints'), entryPoints: listFlag('--entry-points'), dependencies: listFlag('--dependencies') });
       rebuildIndexes(projectRoot); output(module); return;
     }
     if (action === 'plan') {
@@ -145,6 +256,9 @@ async function main(): Promise<void> {
       if (action === 'update') {
         module.name = flag('--name') ?? module.name; module.description = flag('--description') ?? module.description;
         const risk = flag('--risk'); if (risk) { if (!['low', 'medium', 'high', 'critical'].includes(risk)) throw new Error('--risk must be low, medium, high, or critical.'); module.riskLevel = risk as typeof module.riskLevel; }
+        const sourceHints = listFlag('--source-hints'); if (sourceHints) module.sourceHints = sourceHints;
+        const entryPoints = listFlag('--entry-points'); if (entryPoints) module.entryPoints = entryPoints;
+        const dependencies = listFlag('--dependencies'); if (dependencies) module.dependencies = dependencies;
       } else module.status = 'archived';
       module.revision = (module.revision ?? 1) + 1; module.updatedAt = now(); writeJsonAtomic(join(modulePath(projectRoot, subject), 'module.json'), module); rebuildIndexes(projectRoot); output(module); return;
     }
@@ -155,7 +269,12 @@ async function main(): Promise<void> {
     const moduleId = requiredFlag('--module');
     if (!subject) throw new Error('task id is required.');
     if (action === 'create') {
-      const task = createTaskSkeleton(readModule(projectRoot, moduleId), subject, flag('--name'));
+      const task = applyTaskRegressionMetadata(createTaskSkeleton(readModule(projectRoot, moduleId), subject, flag('--name')));
+      saveTask(projectRoot, task); rebuildIndexes(projectRoot); output(task); return;
+    }
+    if (action === 'update') {
+      const task = applyTaskRegressionMetadata(readTask(projectRoot, moduleId, subject));
+      const name = flag('--name'); if (name) task.metadata.name = name;
       saveTask(projectRoot, task); rebuildIndexes(projectRoot); output(task); return;
     }
     const nestedAction = action === 'operation' || action === 'regression' ? subject : undefined;
@@ -182,7 +301,7 @@ async function main(): Promise<void> {
         const suite = readTaskRegressionSuite(projectRoot, task); const context = buildExecutionSnapshot(projectRoot, task, { environment: flag('--environment'), platform: flag('--platform'), role: flag('--role'), scenarioId: flag('--scenario'), device: flag('--device'), deviceModel: flag('--device-model'), osVersion: flag('--os-version'), appVersion: flag('--app-version'), webBuild: flag('--web-build'), testDataFingerprint: flag('--test-data-fingerprint') });
         const started = beginRegressionRun(projectRoot, suite, context); rebuildIndexes(projectRoot); return output(started);
       }
-      if (regressionAction === 'complete') { const regressionRun = readJson(qaPath(projectRoot, 'regression-runs', `${requiredFlag('--run')}.json`)); const completed = completeRegressionRun(projectRoot, regressionRun); rebuildIndexes(projectRoot); return output(completed); }
+      if (regressionAction === 'complete') { const regressionRun = readJson<RegressionRun>(qaPath(projectRoot, 'regression-runs', `${requiredFlag('--run')}.json`)); const completed = completeRegressionRun(projectRoot, regressionRun); rebuildIndexes(projectRoot); return output(completed); }
       throw new Error('Regression action must be sync, show, or run.');
     }
     if (action === 'review') {
@@ -230,7 +349,7 @@ async function main(): Promise<void> {
     if (action === 'show') return output(run);
     if (action === 'report') return output(join(taskReportDirectory(projectRoot, run.moduleId, run.taskId), `${subject}.md`));
     if (action === 'step') {
-      const updated = recordAgentStep(projectRoot, subject, { action: requiredFlag('--action'), operationAction: flag('--operation-action') as 'launch' | 'navigate' | 'click' | 'input' | 'fill' | 'swipe' | 'back' | 'wait' | 'assert' | 'screenshot' | 'reset' | 'restart-app' | undefined, safetyAction: flag('--safety-action'), detail: requiredFlag('--detail'), screenshotPath: requiredFlag('--screenshot'), status: (flag('--status') as RunStatus | undefined) ?? 'passed', visualInspection: (flag('--visual-inspection') as 'performed' | 'not-required' | 'not-applicable' | 'skipped' | undefined) ?? 'not-required', operationStepId: flag('--operation-step'), scenarioId: flag('--scenario'), locator: locatorFromFlags(), actualLocator: locatorFromFlags('actual-'), adaptation: flag('--adaptation') });
+      const updated = recordAgentStep(projectRoot, subject, { action: requiredFlag('--action'), operationAction: flag('--operation-action') as 'launch' | 'navigate' | 'click' | 'input' | 'fill' | 'swipe' | 'back' | 'wait' | 'assert' | 'screenshot' | 'reset' | 'restart-app' | undefined, safetyAction: flag('--safety-action'), detail: requiredFlag('--detail'), screenshotPath: requiredFlag('--screenshot'), status: (flag('--status') as RunStatus | undefined) ?? 'passed', visualInspection: (flag('--visual-inspection') as 'performed' | 'not-required' | 'not-applicable' | 'skipped' | undefined) ?? 'not-required', operationStepId: flag('--operation-step'), scenarioId: flag('--scenario'), locator: locatorFromFlags(), actualLocator: locatorFromFlags('actual-'), inputRefs: recordFlag('--input-refs'), expectedState: flag('--expected-state'), actualState: flag('--actual-state'), adaptation: flag('--adaptation') });
       output(updated); return;
     }
     if (action === 'evidence') {
@@ -256,13 +375,13 @@ async function main(): Promise<void> {
     const moduleId = args[3];
     if (!['show', 'run', 'complete'].includes(regressionAction ?? '')) throw new Error(`Unsupported command.\n\n${usage}`);
     if (!moduleId || moduleId.startsWith('--')) throw new Error('module id is required.');
-    if (regressionAction === 'show') return output(buildModuleRegressionSuite(projectRoot, moduleId));
+    if (regressionAction === 'show') return output(buildModuleRegressionSuite(projectRoot, moduleId, priorityValue() ?? 'p3'));
     if (regressionAction === 'run') {
-      const suite = buildModuleRegressionSuite(projectRoot, moduleId); const first = suite.members[0]; if (!first) throw new Error(`Module ${moduleId} has no active OperationPlan.`);
+      const suite = buildModuleRegressionSuite(projectRoot, moduleId, priorityValue() ?? 'p3'); const first = suite.members[0]; if (!first) throw new Error(`Module ${moduleId} has no active OperationPlan.`);
       const task = readTask(projectRoot, moduleId, first.taskId); const context = buildExecutionSnapshot(projectRoot, task, { environment: flag('--environment'), platform: flag('--platform'), role: flag('--role'), device: flag('--device'), deviceModel: flag('--device-model'), osVersion: flag('--os-version'), appVersion: flag('--app-version'), webBuild: flag('--web-build'), testDataFingerprint: flag('--test-data-fingerprint') });
       const started = beginRegressionRun(projectRoot, suite, context); rebuildIndexes(projectRoot); return output(started);
     }
-    if (regressionAction === 'complete') { const regressionRun = readJson(qaPath(projectRoot, 'regression-runs', `${requiredFlag('--run')}.json`)); const completed = completeRegressionRun(projectRoot, regressionRun); rebuildIndexes(projectRoot); return output(completed); }
+    if (regressionAction === 'complete') { const regressionRun = readJson<RegressionRun>(qaPath(projectRoot, 'regression-runs', `${requiredFlag('--run')}.json`)); const completed = completeRegressionRun(projectRoot, regressionRun); rebuildIndexes(projectRoot); return output(completed); }
     throw new Error('Module regression action must be show, run, or complete.');
   }
   if (group === 'skill') {

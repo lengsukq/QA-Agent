@@ -47,9 +47,16 @@ function validateDomainObject(path: string): string[] {
     }
   }
   if (/\/regression-suite\.json$/.test(path)) {
-    if (value.apiVersion !== 'qa-agent/v2' || value.kind !== 'RegressionSuite' || !['task', 'module'].includes(value.scope) || !['draft', 'active', 'stale', 'superseded'].includes(value.status)) errors.push(`${path}: invalid RegressionSuite.`);
+    if (value.apiVersion !== 'qa-agent/v2' || value.kind !== 'RegressionSuite' || !['task', 'module', 'release'].includes(value.scope) || !['draft', 'active', 'stale', 'superseded'].includes(value.status)) errors.push(`${path}: invalid RegressionSuite.`);
     if (!Array.isArray(value.members)) errors.push(`${path}: RegressionSuite members must be an array.`);
+    if (!['p0', 'p1', 'p2', 'p3'].includes(value.priorityThreshold)) errors.push(`${path}: RegressionSuite requires a valid priorityThreshold.`);
+    for (const [index, member] of (value.members ?? []).entries()) {
+      if (!isSafeId(member.taskId) || !isSafeId(member.moduleId) || !isSafeId(member.scenarioId)) errors.push(`${path}: member ${index + 1} has invalid identity.`);
+      if (!['p0', 'p1', 'p2', 'p3'].includes(member.priority)) errors.push(`${path}: member ${index + 1} has invalid priority.`);
+    }
   }
+  if (/\/impact-analysis\/[^/]+\.json$/.test(path) && (value.apiVersion !== 'qa-agent/v2' || value.kind !== 'ImpactAnalysis' || !Array.isArray(value.changedFiles) || !Array.isArray(value.impactedModules))) errors.push(`${path}: invalid ImpactAnalysis.`);
+  if (/\/release-checks\/[^/]+\.json$/.test(path) && (value.apiVersion !== 'qa-agent/v2' || value.kind !== 'ReleaseCheck' || !['fast', 'normal', 'full'].includes(value.profile) || !['pending', 'go', 'no-go', 'review'].includes(value.releaseDecision))) errors.push(`${path}: invalid ReleaseCheck.`);
   return errors;
 }
 
@@ -66,8 +73,10 @@ export function validateProject(root: string): ValidationResult {
   files.push(...listFiles(qaPath(root, 'modules'), path => path.endsWith('/test-plan.json')).map(path => [path, ['apiVersion', 'kind', 'taskId', 'moduleId', 'version', 'planHash', 'scenarioRefs', 'capabilities', 'safety', 'evidencePolicy', 'recoveryPolicy', 'status']] as [string, string[]]));
   files.push(...listFiles(qaPath(root, 'modules'), path => /\/operation-plans\/[^/]+\/v\d+\.json$/.test(path)).map(path => [path, ['apiVersion', 'kind', 'id', 'version', 'status', 'taskId', 'moduleId', 'scenarioId', 'planHash', 'executionSnapshot', 'steps']] as [string, string[]]));
   files.push(...listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/runs\/[^/]+\/run\.json$/.test(path)).map(path => [path, ['id', 'taskId', 'moduleId', 'context', 'status', 'steps', 'startedAt']] as [string, string[]]));
-  files.push(...listFiles(qaPath(root, 'modules'), path => /\/regression-suite\.json$/.test(path)).map(path => [path, ['apiVersion', 'kind', 'id', 'scope', 'moduleId', 'members', 'suiteHash', 'status']] as [string, string[]]));
-  files.push(...listFiles(qaPath(root, 'regression-runs'), path => path.endsWith('.json')).map(path => [path, ['apiVersion', 'kind', 'id', 'suiteId', 'suiteVersion', 'suiteHash', 'moduleId', 'context', 'status', 'childRuns', 'startedAt']] as [string, string[]]));
+  files.push(...listFiles(qaPath(root, 'modules'), path => /\/regression-suite\.json$/.test(path)).map(path => [path, ['apiVersion', 'kind', 'id', 'scope', 'name', 'purpose', 'moduleId', 'moduleIds', 'members', 'priorityThreshold', 'suiteHash', 'status']] as [string, string[]]));
+  files.push(...listFiles(qaPath(root, 'regression-runs'), path => path.endsWith('.json')).map(path => [path, ['apiVersion', 'kind', 'id', 'suiteId', 'suiteName', 'suiteScope', 'suiteVersion', 'suiteHash', 'moduleId', 'moduleIds', 'priorityThreshold', 'context', 'status', 'childRuns', 'startedAt']] as [string, string[]]));
+  files.push(...listFiles(qaPath(root, 'impact-analysis'), path => path.endsWith('.json')).map(path => [path, ['apiVersion', 'kind', 'id', 'changedFiles', 'impactedModules', 'selectedTasks', 'unmatchedFiles', 'generatedAt']] as [string, string[]]));
+  files.push(...listFiles(qaPath(root, 'release-checks'), path => path.endsWith('.json')).map(path => [path, ['apiVersion', 'kind', 'id', 'name', 'profile', 'priorityThreshold', 'impactAnalysis', 'suite', 'status', 'releaseDecision', 'blockers', 'createdAt', 'updatedAt']] as [string, string[]]));
   files.push(...listFiles(qaPath(root, 'modules'), path => /\/memory\/[^/]+\.json$/.test(path)).map(path => [path, ['id', 'type', 'title', 'content', 'knowledgeLevel', 'confidence', 'source']] as [string, string[]]));
   files.push(...listFiles(qaPath(root, 'shared-memory', 'entries'), path => path.endsWith('.json')).map(path => [path, ['id', 'type', 'title', 'content', 'knowledgeLevel', 'confidence', 'source']] as [string, string[]]));
   files.push(...listFiles(qaPath(root, 'skills'), path => path.endsWith('.json')).map(path => [path, ['apiVersion', 'kind', 'metadata', 'requirements', 'safety', 'outputs']] as [string, string[]]));

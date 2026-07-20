@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { beginAgentGuidedRun, beginRegressionRun, buildExecutionSnapshot, completeAgentGuidedRun, completeRegressionRun, recordAgentStep, recordRecoveryAttempt, recordVisualFinding } from '../src/engine.ts';
 import { listOperations, reviewOperation } from '../src/operations.ts';
-import { createModule, initializeProject, readTask, saveTask, taskDirectory, taskReportDirectory } from '../src/project.ts';
+import { createModule, initializeProject, readRunById, readTask, saveTask, taskDirectory, taskReportDirectory } from '../src/project.ts';
 import { createTaskSkeleton } from '../src/planning.ts';
 import { reviewMemory } from '../src/memory.ts';
 import { testPlanHash } from '../src/approval.ts';
@@ -71,6 +71,18 @@ test('initializes, plans, persists, validates, and requires host-driven executio
   assert.equal(validation.valid, true);
   const archived = JSON.parse(run(root, 'task', 'archive', 'checkout-basic-flow', '--module', 'checkout'));
   assert.equal(archived.metadata.status, 'archived');
+});
+
+test('syncs current closure prompts into an initialized project', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-prompts-'));
+  initializeProject(root, { id: 'prompt-fixture' });
+  const executionPrompt = join(root, '.qa-agent', 'prompts', 'execution.md');
+  writeFileSync(executionPrompt, 'old prompt', 'utf8');
+  const result = JSON.parse(run(root, 'prompts', 'sync'));
+  assert.ok(result.prompts.includes(executionPrompt));
+  const text = readFileSync(executionPrompt, 'utf8');
+  assert.match(text, /passed run step.*never substitutes for run observe/i);
+  assert.match(text, /operationCandidateIssues/);
 });
 
 test('validates the installable skill', () => {
@@ -141,6 +153,8 @@ test('records agent-guided visual business verification with screenshot evidence
   writeFileSync(screenshot, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'));
   const agentRun = beginAgentGuidedRun(root, task);
   recordAgentStep(root, agentRun.id, { action: '打开结算页', detail: 'Agent opened the real checkout page.', screenshotPath: screenshot });
+  assert.throws(() => completeAgentGuidedRun(root, task, agentRun.id), /cannot complete.*run observe/i);
+  assert.equal(readRunById(root, agentRun.id).status, 'running');
   assert.throws(() => recordVisualFinding(root, agentRun.id, { scenarioId: 'happy-path', assertionId: 'business-outcome', expected: 'Checkout summary is visible.', actual: 'Checkout summary is visible.', status: 'passed' }), /requires a screenshot/);
   recordVisualFinding(root, agentRun.id, { scenarioId: 'happy-path', assertionId: 'business-outcome', expected: 'Checkout summary is visible.', actual: 'Checkout summary is visible and the amount is displayed.', status: 'passed', screenshotPath: screenshot });
   const completed = completeAgentGuidedRun(root, task, agentRun.id);
@@ -148,11 +162,40 @@ test('records agent-guided visual business verification with screenshot evidence
   assert.equal(completed.visualFindings.length, 1);
   assert.equal(completed.memoryCandidates?.length, 1);
   assert.match(completed.memoryCandidates?.[0] ?? '', /^observed-/);
+  assert.equal(completed.operationCandidates, undefined);
+  assert.ok(completed.operationCandidateIssues?.[0]?.reasons.some(reason => /operationAction is missing/.test(reason)));
   assert.ok(existsSync(join(taskDirectory(root, 'checkout', 'checkout-visual-flow'), completed.visualFindings[0]!.screenshotPath!)));
   const report = readFileSync(join(taskReportDirectory(root, 'checkout', 'checkout-visual-flow'), `${agentRun.id}.md`), 'utf8');
   assert.match(report, /测试用例与业务逻辑/);
   assert.match(report, /视觉业务验证/);
   assert.match(report, /!\[happy-path business-outcome\]/);
+  assert.match(report, /OperationPlan 未生成原因/);
+});
+
+test('persists replay-ready locator, input refs, and states from CLI run steps', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-structured-step-'));
+  initializeProject(root, { id: 'structured-step' });
+  const module = createModule(root, { id: 'listing', name: 'Listing', description: 'Structured replay fixture' });
+  const task = createTaskSkeleton(module, 'listing-flow'); approveTask(task); saveTask(root, task);
+  importHostSnapshot(root, [{ id: 'browser-mcp', capabilities: ['browser.interact', 'browser.inspect'], permissionStatus: 'verified' }]);
+  const screenshot = join(root, 'listing.png');
+  writeFileSync(screenshot, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'));
+  const started = JSON.parse(run(root, 'task', 'run', 'listing-flow', '--module', 'listing'));
+  run(root, 'run', 'step', started.id,
+    '--action', 'Fill listing form', '--detail', 'Entered reviewed listing fixtures', '--screenshot', screenshot,
+    '--operation-action', 'fill', '--locator-strategy', 'accessibility', '--locator-value', 'Listing form',
+    '--input-refs', 'brand=fixture:brand,price=fixture:price',
+    '--expected-state', 'Required listing fields are populated', '--actual-state', 'Required listing fields are populated');
+  run(root, 'run', 'observe', started.id, '--scenario', 'happy-path', '--assertion', 'business-outcome',
+    '--expected', 'The listing result is visible.', '--actual', 'The listing result is visible.', '--status', 'passed', '--screenshot', screenshot);
+  const completed = JSON.parse(run(root, 'run', 'complete', started.id));
+  assert.equal(completed.status, 'passed');
+  assert.equal(completed.operationCandidateIssues, undefined);
+  assert.equal(completed.operationCandidates.length, 1);
+  const operation = listOperations(root, readTask(root, 'listing', 'listing-flow'))[0]!;
+  assert.deepEqual(operation.steps[0]!.inputRefs, { brand: 'fixture:brand', price: 'fixture:price' });
+  assert.equal(operation.steps[0]!.locator?.value, 'Listing form');
+  assert.equal(operation.steps[0]!.expectedState, 'Required listing fields are populated');
 });
 
 test('creates, approves, and replays a project-local Operation JSON with adaptive evidence', () => {
@@ -305,4 +348,73 @@ test('imports host artifacts, records evidence, and curates failed business outc
   assert.ok(candidateId);
   const approved = reviewMemory(root, 'checkout', candidateId!, 'approve', 'confirmed', 'checkout-host-flow');
   assert.equal(approved.status, 'active');
+});
+
+test('plans and completes an impact-aware fast release check with Golden Path gating', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-release-'));
+  initializeProject(root, { id: 'release-fixture' });
+  const paymentModule = createModule(root, { id: 'payment', name: 'Payment', description: 'Critical payment flow', riskLevel: 'critical', sourceHints: ['lib/payment'] });
+  const settingsModule = createModule(root, { id: 'settings', name: 'Settings', description: 'Low-risk settings flow', riskLevel: 'low', sourceHints: ['lib/settings'] });
+
+  const paymentTask = createTaskSkeleton(paymentModule, 'buyer-payment');
+  paymentTask.metadata.priority = 'p0';
+  paymentTask.metadata.releaseGate = true;
+  paymentTask.metadata.frequency = 'every-release';
+  paymentTask.metadata.tags = ['payment', 'regression', 'golden-path'];
+  approveTask(paymentTask); saveTask(root, paymentTask);
+
+  const settingsTask = createTaskSkeleton(settingsModule, 'profile-settings');
+  settingsTask.metadata.priority = 'p2';
+  settingsTask.metadata.releaseGate = false;
+  settingsTask.metadata.frequency = 'manual';
+  settingsTask.metadata.tags = ['settings', 'regression'];
+  approveTask(settingsTask); saveTask(root, settingsTask);
+
+  importHostSnapshot(root, [{ id: 'browser-mcp', capabilities: ['browser.interact', 'browser.inspect'], permissionStatus: 'verified' }]);
+  const screenshot = join(root, 'release.png');
+  writeFileSync(screenshot, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'));
+
+  for (const [task, stepId] of [[paymentTask, 'payment-open'], [settingsTask, 'settings-open']] as const) {
+    const firstRun = beginAgentGuidedRun(root, task);
+    recordAgentStep(root, firstRun.id, { action: `Open ${task.metadata.name}`, operationAction: 'click', detail: 'Open the reviewed business flow.', screenshotPath: screenshot, operationStepId: stepId, locator: { strategy: 'text', value: task.metadata.name } });
+    recordVisualFinding(root, firstRun.id, { scenarioId: 'happy-path', assertionId: 'business-outcome', expected: 'The business result is visible.', actual: 'The business result is visible.', status: 'passed', screenshotPath: screenshot });
+    completeAgentGuidedRun(root, task, firstRun.id);
+    const candidate = listOperations(root, task).find(operation => operation.status === 'candidate');
+    assert.ok(candidate);
+    reviewOperation(root, task, candidate!.id, 'approve');
+  }
+
+  const impact = JSON.parse(run(root, 'impact', 'analyze', '--changed-files', 'lib/payment/payment_service.dart'));
+  assert.deepEqual(impact.impactedModules.map((item: { moduleId: string }) => item.moduleId), ['payment']);
+  assert.equal(impact.selectedTasks[0].taskId, 'buyer-payment');
+  assert.ok(existsSync(join(root, '.qa-agent', 'impact-analysis', `${impact.id}.json`)));
+
+  const planned = JSON.parse(run(root, 'release', 'check', '--profile', 'fast', '--changed-files', 'lib/payment/payment_service.dart', '--plan-only'));
+  assert.equal(planned.profile, 'fast');
+  assert.equal(planned.status, 'planned');
+  assert.deepEqual([...new Set(planned.suite.members.map((member: { taskId: string }) => member.taskId))], ['buyer-payment']);
+  assert.ok(planned.suite.members.every((member: { releaseGate: boolean }) => member.releaseGate));
+  assert.ok(existsSync(join(root, '.qa-agent', 'release-checks', `${planned.id}.json`)));
+
+  const started = JSON.parse(run(root, 'release', 'check', '--profile', 'fast', '--changed-files', 'lib/payment/payment_service.dart'));
+  assert.equal(started.releaseCheck.status, 'running');
+  assert.equal(started.regressionRun.status, 'running');
+  assert.equal(started.regressionRun.childRuns.length, 1);
+
+  const child = started.regressionRun.childRuns[0];
+  run(root, 'run', 'step', child.runId, '--action', 'Open payment', '--detail', 'Replayed payment Golden Path.', '--screenshot', screenshot, '--operation-action', 'click', '--operation-step', 'payment-open', '--scenario', 'happy-path');
+  run(root, 'run', 'observe', child.runId, '--scenario', 'happy-path', '--assertion', 'business-outcome', '--expected', 'The business result is visible.', '--actual', 'The business result is visible.', '--status', 'passed', '--screenshot', screenshot);
+  run(root, 'run', 'complete', child.runId);
+
+  const completed = JSON.parse(run(root, 'release', 'complete', started.releaseCheck.id));
+  assert.equal(completed.releaseCheck.status, 'passed');
+  assert.equal(completed.releaseCheck.releaseDecision, 'go');
+  const releaseReport = readFileSync(join(root, '.qa-agent', 'reports', `${completed.releaseCheck.id}.md`), 'utf8');
+  assert.match(releaseReport, /Decision: GO/);
+  assert.match(releaseReport, /GOLDEN PATH/);
+  assert.match(releaseReport, /buyer-payment/);
+
+  const full = JSON.parse(run(root, 'release', 'check', '--profile', 'full', '--changed-files', 'lib/payment/payment_service.dart', '--plan-only'));
+  assert.deepEqual([...new Set(full.suite.members.map((member: { taskId: string }) => member.taskId))].sort(), ['buyer-payment', 'profile-settings']);
+  assert.equal(JSON.parse(run(root, 'validate')).valid, true);
 });

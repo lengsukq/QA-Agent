@@ -1,10 +1,65 @@
-# QA Agent Skill
+# QA Agent
 
 [简体中文](README.md)
 
-A local-first QA Agent runtime and cross-host Skill package for validating real business outcomes.
+AI-powered QA Engineer for business validation and regression testing.
 
-It is not a static test-case runner. The Agent learns the business module and role, plans coverage, operates a real browser or simulator, verifies the rendered business outcome, captures screenshots and evidence, writes a QA report, and stores reviewed project knowledge for future regression work.
+QA Agent is an AI QA Engineer designed for real business validation and regression testing.
+
+It is not a traditional test script runner. It helps teams work like real QA engineers: understand projects, analyze impact, design test plans, validate business workflows, collect evidence, generate reports, and continuously build regression knowledge.
+
+## Why QA Agent
+
+Traditional automation usually focuses on:
+
+- API responses
+- DOM selectors
+- Fixed test scripts
+
+Real QA needs to answer different questions:
+
+- Does the user actually experience the correct workflow?
+- Do business rules behave as expected?
+- Did a code change break existing features?
+- Can a failure be reproduced and investigated?
+- Can previous QA knowledge be reused for regression testing?
+
+QA Agent is not a replacement for Playwright, Appium, or other execution tools. It provides the AI QA reasoning layer.
+
+```text
+Requirement / Code Change
+          |
+          v
+    Impact Analysis
+          |
+          v
+     Test Planning
+          |
+          v
+ Business Validation
+          |
+          v
+ Evidence + Report
+          |
+          v
+ Regression Memory
+```
+
+## Core Model
+
+QA Agent manages QA assets through a project-level lifecycle:
+
+```text
+Project
+  |
+  ├── Module
+  ├── Test Task
+  ├── Scenario
+  ├── Test Run
+  ├── Evidence
+  ├── Report
+  └── Regression Memory
+```
 
 ## What it solves
 
@@ -179,7 +234,9 @@ qa-agent run observe <run-id> \
 qa-agent run complete <run-id>
 ```
 
-The report is written to the current Task's `reports/<run-id>.md`; `reports/index.json` and `reports/latest.json` are updated as well. Passed and failed visual assertions require a screenshot and reports embed available screenshots.
+`run complete` first enforces a strict closure check: every declared `visualAssertions` id for every selected Scenario must have a matching `run observe`. A PASSED `run step`, including one recorded with `operationAction=assert`, does not replace a business assertion. When an assertion is missing, completion is rejected and the Run remains `running`, so the host can record the missing observations and retry. Only then is the report written to `reports/<run-id>.md` and the Task report indexes updated.
+
+A successful first Run also receives an OperationPlan replay-quality check. `navigate/click/input/fill` steps need explicit actions and locators, while `input/fill` steps also need structured redacted `inputRefs`. Business verification may PASS while replay readiness fails; in that case the report lists `OperationPlan candidate issues` instead of generating an unstable JSON contract. Existing projects can run `qa-agent prompts sync` to refresh `.qa-agent/prompts/`.
 
 Each Task is a self-contained test asset directory:
 
@@ -216,6 +273,37 @@ Replay is permitted only when the Task plan hash and user approval, an active Op
 OperationPlans are Scenario-specific. Each step stores an operation action, primary and fallback locators, redacted input references, preconditions, expected state, assertion references, screenshot and visual-inspection policies, safety action, and checkpoint. During replay every `run step` must reference the next `operationStepId`; steps cannot be skipped or duplicated.
 
 A Task-level RegressionSuite organizes all active OperationPlans for one Task. Module replay dynamically aggregates active OperationPlans across Tasks at start, instead of persisting a second Module Suite. It runs independent flows serially, continues after an isolated business failure, and produces an aggregate report. `run.json` is a result record; OperationPlan is the executable operation definition.
+
+### 5. Fast pre-release regression
+
+Mark critical end-to-end flows as Golden Paths and release gates:
+
+```bash
+qa-agent task update buyer-purchase --module checkout --golden-path --estimated-minutes 8
+```
+
+Inspect change impact and the proposed execution scope:
+
+```bash
+qa-agent impact analyze --base origin/main --head HEAD
+qa-agent release check --profile fast --base origin/main --head HEAD --plan-only
+```
+
+Start the release regression directly:
+
+```bash
+qa-agent release check --profile fast --base origin/main --head HEAD
+# The host Agent completes the returned child Runs automatically.
+qa-agent release complete RELEASE_CHECK_ID
+```
+
+Profiles:
+
+- `fast`: global release gates, Golden Paths, `every-release` Tasks, and impacted P0 flows.
+- `normal`: fast plus impacted P1 flows.
+- `full`: every reviewed active OperationPlan.
+
+ImpactAnalysis uses Module ids, source hints, entry points, dependencies, and Task triggers, while preserving unmatched files and selection reasons. ReleaseCheck returns `GO`, `NO-GO`, or `REVIEW`. Its report is stored at `.qa-agent/reports/<release-check-id>.md` and references child Task reports and screenshot evidence without duplicating every image.
 
 ## APP and simulator QA
 

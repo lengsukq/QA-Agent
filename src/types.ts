@@ -10,8 +10,12 @@ export type LocatorStrategy = 'test-id' | 'accessibility' | 'role' | 'label' | '
 export type ScreenshotPolicy = 'after-action' | 'on-state-change' | 'none';
 export type VisualInspectionPolicy = 'required' | 'adaptive' | 'not-required';
 export type PermissionStatus = 'verified' | 'missing' | 'unknown';
-export type RegressionSuiteScope = 'task' | 'module';
+export type TestPriority = 'p0' | 'p1' | 'p2' | 'p3';
+export type RegressionFrequency = 'every-change' | 'every-release' | 'scheduled' | 'manual';
+export type RegressionProfile = 'fast' | 'normal' | 'full';
+export type RegressionSuiteScope = 'task' | 'module' | 'release';
 export type RegressionSuiteStatus = 'draft' | 'active' | 'stale' | 'superseded';
+export type RegressionSelectionPolicy = 'all-active-operation-plans' | 'priority-filtered' | 'impact-filtered' | 'release-gate-plus-impact';
 
 export interface Locator {
   strategy: LocatorStrategy;
@@ -205,7 +209,8 @@ export interface TestTask {
   kind: 'TestTask';
   metadata: {
     id: string; name: string; moduleId: string; version: number; status: TaskStatus;
-    priority: 'p0' | 'p1' | 'p2' | 'p3'; tags: string[];
+    priority: TestPriority; tags: string[];
+    frequency?: RegressionFrequency; releaseGate?: boolean; estimatedDurationMinutes?: number;
     approval?: { confirmedBy: string; confirmedAt: string; statement: string; planHash: string };
   };
   moduleSnapshotRef: string;
@@ -244,6 +249,12 @@ export interface RegressionSuiteMember {
   operationPlanRef: string;
   operationVersion: number;
   taskPlanHash: string;
+  priority: TestPriority;
+  frequency: RegressionFrequency;
+  releaseGate: boolean;
+  estimatedDurationMinutes: number;
+  tags: string[];
+  selectionReason?: string;
   order: number;
 }
 
@@ -254,10 +265,18 @@ export interface RegressionSuite {
   id: string;
   version: number;
   scope: RegressionSuiteScope;
+  name: string;
+  purpose: string;
   moduleId: string;
+  moduleIds: string[];
   taskId?: string;
   members: RegressionSuiteMember[];
-  selectionPolicy: 'all-active-operation-plans';
+  selectionPolicy: RegressionSelectionPolicy;
+  priorityThreshold: TestPriority;
+  releaseGate: boolean;
+  estimatedDurationMinutes: number;
+  impactedModules?: string[];
+  selectionReasons?: string[];
   failurePolicy: 'continue-independent';
   contextPolicy: 'current-context';
   suiteHash: string;
@@ -272,14 +291,56 @@ export interface RegressionRun {
   kind: 'RegressionRun';
   id: string;
   suiteId: string;
+  suiteName: string;
+  suiteScope: RegressionSuiteScope;
   suiteVersion: number;
   suiteHash: string;
   moduleId: string;
+  moduleIds: string[];
+  priorityThreshold: TestPriority;
+  releaseGate: boolean;
   context: ExecutionSnapshot;
   status: RunStatus;
-  childRuns: Array<{ runId: string; taskId: string; scenarioId: string; operationPlanId: string; status: RunStatus; reportPath?: string; detail?: string }>;
+  childRuns: Array<{ runId: string; taskId: string; moduleId: string; scenarioId: string; operationPlanId: string; priority: TestPriority; releaseGate: boolean; status: RunStatus; reportPath?: string; detail?: string }>;
   failurePolicy: 'continue-independent';
   startedAt: string;
+  completedAt?: string;
+  reportPath?: string;
+}
+
+export interface ImpactAnalysis {
+  $schema: string;
+  apiVersion: 'qa-agent/v2';
+  kind: 'ImpactAnalysis';
+  id: string;
+  base?: string;
+  head?: string;
+  changedFiles: string[];
+  impactedModules: Array<{ moduleId: string; score: number; reasons: string[]; changedFiles: string[] }>;
+  selectedTasks: Array<{ moduleId: string; taskId: string; priority: TestPriority; reasons: string[] }>;
+  unmatchedFiles: string[];
+  generatedAt: string;
+}
+
+export interface ReleaseCheck {
+  $schema: string;
+  apiVersion: 'qa-agent/v2';
+  kind: 'ReleaseCheck';
+  id: string;
+  version: number;
+  name: string;
+  profile: RegressionProfile;
+  base?: string;
+  head?: string;
+  priorityThreshold: TestPriority;
+  impactAnalysis: ImpactAnalysis;
+  suite: RegressionSuite;
+  regressionRunId?: string;
+  status: 'planned' | 'running' | 'passed' | 'failed' | 'blocked' | 'needs_confirmation' | 'review';
+  releaseDecision: 'pending' | 'go' | 'no-go' | 'review';
+  blockers: Array<{ moduleId: string; taskId: string; scenarioId: string; status: RunStatus; detail?: string }>;
+  createdAt: string;
+  updatedAt: string;
   completedAt?: string;
   reportPath?: string;
 }
@@ -329,6 +390,7 @@ export interface TestRun {
   screenshots: Array<{ stepId: string; path: string; capturedAt: string; visualInspection: VisualInspectionStatus; summary: string }>;
   recoveryAttempts: Array<{ id: string; reason: string; action: string; outcome: 'continued' | 'blocked' | 'paused' | 'failed'; detail: string; failedStepId?: string; at: string }>;
   operationCandidates?: string[];
+  operationCandidateIssues?: Array<{ scenarioId: string; reasons: string[] }>;
   memoryCandidates?: string[];
   visualFindings: Array<{ scenarioId: string; assertionId: string; expected: string; actual: string; status: RunStatus; screenshotPath?: string; visualInspection: 'performed'; inspectionProvider?: string; at: string }>;
   startedAt: string;

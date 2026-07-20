@@ -28,12 +28,23 @@ export function requireProjectRoot(start = process.cwd()): string {
 
 export function qaPath(root: string, ...parts: string[]): string { return join(root, QA_DIRECTORY, ...parts); }
 
+export function syncProjectPrompts(root: string): string[] {
+  const written: string[] = [];
+  ensureDir(qaPath(root, 'prompts'));
+  for (const [name, prompt] of Object.entries(prompts)) {
+    const path = qaPath(root, 'prompts', name);
+    writeTextAtomic(path, `${prompt}\n`);
+    written.push(path);
+  }
+  return written;
+}
+
 export function initializeProject(root: string, options: { id?: string; name?: string; description?: string; platforms?: string[] } = {}): ProjectConfig {
   const existing = qaPath(root, 'project.json');
   if (existsSync(existing)) throw new Error('.qa-agent is already initialized in this project.');
   const id = options.id ?? basename(resolve(root)).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   assertSafeId(id, 'project id');
-  for (const path of ['index', 'modules', 'shared-memory', 'skills/built-in', 'skills/project', 'skills/generated', 'prompts', 'schemas', 'runs', 'reports', 'evidence', 'regression-runs', 'cache', 'archive', '.locks']) ensureDir(qaPath(root, path));
+  for (const path of ['index', 'modules', 'shared-memory', 'skills/built-in', 'skills/project', 'skills/generated', 'prompts', 'schemas', 'runs', 'reports', 'evidence', 'regression-runs', 'impact-analysis', 'release-checks', 'cache', 'archive', '.locks']) ensureDir(qaPath(root, path));
   const timestamp = now();
   const project: ProjectConfig = {
     $schema: './schemas/project.schema.json', version: 1,
@@ -48,10 +59,7 @@ export function initializeProject(root: string, options: { id?: string; name?: s
   for (const name of ['modules', 'tasks', 'memories', 'skills']) writeJsonAtomic(qaPath(root, 'index', `${name}.json`), { version: 1, updatedAt: timestamp, [name]: [] });
   writeJsonAtomic(qaPath(root, 'shared-memory', 'project-profile.json'), { version: 1, entries: [] });
   for (const [name, schema] of Object.entries(schemas)) writeJsonAtomic(qaPath(root, 'schemas', name), schema);
-  for (const [name, prompt] of Object.entries(prompts)) {
-    const path = qaPath(root, 'prompts', name);
-    writeTextAtomic(path, `${prompt}\n`);
-  }
+  syncProjectPrompts(root);
   for (const skill of builtInSkills) writeJsonAtomic(qaPath(root, 'skills', 'built-in', `${skill.metadata.name.replace(/\./g, '-')}.json`), skill);
   writeJsonAtomic(qaPath(root, 'index', 'skills.json'), {
     version: 1,
@@ -160,7 +168,7 @@ export function readRunById(root: string, runId: string): TestRun {
 }
 
 export function gitMetadata(root: string): TestRun['git'] {
-  const run = (args: string[]): string | undefined => { try { return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return undefined; } };
+  const run = (args: string[]): string | undefined => { try { return execFileSync('git', ['-c', `safe.directory=${root}`, ...args], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return undefined; } };
   const status = run(['status', '--porcelain']) ?? '';
   return { branch: run(['branch', '--show-current']), commit: run(['rev-parse', 'HEAD']), dirtyWorkspace: status.length > 0, changedFiles: status.split('\n').filter(Boolean).map(line => line.slice(3)) };
 }

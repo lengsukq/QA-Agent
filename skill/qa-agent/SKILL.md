@@ -1,6 +1,6 @@
 ---
 name: qa-agent
-description: Plan, safely execute, verify, report, and retain project-level QA work in a local `.qa-agent/` memory boundary. Use when a user asks to initialize QA automation for a project; understand business modules; create or plan long-lived test tasks; execute a browser, mobile, API, or source-assisted business test; collect evidence; record a regression; store a business rule or user correction; assess missing MCP or local QA capabilities; or generate a QA run report.
+description: Plan, safely execute, verify, report, and retain project-level QA work in a local `.qa-agent/` memory boundary. Use when a user asks to initialize QA for a project; understand business modules; create long-lived test tasks; execute browser or mobile business tests; collect screenshot evidence; replay regressions; analyze code-change impact; assess release readiness with fast, normal, or full profiles; store reviewed QA memory; assess missing host capabilities; or generate Task, Module, and Release reports.
 ---
 
 # QA Agent
@@ -26,6 +26,31 @@ Do not reduce a business request to a static test-case runner. Use the available
 For Android or iOS, follow the same process with simulator/device screenshots and accessibility hierarchy. Before an APP run, call `qa-agent host doctor --platform android|ios`; require `android.adb` + `android.screenshot`, or `ios.simulator.interact` + `ios.screenshot`. If either is absent, create a BLOCKED run and ask the user to approve connecting or installing the least-privilege Android/iOS Simulator, ADB, or Appium MCP; state the requested permissions and validation steps, and do not install it automatically.
 
 Run this workflow automatically when the user asks to execute a test. Do not ask the user to click through the UI, capture screenshots, enter Run steps, assess visual results, or generate the report. The Agent performs those actions and returns the final report. Ask the user only to confirm generated test cases before any execution, for unavailable credentials, an explicit high-risk approval, a missing required capability, or a business rule that cannot be inferred safely.
+
+## Run closure and OperationPlan quality
+
+Treat Run completion as a strict protocol, not a report-writing shortcut:
+
+1. Before `run complete`, load every selected Scenario and enumerate every declared `visualAssertions` id.
+2. For each assertion, inspect the relevant screenshot and call `run observe` with Scenario, assertion id, expected result, actual rendered result, terminal status, and screenshot for passed, failed, or adapted outcomes.
+3. A passed `run step` records execution only. Even `operationAction=assert` does not satisfy a business assertion and must never replace `run observe`.
+4. Do not call `run complete` while any assertion is missing. The runtime rejects premature completion and keeps the Run open so the missing observations can be recorded.
+5. On a first successful Run, make every replayable step structurally complete: explicit `operationAction`; planned or actual locator for navigate, click, input, and fill; structured redacted `inputRefs` for input/fill; expected and actual state; screenshot; and Scenario binding.
+6. After `run complete`, inspect `status`, `operationCandidates`, and `operationCandidateIssues`. A passed business result with no candidate is valid QA evidence but is not fast-replay ready. Report the exact missing replay fields instead of producing a separate manual PASS report.
+7. Review and approve a candidate OperationPlan before adding it to a RegressionSuite.
+
+For initialized projects created with an older QA-Agent version, run `qa-agent prompts sync` so `.qa-agent/prompts/` receives the latest closure and replay-quality instructions.
+
+## Release regression
+
+When the user asks whether a build can be released, use the release workflow rather than manually selecting unrelated Tasks:
+
+1. Run `impact analyze` against the working tree or the requested Git range. Preserve unmatched files and explain every module and Task selection; filename matching is a risk signal, not confirmed business impact.
+2. Build the release scope from approved active OperationPlans. A Task marked `releaseGate`, tagged `golden-path`, or configured with `every-release` frequency remains in the release scope even when no direct file impact is resolved.
+3. Use `fast` for global release gates and Golden Paths plus impacted P0 flows, `normal` to expand through impacted P1 flows, and `full` for all active approved OperationPlans.
+4. Start the release regression with `release check`. Complete child Runs with the same screenshot and visual-assertion requirements as normal replay, then call `release complete` to produce GO, NO-GO, or REVIEW.
+5. A failed business assertion is NO-GO. A blocked or unconfirmed P0/release-gate flow is also NO-GO. Safe locator adaptation produces REVIEW until its candidate OperationPlan is reviewed.
+6. The Release report must reference each Task report and its evidence without duplicating all screenshots.
 
 ## Start safely
 
@@ -87,9 +112,14 @@ npm run qa-agent -- memory review checkout-total-rule --module checkout --approv
   npm run qa-agent -- task operation review checkout-basic-flow --module checkout --operation OPERATION_ID --approve
   npm run qa-agent -- task regression sync checkout-basic-flow --module checkout
   npm run qa-agent -- task regression run checkout-basic-flow --module checkout
-  npm run qa-agent -- module regression run checkout
+  npm run qa-agent -- module regression run checkout --priority p1
+  npm run qa-agent -- impact analyze --base origin/main --head HEAD
+  npm run qa-agent -- release check --profile fast --base origin/main --head HEAD --plan-only
+  npm run qa-agent -- release check --profile fast --base origin/main --head HEAD
+  npm run qa-agent -- release complete RELEASE_CHECK_ID
   npm run qa-agent -- task run checkout-basic-flow --module checkout --operation OPERATION_ID
-  npm run qa-agent -- run step run-... --action "Tap checkout" --detail "Checkout page opened" --screenshot /absolute/path/step.png --visual-inspection not-required
+  npm run qa-agent -- run step run-... --action "Tap checkout" --detail "Checkout page opened" --operation-action click --locator-strategy accessibility --locator-value "Checkout" --expected-state "Checkout page is visible" --actual-state "Checkout page is visible" --screenshot /absolute/path/step.png --visual-inspection not-required
+  npm run qa-agent -- run step run-... --action "Fill checkout" --detail "Entered reviewed test data" --operation-action fill --locator-strategy accessibility --locator-value "Checkout form" --input-refs email=fixture:buyer-email,address=fixture:shipping-address --expected-state "Required fields contain test data" --actual-state "Required fields contain test data" --screenshot /absolute/path/form.png --visual-inspection not-required
   npm run qa-agent -- run evidence run-... --type console --summary "Host console output" --file /absolute/path/console.log
   npm run qa-agent -- run recover run-... --reason "Element was not ready" --action "Wait for network" --detail "Element appeared after 2s" --outcome continued
 npm run qa-agent -- run observe run-... --scenario happy-path --assertion business-outcome --expected "..." --actual "..." --status passed --screenshot /absolute/path.png

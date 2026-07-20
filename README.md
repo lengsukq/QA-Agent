@@ -1,14 +1,65 @@
-# QA Agent Skill
+# QA Agent
 
 [English](README.en.md)
 
-一个面向真实业务验证的本地优先 QA Agent 运行时与跨宿主 Skill 包。
+AI-powered QA Engineer for business validation and regression testing.
 
-它不是只把既有测试用例跑一遍的工具。它的目标是让 Agent 像项目 QA 一样：理解业务模块与角色、规划覆盖面、操作真实浏览器或模拟器、依据渲染结果验证业务逻辑、自动保存截图和证据、生成测试报告，并把经过审核的经验沉淀为项目记忆。
+QA Agent 是一个面向真实业务验证和回归测试的 AI QA Agent。
 
-## 解决的问题
+它不是传统测试脚本执行器，而是帮助团队模拟真实 QA 工程师的工作方式：理解项目、分析影响范围、设计测试计划、执行业务流程、验证结果，并持续沉淀回归经验。
 
-传统自动化通常只断言 DOM、接口或固定脚本是否成功；而真实 QA 还需要判断用户实际看到了什么、流程是否符合业务规则、异常状态是否可理解，以及失败时是否有可复查的证据。
+## 为什么需要 QA Agent
+
+传统自动化测试通常关注：
+
+- API 是否返回正确
+- DOM 是否存在
+- 固定脚本是否执行成功
+
+但真实 QA 需要回答：
+
+- 用户实际看到的流程是否正确？
+- 业务规则是否符合预期？
+- 新代码修改是否影响已有功能？
+- 一个失败问题是否可以复现和定位？
+- 过去验证过的问题是否可以自动回归？
+
+QA Agent 的目标不是替代 Playwright、Appium 等测试工具，而是提供 AI QA 思考层。
+
+```text
+Requirement / Code Change
+          |
+          v
+    Impact Analysis
+          |
+          v
+     Test Planning
+          |
+          v
+   Business Validation
+          |
+          v
+ Evidence + Report
+          |
+          v
+ Regression Memory
+```
+
+## 核心模型
+
+QA Agent 使用项目级 QA 生命周期管理测试资产：
+
+```text
+Project
+  |
+  ├── Module
+  ├── Test Task
+  ├── Scenario
+  ├── Test Run
+  ├── Evidence
+  ├── Report
+  └── Regression Memory
+```
 
 QA Agent 将这些能力组织为一个可持续使用的项目边界：
 
@@ -210,7 +261,9 @@ qa-agent run observe <run-id> \
 qa-agent run complete <run-id>
 ```
 
-`run complete` 会自动写入当前 Task 的 `reports/<run-id>.md`，并更新 `reports/index.json` 与 `reports/latest.json`。每项视觉业务结论都必须关联截图；缺少视觉证据不能被标记为通过。
+`run complete` 会先执行严格收尾检查：每个已选 Scenario 的每个 `visualAssertions` 都必须已有对应的 `run observe`。普通 `run step` 即使状态为 PASSED、甚至使用 `operationAction=assert`，也不能替代业务断言。缺少断言时完成命令会被拒绝，Run 保持 `running`，补齐观察后可以再次完成。检查通过后才写入 `reports/<run-id>.md`，并更新 `reports/index.json` 与 `reports/latest.json`。
+
+首次成功运行还会检查 OperationPlan 的可回放质量。`navigate/click/input/fill` 需要明确的操作类型和定位器，`input/fill` 还需要结构化且脱敏的 `inputRefs`。业务验证可以 PASS，但如果这些字段不完整，报告会输出 `OperationPlan 未生成原因`，而不会生成不可稳定回放的 JSON。旧项目可运行 `qa-agent prompts sync` 更新 `.qa-agent/prompts/`。
 
 每个 Task 是一个自包含测试资产目录：
 
@@ -247,6 +300,37 @@ qa-agent module regression run checkout
 OperationPlan 按 Scenario 独立保存，步骤包含操作类型、主/备用定位器、输入引用、前置条件、预期状态、断言引用、截图策略、视觉识别策略、风险动作和 checkpoint。回放时每个 `run step` 必须引用下一个 `operationStepId`，不能跳步或重复提交。
 
 Task 级 RegressionSuite 组织一个 Task 的所有 active OperationPlan；Module 回归在启动时从各 Task 的 active OperationPlan 动态聚合，不再保存第二份 Module Suite。模块回归会串行自动执行所有独立流程，单个业务失败后继续其他流程，最后生成模块汇总报告。`run.json` 是结果记录，OperationPlan 才是可执行操作定义。
+
+### 5. 发布前快速回归
+
+先把核心端到端流程标记为 Golden Path / Release Gate：
+
+```bash
+qa-agent task update buyer-purchase --module checkout --golden-path --estimated-minutes 8
+```
+
+查看代码变化影响和预计执行范围：
+
+```bash
+qa-agent impact analyze --base origin/main --head HEAD
+qa-agent release check --profile fast --base origin/main --head HEAD --plan-only
+```
+
+直接启动发布回归：
+
+```bash
+qa-agent release check --profile fast --base origin/main --head HEAD
+# 宿主 Agent 自动完成返回的各个 child Run
+qa-agent release complete RELEASE_CHECK_ID
+```
+
+回归档位：
+
+- `fast`：全局 Release Gate、Golden Path、`every-release` Task，以及受影响的 P0 流程。
+- `normal`：在 fast 基础上扩展到受影响的 P1 流程。
+- `full`：执行所有已审核且 active 的 OperationPlan。
+
+ImpactAnalysis 会结合 Module id、source hints、entry points、依赖关系和 Task triggers 选择范围，并保留未匹配文件与选择理由。ReleaseCheck 最终输出 `GO`、`NO-GO` 或 `REVIEW`，发布报告位于 `.qa-agent/reports/<release-check-id>.md`，其中引用各 Task 报告及其截图证据，不重复复制全部图片。
 
 ### APP / 模拟器测试
 

@@ -43,13 +43,13 @@ export function beginRegressionRun(root: string, suite: RegressionSuite, context
   const errors = suitePreflight(root, suite, context);
   if (errors.length) {
     run.status = errors.some(error => /plan hash|approval|changed|confirmation/i.test(error)) ? 'needs_confirmation' : 'blocked';
-    run.childRuns = suite.members.map(member => ({ runId: '', taskId: member.taskId, scenarioId: member.scenarioId, operationPlanId: member.operationPlanId, status: run.status, detail: errors.find(error => error.includes(member.taskId)) ?? errors.join(' ') }));
-    run.completedAt = now(); run.reportPath = `modules/${run.moduleId}/reports/${run.id}.md`; saveRegressionRun(root, run); writeRegressionReport(root, run); return run;
+    run.childRuns = suite.members.map(member => ({ runId: '', taskId: member.taskId, moduleId: member.moduleId, scenarioId: member.scenarioId, operationPlanId: member.operationPlanId, priority: member.priority, releaseGate: member.releaseGate, status: run.status, detail: errors.find(error => error.includes(member.taskId)) ?? errors.join(' ') }));
+    run.completedAt = now(); run.reportPath = run.suiteScope === 'release' ? `reports/${run.id}.md` : `modules/${run.moduleId}/reports/${run.id}.md`; saveRegressionRun(root, run); writeRegressionReport(root, run); return run;
   }
   for (const member of suite.members) {
     const task = readTask(root, member.moduleId, member.taskId);
     const child = beginAgentGuidedRun(root, task, { ...context, scenarioId: member.scenarioId, operationId: member.operationPlanId });
-    run.childRuns.push({ runId: child.id, taskId: member.taskId, scenarioId: member.scenarioId, operationPlanId: member.operationPlanId, status: child.status, reportPath: child.reportPath, detail: child.conclusion });
+    run.childRuns.push({ runId: child.id, taskId: member.taskId, moduleId: member.moduleId, scenarioId: member.scenarioId, operationPlanId: member.operationPlanId, priority: member.priority, releaseGate: member.releaseGate, status: child.status, reportPath: child.reportPath, detail: child.conclusion });
   }
   saveRegressionRun(root, run); return run;
 }
@@ -61,7 +61,7 @@ export function completeRegressionRun(root: string, run: RegressionRun): Regress
   }
   if (run.childRuns.some(child => child.status === 'running' || child.status === 'pending')) return run;
   const statuses = run.childRuns.map(child => child.status);
-  run.status = finalStatus(statuses); run.completedAt = now(); run.reportPath = `modules/${run.moduleId}/reports/${run.id}.md`; saveRegressionRun(root, run); writeRegressionReport(root, run); return run;
+  run.status = finalStatus(statuses); run.completedAt = now(); run.reportPath = run.suiteScope === 'release' ? `reports/${run.id}.md` : `modules/${run.moduleId}/reports/${run.id}.md`; saveRegressionRun(root, run); writeRegressionReport(root, run); return run;
 }
 
 function finish(root: string, task: TestTask, run: TestRun): TestRun {
@@ -75,8 +75,15 @@ function finish(root: string, task: TestTask, run: TestRun): TestRun {
       if (!task.memoryRefs.includes(ref)) task.memoryRefs.push(ref);
     }
   }
-  const operationCandidates = createOperationCandidates(root, task, run);
-  if (operationCandidates.length) run.operationCandidates = operationCandidates;
+  const operationCandidateResult = createOperationCandidates(root, task, run);
+  if (operationCandidateResult.candidates.length) run.operationCandidates = operationCandidateResult.candidates;
+  if (operationCandidateResult.issues.length) {
+    run.operationCandidateIssues = operationCandidateResult.issues;
+    if (run.status === 'passed' || run.status === 'adapted') {
+      const summary = operationCandidateResult.issues.flatMap(item => item.reasons.map(reason => `${item.scenarioId}: ${reason}`)).join(' ');
+      run.conclusion = `${run.conclusion ?? 'Business verification completed.'} No OperationPlan candidate was generated because the replay contract is incomplete. ${summary}`;
+    }
+  }
   run.reportPath = `reports/${run.id}.md`;
   task.runRefs ??= []; const runRef = `runs/${run.id}/run.json`; if (!task.runRefs.includes(runRef)) task.runRefs.push(runRef); task.updatedAt = now();
   writeReport(root, task, run); saveRun(root, run); saveTask(root, task);
@@ -195,10 +202,16 @@ export function completeAgentGuidedRun(root: string, task: TestTask, runId: stri
   const run = readRunById(root, runId); if (run.status !== 'running') throw new Error(`Run ${runId} is not running.`);
   if (run.replayStatus !== 'not_replay' && run.operationPlanId) { const operation = readOperation(root, task, run.operationPlanId); if ((run.replayCursor ?? 0) < operation.steps.length) return block(root, task, run, `Replay is incomplete: ${operation.steps.length - (run.replayCursor ?? 0)} Operation steps remain.`, 'blocked'); }
   const active = task.scenarios.filter(scenario => !run.scenarioId || scenario.id === run.scenarioId);
+  const closureIssues = active.flatMap(scenario => {
+    const findings = run.visualFindings.filter(item => item.scenarioId === scenario.id);
+    if (!findings.length) return [`${scenario.id}: no run observe result was recorded. A passed run step does not satisfy a business assertion.`];
+    const missing = (scenario.visualAssertions ?? []).filter(assertion => !findings.some(finding => finding.assertionId === assertion.id));
+    return missing.map(assertion => `${scenario.id}: missing run observe for visual assertion ${assertion.id}.`);
+  });
+  if (closureIssues.length) throw new Error(`Run ${runId} cannot complete. ${closureIssues.join(' ')} Record every declared assertion with run observe, including expected, actual, terminal status, and screenshot when passing or failing; then retry run complete.`);
   run.scenarioResults = task.scenarios.map(scenario => {
     if (!active.some(item => item.id === scenario.id)) return { scenarioId: scenario.id, status: 'not_applicable' as const, detail: 'Scenario was not selected for this Run.' };
-    const findings = run.visualFindings.filter(item => item.scenarioId === scenario.id); if (!findings.length) return { scenarioId: scenario.id, status: 'blocked' as const, detail: 'No visual business observation was recorded for this scenario.' };
-    const missing = (scenario.visualAssertions ?? []).filter(assertion => !findings.some(finding => finding.assertionId === assertion.id)); if (missing.length) return { scenarioId: scenario.id, status: 'blocked' as const, detail: `Missing visual evidence for: ${missing.map(item => item.id).join(', ')}.` };
+    const findings = run.visualFindings.filter(item => item.scenarioId === scenario.id);
     return { scenarioId: scenario.id, status: finalStatus(findings.map(item => item.status)), detail: findings.map(item => `${item.assertionId}: ${item.status}`).join('; ') };
   });
   run.status = finalStatus(run.scenarioResults.filter(item => item.status !== 'not_applicable').map(item => item.status)); if (run.status === 'passed' && run.replayStatus === 'adapted') run.status = 'adapted'; run.replayStage = 'completed';

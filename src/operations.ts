@@ -53,30 +53,53 @@ const operationActions = new Set<OperationAction>(['launch', 'navigate', 'click'
 
 function scenarioRunStatus(run: TestRun, scenarioId: string): string | undefined { return run.scenarioResults.find(item => item.scenarioId === scenarioId)?.status; }
 
-function buildStep(task: TestTask, scenario: TestScenario, run: TestRun, step: TestRun['steps'][number], index: number): OperationStep {
-  const action = step.operationAction ?? (step.action.toLowerCase().includes('tap') || step.action.toLowerCase().includes('click') ? 'click' : step.action.toLowerCase().includes('input') || step.action.toLowerCase().includes('fill') ? 'input' : step.action.toLowerCase().includes('wait') ? 'wait' : step.action.toLowerCase().includes('back') ? 'back' : step.action.toLowerCase().includes('launch') ? 'launch' : 'assert') as OperationAction;
+function buildStep(task: TestTask, scenario: TestScenario, run: TestRun, step: TestRun['steps'][number], index: number, previousStep?: OperationStep): OperationStep {
+  const action = step.operationAction ?? previousStep?.action ?? (step.action.toLowerCase().includes('tap') || step.action.toLowerCase().includes('click') ? 'click' : step.action.toLowerCase().includes('input') || step.action.toLowerCase().includes('fill') ? 'input' : step.action.toLowerCase().includes('wait') ? 'wait' : step.action.toLowerCase().includes('back') ? 'back' : step.action.toLowerCase().includes('launch') ? 'launch' : 'assert') as OperationAction;
   if (!operationActions.has(action)) throw new Error(`Unsupported operation action generated from step ${step.id}: ${action}`);
+  const effectiveLocator = step.actualLocator ?? step.locator ?? previousStep?.locator;
   return {
     id: step.operationStepId ?? `op-step-${index + 1}`, scenarioId: scenario.id, action, intent: step.detail, preconditions: [...scenario.preconditions],
-    locator: step.locator, fallbackLocators: step.locator?.fallbacks, inputRefs: step.inputRefs,
-    expectedState: step.expectedState ?? step.actualState ?? step.detail, assertionRefs: scenario.visualAssertions?.map(item => item.id),
+    locator: effectiveLocator, fallbackLocators: effectiveLocator?.fallbacks ?? step.locator?.fallbacks ?? previousStep?.fallbackLocators, inputRefs: step.inputRefs ?? previousStep?.inputRefs,
+    expectedState: step.expectedState ?? step.actualState ?? previousStep?.expectedState ?? step.detail, assertionRefs: scenario.visualAssertions?.map(item => item.id),
     screenshotPolicy: 'after-action', visualInspectionPolicy: step.visualInspection === 'performed' ? 'required' : 'adaptive',
     safetyAction: step.safetyAction, checkpoint: Boolean(step.operationStepId?.includes('checkpoint')),
   };
 }
 
-export function createOperationCandidates(root: string, task: TestTask, run: TestRun): string[] {
-  if (run.replayStatus === 'replayed') return [];
+function operationCandidateQualityIssues(scenario: TestScenario, run: TestRun, scenarioSteps: TestRun['steps'], previous?: OperationPlan): string[] {
+  const reasons: string[] = [];
+  const targetActions = new Set<OperationAction>(['navigate', 'click', 'input', 'fill']);
+  for (const step of scenarioSteps) {
+    const previousStep = previous?.steps.find(item => item.id === step.operationStepId);
+    const action = step.operationAction ?? previousStep?.action;
+    if (!action) reasons.push(`${step.id}: operationAction is missing; replay actions must be explicit.`);
+    if (action && targetActions.has(action) && !(step.actualLocator ?? step.locator ?? previousStep?.locator)) reasons.push(`${step.id}: ${action} requires a planned or actual locator.`);
+    if ((action === 'input' || action === 'fill') && !Object.keys(step.inputRefs ?? previousStep?.inputRefs ?? {}).length) reasons.push(`${step.id}: ${action} requires structured inputRefs instead of values embedded only in detail text.`);
+    if (!step.screenshotPath) reasons.push(`${step.id}: replayable UI steps require screenshot evidence.`);
+  }
+  for (const assertion of scenario.visualAssertions ?? []) {
+    const finding = run.visualFindings.find(item => item.scenarioId === scenario.id && item.assertionId === assertion.id);
+    if (!finding || !['passed', 'adapted'].includes(finding.status) || !finding.screenshotPath) reasons.push(`Assertion ${assertion.id} needs a passed or adapted run observe result with screenshot evidence.`);
+  }
+  return [...new Set(reasons)];
+}
+
+export function createOperationCandidates(root: string, task: TestTask, run: TestRun): { candidates: string[]; issues: Array<{ scenarioId: string; reasons: string[] }> } {
+  if (run.replayStatus === 'replayed') return { candidates: [], issues: [] };
   const candidates: string[] = [];
+  const issues: Array<{ scenarioId: string; reasons: string[] }> = [];
   for (const scenario of task.scenarios) {
     const status = scenarioRunStatus(run, scenario.id);
     const scenarioSteps = run.steps.filter(step => step.scenarioId === scenario.id && (step.source === 'ui' || step.source === 'operation-replay'));
-    if (!['passed', 'adapted'].includes(status ?? '') || !scenarioSteps.length) continue;
+    if (!['passed', 'adapted'].includes(status ?? '')) continue;
+    if (!scenarioSteps.length) { issues.push({ scenarioId: scenario.id, reasons: ['No replayable UI steps were recorded for this passed scenario.'] }); continue; }
     const existing = listOperations(root, task).filter(item => item.scenarioId === scenario.id).sort((a, b) => b.version - a.version);
     const previous = run.operationPlanId ? existing.find(item => item.id === run.operationPlanId) : existing.find(item => item.status === 'active');
+    const qualityIssues = operationCandidateQualityIssues(scenario, run, scenarioSteps, previous);
+    if (qualityIssues.length) { issues.push({ scenarioId: scenario.id, reasons: qualityIssues }); continue; }
     const version = existing[0] ? existing[0].version + 1 : 1;
     const id = `${task.metadata.id}-${scenario.id}-op-v${version}-${run.id.slice(-8)}`.slice(0, 63);
-    const steps = scenarioSteps.map((step, index) => buildStep(task, scenario, run, step, index));
+    const steps = scenarioSteps.map((step, index) => buildStep(task, scenario, run, step, index, previous?.steps.find(item => item.id === step.operationStepId)));
     const plan: OperationPlan = {
       $schema: '../../../../schemas/operation.schema.json', apiVersion: 'qa-agent/v2', kind: 'OperationPlan', id, version, status: 'candidate',
       taskId: task.metadata.id, moduleId: task.metadata.moduleId, scenarioId: scenario.id, executionSnapshot: run.context,
@@ -84,14 +107,14 @@ export function createOperationCandidates(root: string, task: TestTask, run: Tes
       sourceRunId: run.id, successfulRuns: 1, supersedes: run.replayStatus === 'adapted' && previous?.status === 'active' ? previous.id : undefined,
       adaptationHistory: run.replayStatus === 'adapted' ? [{ runId: run.id, detail: 'Semantic/accessibility locator adaptation preserved the business meaning.', at: now() }] : [], createdAt: now(), updatedAt: now(),
     };
-    if (hasSecrets(plan)) continue;
+    if (hasSecrets(plan)) { issues.push({ scenarioId: scenario.id, reasons: ['Candidate contains a potential secret; replace raw values with env: or fixture references.'] }); continue; }
     saveOperation(root, plan);
     const ref = relative(taskDirectory(root, plan.moduleId, plan.taskId), operationFilePath(root, plan));
     task.operationPlanRefs ??= [];
     if (!task.operationPlanRefs.includes(ref)) task.operationPlanRefs.push(ref);
     candidates.push(ref);
   }
-  return candidates;
+  return { candidates, issues };
 }
 
 export function approvedOperationForReplay(root: string, task: TestTask, id: string, context: ExecutionSnapshot): OperationPlan {
