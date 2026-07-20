@@ -2,6 +2,7 @@ export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
 export type TaskStatus = 'draft' | 'ready' | 'active' | 'blocked' | 'needs_review' | 'deprecated' | 'archived';
 export type RunStatus = 'pending' | 'running' | 'passed' | 'failed' | 'blocked' | 'paused' | 'inconclusive' | 'not_applicable' | 'needs_confirmation' | 'adapted';
 export type ReplayStatus = 'not_replay' | 'replayed' | 'adapted';
+export type RunMode = 'explore' | 'replay';
 export type VisualInspectionStatus = 'performed' | 'not-required' | 'not-applicable' | 'skipped';
 export type ReplayStage = 'idle' | 'ready' | 'preflight_passed' | 'step_pending' | 'executing' | 'screenshot_captured' | 'visual_check_optional' | 'assertion_checked' | 'next_step' | 'completed' | 'blocked' | 'needs_confirmation';
 export type KnowledgeLevel = 'confirmed' | 'observed' | 'inferred' | 'suspected' | 'deprecated';
@@ -133,6 +134,13 @@ export interface EvidencePolicy {
   required: string[];
 }
 
+export interface OperationCheckpoint {
+  id: string;
+  description: string;
+  screenshotRequired: boolean;
+  reportVisible: boolean;
+}
+
 export interface OperationStep {
   id: string;
   scenarioId: string;
@@ -164,6 +172,7 @@ export interface OperationPlan {
   executionSnapshot: ExecutionSnapshot;
   planHash: string;
   steps: OperationStep[];
+  checkpoints?: OperationCheckpoint[];
   preconditions: string[];
   cleanup: string[];
   capabilities: string[];
@@ -399,6 +408,7 @@ export interface TestRun {
   git: { branch?: string; commit?: string; dirtyWorkspace: boolean; changedFiles: string[] };
   status: RunStatus;
   safeMode: boolean;
+  mode: RunMode;
   steps: Array<{ id: string; action: string; operationAction?: OperationAction; safetyAction?: string; status: RunStatus; detail: string; at: string; scenarioId?: string; screenshotPath?: string; visualInspection?: VisualInspectionStatus; source?: 'ui' | 'internal' | 'recovery' | 'operation-replay'; executionMode?: StepExecutionMode; operationStepId?: string; locator?: Locator; actualLocator?: Locator; inputRefs?: Record<string, string>; expectedState?: string; actualState?: string; adaptation?: string }>;
   scenarioResults: Array<{ scenarioId: string; status: RunStatus; detail?: string }>;
   evidence: Array<{ type: string; path?: string; summary: string }>;

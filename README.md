@@ -232,7 +232,7 @@ qa-agent task review checkout-basic-flow \
 审批后仍需验证宿主能力。只有 `task run` 返回正式门禁字段后才可开始 UI 操作：
 
 ```bash
-qa-agent task run checkout-basic-flow --module checkout
+qa-agent task explore checkout-basic-flow --module checkout
 ```
 
 ```json
@@ -317,6 +317,17 @@ qa-agent run complete <run-id>
 ```
 
 ### 4. 快速回归执行模式
+
+首次 Explore 通过并审核 OperationPlan 后，后续不重新规划或审查源码，直接执行 JSON：
+
+```bash
+qa-agent operation replay OPERATION_ID \
+  --module checkout \
+  --task checkout-basic-flow
+```
+
+返回结果包含完整 `operationPlan`、`nextOperationStep`、`remainingOperationSteps` 和 `checkpoints`。宿主严格按顺序执行；每次 Replay 都创建新的 Run、报告和关键节点截图。
+
 
 首次成功运行后，Agent 会在任务目录生成候选 OperationPlan：`.qa-agent/modules/<module>/tasks/<task>/operation-plans/<scenario>/`。审核后可快速回放同一业务流程：
 

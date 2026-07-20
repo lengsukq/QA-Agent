@@ -59,8 +59,11 @@ test('initializes, plans, persists, validates, and requires host-driven executio
   assert.equal(context.memories[0].id, 'checkout-rule');
   importHostSnapshot(root, [{ id: 'browser-mcp', capabilities: ['browser.interact', 'browser.inspect'], permissionStatus: 'verified' }]);
   assert.equal(JSON.parse(run(root, 'host', 'doctor')).healthy, true);
-  const taskRun = JSON.parse(run(root, 'task', 'run', 'checkout-basic-flow', '--module', 'checkout'));
+  const taskRun = JSON.parse(run(root, 'task', 'explore', 'checkout-basic-flow', '--module', 'checkout'));
   assert.equal(taskRun.status, 'running');
+  assert.equal(taskRun.executionMode, 'explore');
+  assert.equal(taskRun.mode, 'explore');
+  assert.equal(taskRun.planningAllowed, true);
   assert.equal(taskRun.uiExecutionAllowed, true);
   assert.ok(taskRun.runId);
   for (const oldCommand of [['capability', 'list'], ['mcp', 'list'], ['mobile', 'doctor', '--platform', 'android'], ['task', 'runbook', 'checkout-basic-flow', '--module', 'checkout'], ['run', 'start', 'checkout-basic-flow', '--module', 'checkout'], ['run', 'replay', 'checkout-basic-flow', '--module', 'checkout', '--operation', 'op']]) {
@@ -84,6 +87,7 @@ test('syncs current closure prompts into an initialized project', () => {
   const text = readFileSync(executionPrompt, 'utf8');
   assert.match(text, /passed run step.*never substitutes for run observe/i);
   assert.match(text, /operationCandidateIssues/);
+  assert.match(text, /operation replay/i);
 });
 
 test('validates the installable skill', () => {
@@ -221,10 +225,44 @@ test('creates, approves, and replays a project-local Operation JSON with adaptiv
   assert.equal(candidates[0]!.steps[0]!.locator?.strategy, 'accessibility');
   assert.ok(candidates[0]!.steps[0]!.assertionRefs?.includes('business-outcome'));
   reviewOperation(root, task, candidates[0]!.id, 'approve');
+  const replayViaOperationCommand = JSON.parse(run(root, 'operation', 'replay', candidates[0]!.id, '--module', 'checkout', '--task', 'checkout-replay-flow'));
+  assert.equal(replayViaOperationCommand.status, 'running');
+  assert.equal(replayViaOperationCommand.executionMode, 'replay');
+  assert.equal(replayViaOperationCommand.mode, 'replay');
+  assert.equal(replayViaOperationCommand.replayStatus, 'replayed');
+  assert.equal(replayViaOperationCommand.operationPlanId, candidates[0]!.id);
+  assert.equal(replayViaOperationCommand.planningAllowed, false);
+  assert.equal(replayViaOperationCommand.sourceReviewAllowed, false);
+  assert.equal(replayViaOperationCommand.strictStepOrder, true);
+  assert.equal(replayViaOperationCommand.operationPlan.id, candidates[0]!.id);
+  assert.equal(replayViaOperationCommand.nextOperationStep.id, 'open-checkout');
+  assert.equal(replayViaOperationCommand.remainingOperationSteps, 1);
+  assert.equal(replayViaOperationCommand.checkpoints[0].id, 'business-outcome');
+
+  const replayProgress = JSON.parse(run(root, 'run', 'step', replayViaOperationCommand.runId,
+    '--action', 'Open checkout', '--detail', 'Executed the JSON step without replanning.', '--screenshot', screenshot,
+    '--operation-step', 'open-checkout'));
+  assert.equal(replayProgress.remainingOperationSteps, 0);
+  assert.equal(replayProgress.nextOperationStep, undefined);
+  const persistedReplay = readRunById(root, replayViaOperationCommand.runId);
+  const persistedReplayStep = persistedReplay.steps.find(item => item.operationStepId === 'open-checkout')!;
+  assert.equal(persistedReplayStep.operationAction, 'click');
+  assert.equal(persistedReplayStep.locator?.value, 'Go to checkout');
+
+  run(root, 'run', 'observe', replayViaOperationCommand.runId, '--scenario', 'happy-path', '--assertion', 'business-outcome',
+    '--expected', 'Checkout result is visible.', '--actual', 'Checkout result is visible.', '--status', 'passed', '--screenshot', screenshot);
+  const replayViaCliCompleted = JSON.parse(run(root, 'run', 'complete', replayViaOperationCommand.runId));
+  assert.equal(replayViaCliCompleted.status, 'passed');
+  assert.equal(replayViaCliCompleted.executionMode, 'replay');
+  const replayCliReport = readFileSync(taskRunReportPath(root, 'checkout', 'checkout-replay-flow', replayViaOperationCommand.runId), 'utf8');
+  assert.match(replayCliReport, /Execution mode: replay/);
+  assert.match(replayCliReport, /## Critical Checkpoints/);
+  assert.match(replayCliReport, /### business-outcome/);
+  assert.match(replayCliReport, /Checkpoint business-outcome/);
+
   const replayViaTaskCommand = JSON.parse(run(root, 'task', 'run', 'checkout-replay-flow', '--module', 'checkout', '--operation', candidates[0]!.id));
   assert.equal(replayViaTaskCommand.status, 'running');
-  assert.equal(replayViaTaskCommand.replayStatus, 'replayed');
-  assert.equal(replayViaTaskCommand.operationPlanId, candidates[0]!.id);
+  assert.match(replayViaTaskCommand.compatibilityNote, /compatibility/);
   const taskSuite = syncTaskRegressionSuite(root, task);
   const moduleSuite = buildModuleRegressionSuite(root, 'checkout');
   assert.equal(taskSuite.scope, 'task');

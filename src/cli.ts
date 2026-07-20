@@ -8,7 +8,7 @@ import { createTaskSkeleton, planModule, taskPlan } from './planning.ts';
 import { createModule, findProjectRoot, initializeProject, modulePath, qaPath, readModule, readProjectPromptBundle, readRunById, readTask, requireProjectRoot, saveTask, syncProjectPrompts, taskRunReportPath } from './project.ts';
 import { readProject } from './project.ts';
 import { assertSafeId, listFiles, now, readJson, writeJsonAtomic } from './store.ts';
-import type { ExecutionSnapshot, Locator, PermissionStatus, ProjectMemory, RegressionProfile, RegressionRun, ReleaseCheck, RunStatus, StepExecutionMode, TestPriority, TestTask } from './types.ts';
+import type { ExecutionSnapshot, Locator, PermissionStatus, ProjectMemory, RegressionProfile, RegressionRun, ReleaseCheck, RunStatus, StepExecutionMode, TestPriority, TestRun, TestTask } from './types.ts';
 import { validateProject, validateSkill } from './validation.ts';
 import { createMemoryCandidate, reviewMemory } from './memory.ts';
 import { installHostIntegration, supportedHosts } from './host-adapters.ts';
@@ -30,13 +30,14 @@ Commands:
   doctor | validate | index rebuild | prompts sync
   workflow bootstrap --request TEXT --module ID --task ID [--module-name NAME] [--task-name NAME] [--platforms web,android,ios] [--risk low|medium|high|critical]
   workflow status --module ID --task ID
+  operation replay OPERATION_ID --module MODULE --task TASK [execution context flags]
   impact analyze [--base REF] [--head REF] [--changed-files FILE1,FILE2]
   release check [--profile fast|normal|full] [--base REF] [--head REF] [--changed-files FILE1,FILE2] [--plan-only] [execution context flags]
   release list | release show|complete|report CHECK_ID
   host list | host import --file HOST_CAPABILITIES.json | host doctor [--platform android|ios]
   context module MODULE
   module list | module create ID --name NAME [--description TEXT] [--platforms web,android,ios] [--source-hints PATHS] [--entry-points PATHS] [--dependencies MODULES] | module update ID [--name NAME] [--description TEXT] [--risk LEVEL] [same mapping flags] | module archive ID | module plan ID | module coverage ID
-  task list | task create ID --module MODULE [--name NAME] [--priority p0|p1|p2|p3] [--frequency every-change|every-release|scheduled|manual] [--release-gate true|false] [--estimated-minutes N] [--tags TAGS] [--triggers PATHS] [--golden-path] | task update ID --module MODULE [same metadata flags] | task plan ID --module MODULE | task run ID --module MODULE [--operation OPERATION_ID] [--scenario SCENARIO] [--environment ENV] [--platform PLATFORM] [--role ROLE] [--device DEVICE] [--device-model MODEL] [--os-version VERSION] [--app-version VERSION] [--web-build BUILD] [--test-data-fingerprint FINGERPRINT] | task operation list|show|review ID --module MODULE [--approve|--reject] | task regression sync|show|run|complete ID --module MODULE | task review ID --module MODULE --approve --confirmed-by USER [--confirmation-source current-chat-explicit-approval|external-review-record] | task archive ID --module MODULE
+  task list | task create ID --module MODULE [--name NAME] [--priority p0|p1|p2|p3] [--frequency every-change|every-release|scheduled|manual] [--release-gate true|false] [--estimated-minutes N] [--tags TAGS] [--triggers PATHS] [--golden-path] | task update ID --module MODULE [same metadata flags] | task plan ID --module MODULE | task explore ID --module MODULE [execution context flags] | task run ID --module MODULE [--operation OPERATION_ID] [--scenario SCENARIO] [--environment ENV] [--platform PLATFORM] [--role ROLE] [--device DEVICE] [--device-model MODEL] [--os-version VERSION] [--app-version VERSION] [--web-build BUILD] [--test-data-fingerprint FINGERPRINT] | task operation list|show|review ID --module MODULE [--approve|--reject] | task regression sync|show|run|complete ID --module MODULE | task review ID --module MODULE --approve --confirmed-by USER [--confirmation-source current-chat-explicit-approval|external-review-record] | task archive ID --module MODULE
   module regression show|run|complete MODULE [--priority p0|p1|p2|p3]
   memory list | memory search TEXT | memory add ID --module MODULE [--task TASK] --title TEXT --content TEXT | memory review ID --module MODULE [--task TASK] --approve|--reject
   run step RUN --action TEXT --detail TEXT --screenshot PATH [--operation-action launch|navigate|click|input|fill|swipe|back|wait|assert|screenshot|reset|restart-app] [--safety-action ACTION] [--scenario SCENARIO] [--status passed|failed|paused|blocked|adapted] [--visual-inspection performed|not-required|skipped] [--execution-mode host-automated|user-assisted|system-component-blocked|preseeded-test-data] [--operation-step STEP] [--locator-strategy STRATEGY] [--locator-value VALUE] [--actual-locator-strategy STRATEGY] [--actual-locator-value VALUE] [--input-refs key=ref,key=ref] [--expected-state TEXT] [--actual-state TEXT] [--adaptation TEXT]
@@ -117,6 +118,39 @@ function runContextFromFlags(): Partial<ExecutionSnapshot> & { operationId?: str
   return { environment: flag('--environment'), platform: flag('--platform'), role: flag('--role'), scenarioId: flag('--scenario'), operationId: flag('--operation'), device: flag('--device'), deviceModel: flag('--device-model'), osVersion: flag('--os-version'), appVersion: flag('--app-version'), webBuild: flag('--web-build'), testDataFingerprint: flag('--test-data-fingerprint') };
 }
 
+function executionEnvelope(projectRoot: string, run: TestRun): Record<string, unknown> {
+  const mode = run.mode ?? (run.replayStatus === 'not_replay' ? 'explore' : 'replay');
+  if (mode === 'replay' && run.operationPlanId) {
+    const task = readTask(projectRoot, run.moduleId, run.taskId);
+    const operationPlan = readOperation(projectRoot, task, run.operationPlanId);
+    const cursor = run.replayCursor ?? 0;
+    return {
+      ...run,
+      executionMode: 'replay',
+      uiExecutionAllowed: run.status === 'running',
+      runId: run.status === 'running' ? run.id : undefined,
+      planningAllowed: false,
+      sourceReviewAllowed: false,
+      strictStepOrder: true,
+      operationPlan,
+      nextOperationStep: operationPlan.steps[cursor],
+      remainingOperationSteps: Math.max(0, operationPlan.steps.length - cursor),
+      checkpoints: operationPlan.checkpoints ?? [],
+      next: run.status === 'running'
+        ? (operationPlan.steps[cursor] ? `Execute OperationPlan step ${operationPlan.steps[cursor]!.id}.` : 'Record declared assertions and cleanup, then run complete.')
+        : run.conclusion,
+    };
+  }
+  return {
+    ...run,
+    executionMode: 'explore',
+    uiExecutionAllowed: run.status === 'running',
+    runId: run.status === 'running' ? run.id : undefined,
+    planningAllowed: true,
+    next: run.status === 'running' ? 'Execute the approved exploratory flow and persist steps, assertions, and cleanup.' : run.conclusion,
+  };
+}
+
 function addMemory(root: string, id: string, moduleId: string, title: string, content: string): ProjectMemory {
   assertSafeId(id, 'memory id');
   readModule(root, moduleId);
@@ -189,6 +223,19 @@ ${usage}`);
     if (!Array.isArray(snapshot.connections) || snapshot.connections.some(connection => !connection.id || !Array.isArray(connection.capabilities))) throw new Error('Host capability snapshot requires a connections array with id and capabilities.');
     config.connections = snapshot.connections.map(connection => ({ id: connection.id, capabilities: [...new Set(connection.capabilities)], status: connection.status ?? 'available', permissionStatus: connection.permissionStatus ?? 'unknown', version: connection.version, host: snapshot.host, attestedAt: snapshot.collectedAt ?? now() }));
     writeJsonAtomic(path, config); output(config); return;
+  }
+  if (group === 'operation') {
+    if (action !== 'replay') throw new Error(`Unsupported command.\n\n${usage}`);
+    const projectRoot = root();
+    if (!subject || subject.startsWith('--')) throw new Error('OperationPlan id or Task-relative JSON ref is required.');
+    const moduleId = requiredFlag('--module');
+    const taskId = requiredFlag('--task');
+    const task = readTask(projectRoot, moduleId, taskId);
+    const operationPlan = readOperation(projectRoot, task, subject);
+    const started = beginAgentGuidedRun(projectRoot, task, { ...runContextFromFlags(), operationId: operationPlan.id, scenarioId: operationPlan.scenarioId });
+    rebuildIndexes(projectRoot);
+    output({ ...executionEnvelope(projectRoot, started), canonicalPrompts: readProjectPromptBundle(projectRoot) });
+    return;
   }
   if (group === 'impact') {
     if (action !== 'analyze') throw new Error(`Unsupported command.
@@ -341,11 +388,19 @@ ${usage}`);
     if (action === 'archive') {
       task.metadata.status = 'archived'; task.metadata.version += 1; task.updatedAt = now(); saveTask(projectRoot, task); rebuildIndexes(projectRoot); output(task); return;
     }
+    if (action === 'explore') {
+      if (flag('--operation')) throw new Error('task explore does not accept --operation. Use operation replay for an active OperationPlan.');
+      const started = beginAgentGuidedRun(projectRoot, task, { ...runContextFromFlags(), operationId: undefined });
+      rebuildIndexes(projectRoot);
+      const workflow = workflowStatus(projectRoot, moduleId, taskId);
+      output({ ...executionEnvelope(projectRoot, started), workflow, canonicalPrompts: readProjectPromptBundle(projectRoot) });
+      return;
+    }
     if (action === 'run') {
       const started = beginAgentGuidedRun(projectRoot, task, runContextFromFlags());
       rebuildIndexes(projectRoot);
       const workflow = workflowStatus(projectRoot, moduleId, taskId);
-      output({ ...started, workflow, uiExecutionAllowed: workflow.uiExecutionAllowed, runId: workflow.runId, canonicalPrompts: readProjectPromptBundle(projectRoot), next: workflow.nextAllowedAction });
+      output({ ...executionEnvelope(projectRoot, started), workflow, canonicalPrompts: readProjectPromptBundle(projectRoot), compatibilityNote: 'task run is retained for compatibility. Use task explore for first execution and operation replay for fast regression.' });
       return;
     }
   }
@@ -380,27 +435,27 @@ ${usage}`);
       const executionMode = (flag('--execution-mode') ?? 'host-automated') as StepExecutionMode;
       if (!['host-automated', 'user-assisted', 'system-component-blocked', 'preseeded-test-data'].includes(executionMode)) throw new Error('--execution-mode is invalid.');
       const updated = recordAgentStep(projectRoot, subject, { action: requiredFlag('--action'), operationAction: flag('--operation-action') as 'launch' | 'navigate' | 'click' | 'input' | 'fill' | 'swipe' | 'back' | 'wait' | 'assert' | 'screenshot' | 'reset' | 'restart-app' | undefined, safetyAction: flag('--safety-action'), detail: requiredFlag('--detail'), screenshotPath: requiredFlag('--screenshot'), status: (flag('--status') as RunStatus | undefined) ?? 'passed', visualInspection: (flag('--visual-inspection') as 'performed' | 'not-required' | 'not-applicable' | 'skipped' | undefined) ?? 'not-required', executionMode, operationStepId: flag('--operation-step'), scenarioId: flag('--scenario'), locator: locatorFromFlags(), actualLocator: locatorFromFlags('actual-'), inputRefs: recordFlag('--input-refs'), expectedState: flag('--expected-state'), actualState: flag('--actual-state'), adaptation: flag('--adaptation') });
-      output(updated); return;
+      output(executionEnvelope(projectRoot, updated)); return;
     }
     if (action === 'evidence') {
       const updated = recordHostEvidence(projectRoot, subject, { type: requiredFlag('--type'), summary: requiredFlag('--summary'), artifactPath: flag('--file') });
-      output(updated); return;
+      output(executionEnvelope(projectRoot, updated)); return;
     }
     if (action === 'cleanup') {
       const updated = recordCleanupFinding(projectRoot, subject, { scenarioId: requiredFlag('--scenario'), cleanup: requiredFlag('--cleanup'), actual: requiredFlag('--actual'), status: requiredFlag('--status') as RunStatus, screenshotPath: flag('--screenshot') });
-      output(updated); return;
+      output(executionEnvelope(projectRoot, updated)); return;
     }
     if (action === 'recover') {
       const updated = recordRecoveryAttempt(projectRoot, subject, { action: requiredFlag('--action'), reason: requiredFlag('--reason'), detail: requiredFlag('--detail'), outcome: requiredFlag('--outcome') as 'continued' | 'blocked' | 'paused' | 'failed', failedStepId: flag('--failed-step') });
-      output(updated); return;
+      output(executionEnvelope(projectRoot, updated)); return;
     }
     if (action === 'observe') {
       const updated = recordVisualFinding(projectRoot, subject, { scenarioId: requiredFlag('--scenario'), assertionId: requiredFlag('--assertion'), expected: requiredFlag('--expected'), actual: requiredFlag('--actual'), status: requiredFlag('--status') as RunStatus, screenshotPath: flag('--screenshot'), inspectionProvider: flag('--inspection-provider') });
-      output(updated); return;
+      output(executionEnvelope(projectRoot, updated)); return;
     }
     if (action === 'complete') {
       const updated = completeAgentGuidedRun(projectRoot, readTask(projectRoot, (run as { moduleId: string }).moduleId, (run as { taskId: string }).taskId), subject);
-      rebuildIndexes(projectRoot); output(updated); return;
+      rebuildIndexes(projectRoot); output(executionEnvelope(projectRoot, updated)); return;
     }
   }
   if (group === 'module' && action === 'regression') {

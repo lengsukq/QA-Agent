@@ -186,7 +186,11 @@ export function saveRun(root: string, run: TestRun): void {
     appendJsonl(qaPath(root, 'index', 'runs.jsonl'), { runId: run.id, taskId: run.taskId, moduleId: run.moduleId, status: run.status, startedAt: run.startedAt, completedAt: run.completedAt, reportPath: run.reportPath });
   });
 }
-function normalizeRun(run: TestRun): TestRun { run.cleanupFindings ??= []; return run; }
+function normalizeRun(run: TestRun): TestRun {
+  run.cleanupFindings ??= [];
+  run.mode ??= run.replayStatus === 'not_replay' ? 'explore' : 'replay';
+  return run;
+}
 export function readRun(root: string, moduleId: string, taskId: string, runId: string): TestRun { return normalizeRun(readJson<TestRun>(taskRunPath(root, moduleId, taskId, runId))); }
 export function readRunById(root: string, runId: string): TestRun {
   const path = listFiles(qaPath(root, 'modules'), candidate => candidate.endsWith(`/runs/${runId}/run.json`))[0];

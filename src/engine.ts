@@ -7,7 +7,7 @@ import { rebuildIndexes } from './indexer.ts';
 import { hasSecrets, now, readJson, writeJsonAtomic } from './store.ts';
 import { writeReport } from './report.ts';
 import { curateFailedRun, curateObservedBusinessRules } from './memory.ts';
-import type { ExecutionSnapshot, Locator, OperationAction, RegressionRun, RegressionSuite, RunStatus, StepExecutionMode, TestRun, TestTask, VisualInspectionStatus } from './types.ts';
+import type { ExecutionSnapshot, Locator, OperationAction, OperationStep, RegressionRun, RegressionSuite, RunStatus, StepExecutionMode, TestRun, TestTask, VisualInspectionStatus } from './types.ts';
 import { approvalIsCurrent } from './approval.ts';
 import { approvedOperationForReplay, createOperationCandidates, readOperation } from './operations.ts';
 import { assertRecoveryAction, assertSafeAction, type RecoveryAction } from './safety.ts';
@@ -37,6 +37,7 @@ function newRun(root: string, task: TestTask, input: RunContextInput = {}): Test
   return {
     $schema: '../../../../schemas/run.schema.json', id: `run-${startedAt.replace(/[-:.TZ]/g, '').slice(0, 14)}-${randomUUID().slice(0, 8)}`,
     taskId: task.metadata.id, moduleId: task.metadata.moduleId, context, git: gitMetadata(root), status: 'pending', safeMode: policy.safeMode,
+    mode: input.operationId ? 'replay' : 'explore',
     steps: [], scenarioResults: [], evidence: [], visualFindings: [], replayStatus: 'not_replay', replayStage: 'idle', replayCursor: 0,
     scenarioId: input.scenarioId, screenshots: [], recoveryAttempts: [], cleanupFindings: [], startedAt,
   };
@@ -130,7 +131,9 @@ export function beginAgentGuidedRun(root: string, task: TestTask, context: RunCo
     } catch (error) { return block(root, task, run, (error as Error).message); }
   }
   run.status = 'running'; if (run.replayStatus === 'not_replay') run.replayStage = 'ready';
-  run.steps.push({ id: 'agent-guided-preflight', action: 'Agent-guided execution preflight', status: 'passed', detail: `Required capabilities are available. Host MCP must execute the real browser, simulator, or device action. Capture a screenshot after every real UI action and inspect only adaptive checkpoints.`, at: now(), source: 'internal' });
+  run.steps.push(run.mode === 'replay'
+    ? { id: 'strict-replay-contract', action: 'Strict OperationPlan replay', status: 'passed', detail: 'Execute the approved OperationPlan JSON in order. Planning and source review are not part of Replay. Capture required screenshots and declared business assertions.', at: now(), source: 'internal' }
+    : { id: 'agent-guided-preflight', action: 'Agent-guided Explore preflight', status: 'passed', detail: 'Required capabilities are available. The host may explore the approved flow, while persisting every real UI action and required evidence.', at: now(), source: 'internal' });
   checkpointRun(root, run); return run;
 }
 
@@ -144,15 +147,17 @@ export function recordAgentStep(root: string, runId: string, input: { action: st
   if (hasSecrets({ inputRefs: input.inputRefs, detail: input.detail, locator: input.locator, actualLocator: input.actualLocator })) throw new Error('Operation step contains a potential secret. Use an env: reference instead.');
   const stepId = `agent-${run.steps.length + 1}`;
   if (source === 'ui' || source === 'operation-replay') { if (!input.screenshotPath) throw new Error('Every real UI action requires --screenshot.'); }
+  let replayStep: OperationStep | undefined;
   if (run.replayStatus !== 'not_replay') {
     if (!run.operationPlanId || !input.operationStepId) throw new Error('Replay UI actions must reference operationStepId.');
-    const operation = readOperation(root, task, run.operationPlanId); const expected = operation.steps[run.replayCursor ?? 0];
-    if (!expected || expected.id !== input.operationStepId) throw new Error(`Replay step order violation: expected ${expected?.id ?? 'completed'}, received ${input.operationStepId}.`);
-    if (input.scenarioId && input.scenarioId !== expected.scenarioId) throw new Error(`Replay scenario mismatch: expected ${expected.scenarioId}.`);
+    const operation = readOperation(root, task, run.operationPlanId); replayStep = operation.steps[run.replayCursor ?? 0];
+    if (!replayStep || replayStep.id !== input.operationStepId) throw new Error(`Replay step order violation: expected ${replayStep?.id ?? 'completed'}, received ${input.operationStepId}.`);
+    if (input.scenarioId && input.scenarioId !== replayStep.scenarioId) throw new Error(`Replay scenario mismatch: expected ${replayStep.scenarioId}.`);
+    if (input.operationAction && input.operationAction !== replayStep.action) throw new Error(`Replay action mismatch: expected ${replayStep.action}, received ${input.operationAction}.`);
     run.replayStage = 'executing';
   }
   const screenshotPath = input.screenshotPath ? captureScreenshot(root, run, stepId, input.screenshotPath, visualInspection, `${input.action}: ${input.detail}`) : undefined;
-  run.steps.push({ id: stepId, action: input.action, operationAction: input.operationAction, safetyAction: input.safetyAction, status: input.status ?? 'passed', detail: input.detail, at: now(), scenarioId, screenshotPath, visualInspection, source, executionMode, operationStepId: input.operationStepId, locator: input.locator, actualLocator: input.actualLocator, inputRefs: input.inputRefs, expectedState: input.expectedState, actualState: input.actualState, adaptation: input.adaptation });
+  run.steps.push({ id: stepId, action: input.action, operationAction: input.operationAction ?? replayStep?.action, safetyAction: input.safetyAction ?? replayStep?.safetyAction, status: input.status ?? 'passed', detail: input.detail, at: now(), scenarioId, screenshotPath, visualInspection, source, executionMode, operationStepId: input.operationStepId, locator: input.locator ?? replayStep?.locator, actualLocator: input.actualLocator, inputRefs: input.inputRefs ?? replayStep?.inputRefs, expectedState: input.expectedState ?? replayStep?.expectedState, actualState: input.actualState, adaptation: input.adaptation });
   if (run.replayStatus !== 'not_replay') { if (input.status === 'adapted' || input.adaptation) run.replayStatus = 'adapted'; run.replayCursor = (run.replayCursor ?? 0) + 1; run.replayStage = visualInspection === 'performed' ? 'assertion_checked' : 'visual_check_optional'; }
   checkpointRun(root, run); return run;
 }
@@ -225,15 +230,20 @@ export function completeAgentGuidedRun(root: string, task: TestTask, runId: stri
   const run = readRunById(root, runId); if (run.status !== 'running') throw new Error(`Run ${runId} is not running.`);
   if (run.replayStatus !== 'not_replay' && run.operationPlanId) { const operation = readOperation(root, task, run.operationPlanId); if ((run.replayCursor ?? 0) < operation.steps.length) return block(root, task, run, `Replay is incomplete: ${operation.steps.length - (run.replayCursor ?? 0)} Operation steps remain.`, 'blocked'); }
   const active = task.scenarios.filter(scenario => !run.scenarioId || scenario.id === run.scenarioId);
+  const replayOperation = run.operationPlanId ? readOperation(root, task, run.operationPlanId) : undefined;
   const closureIssues = active.flatMap(scenario => {
     const findings = run.visualFindings.filter(item => item.scenarioId === scenario.id);
     if (!findings.length) return [`${scenario.id}: no run observe result was recorded. A passed run step does not satisfy a business assertion.`];
     const missing = (scenario.visualAssertions ?? []).filter(assertion => !findings.some(finding => finding.assertionId === assertion.id));
     const cleanupFindings = run.cleanupFindings.filter(item => item.scenarioId === scenario.id);
     const missingCleanup = scenario.cleanup.filter(cleanup => !cleanupFindings.some(finding => finding.cleanup === cleanup));
+    const missingCheckpoints = (replayOperation?.scenarioId === scenario.id ? replayOperation.checkpoints ?? [] : [])
+      .filter(checkpoint => checkpoint.screenshotRequired)
+      .filter(checkpoint => !findings.some(finding => finding.assertionId === checkpoint.id && finding.screenshotPath));
     return [
       ...missing.map(assertion => `${scenario.id}: missing run observe for visual assertion ${assertion.id}.`),
       ...missingCleanup.map(cleanup => `${scenario.id}: missing cleanup result for ${cleanup}.`),
+      ...missingCheckpoints.map(checkpoint => `${scenario.id}: checkpoint ${checkpoint.id} requires screenshot evidence.`),
     ];
   });
   if (closureIssues.length) throw new Error(`Run ${runId} cannot complete. ${closureIssues.join(' ')} Record every declared assertion with run observe, including expected, actual, terminal status, and screenshot when passing or failing; then retry run complete.`);

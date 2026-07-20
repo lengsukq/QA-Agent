@@ -219,7 +219,7 @@ qa-agent task review checkout-basic-flow \
 After the host capability snapshot is verified, start the Run:
 
 ```bash
-qa-agent task run checkout-basic-flow --module checkout
+qa-agent task explore checkout-basic-flow --module checkout
 ```
 
 ```json
@@ -288,6 +288,17 @@ Each Task is a self-contained test asset directory:
 ```
 
 ### 5. Fast regression replay
+
+After the first Explore Run passes and its OperationPlan is approved, later runs do not re-plan or review source. Execute the JSON directly:
+
+```bash
+qa-agent operation replay OPERATION_ID \
+  --module checkout \
+  --task checkout-basic-flow
+```
+
+The response contains the complete `operationPlan`, `nextOperationStep`, `remainingOperationSteps`, and `checkpoints`. The host follows the order strictly. Every Replay still creates a new Run, report, and checkpoint screenshots.
+
 
 After a successful run, the Agent creates a candidate OperationPlan under `.qa-agent/modules/<module>/tasks/<task>/operation-plans/<scenario>/`. Review it before reuse:
 

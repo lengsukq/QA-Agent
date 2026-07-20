@@ -13,7 +13,7 @@ Use `qa-agent/v2` as the QA state machine. The host IDE controls browser, simula
 2. Mirror the returned `todoList` into the IDE TodoList when that tool exists.
 3. Read the returned plan and show it to the user.
 4. Wait for explicit approval from a real human reviewer. The Agent cannot approve its own plan.
-5. Start the Task Run.
+5. Use `task explore` for the first approved execution. Use `operation replay` when an active OperationPlan already exists.
 6. Do not use any browser, simulator, device, or UI tool unless the latest response contains both `uiExecutionAllowed: true` and `runId`.
 
 Read-only source exploration is allowed before approval only to refine the Test Plan. UI execution is not.
@@ -42,7 +42,7 @@ Task plans, Scenarios, OperationPlans, RegressionSuite, and reviewed memory rema
 
 ## Replay and release
 
-Replay only active, approved OperationPlans in a compatible execution context. Preserve business assertions and cleanup.
+Replay only active, approved OperationPlans in a compatible execution context. Replay is strict execution of JSON: do not regenerate a plan or review source code. Follow `nextOperationStep`, preserve business assertions and cleanup, and generate a new Run report with checkpoint screenshots.
 
 Release checks begin with Impact Analysis. Missing P0 or release-gate replay assets are `NO-GO`; other required asset gaps are `REVIEW`. Return `GO`, `NO-GO`, or `REVIEW` from evidence.
 
