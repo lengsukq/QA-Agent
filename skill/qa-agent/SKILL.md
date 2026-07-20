@@ -14,6 +14,8 @@ The host Skill is one entry point; the CLI owns configuration, state, execution,
 3. Run `qa-agent test --module <module> --task <task> [--scenario <scenario>]`; it selects explore or replay automatically.
 4. After a successful Runtime Run, run `qa-agent archive --module <module> --task <task>`; it verifies the complete Task package before archiving.
 
+After every `qa-agent test` Run reaches completion, inspect the returned `operationCandidates` and `operationCandidateIssues`. If one or more candidates exist, the Agent must proactively tell the user: “本次 Run 已生成 OperationPlan 候选，需要审批后才能用于回归。” Show the candidate IDs, Scenario, source Run, plan hash, and any readiness issues, then ask the user whether to approve them. Do not silently proceed to archive or claim that replay is ready. After explicit approval, call `qa-agent task operation review <task> --module <module> --operation <operation-id> --approve`, then call `qa-agent task regression sync <task> --module <module>`.
+
 The compatibility commands `workflow bootstrap`, `task explore`, `task run`, `operation replay`, and `task archive` remain available for existing projects.
 
 ## CLI command reference
@@ -32,7 +34,7 @@ Use the CLI for all project and Task mutations. Do not manually create or edit t
 | `qa-agent test --module MODULE --task TASK [--scenario SCENARIO]` | Start the approved Task; automatically selects first-run explore or compatible replay. | Yes, only when the Runtime gate allows it |
 | `qa-agent operation replay OPERATION --module MODULE --task TASK` | Compatibility/direct replay entry for an approved OperationPlan. | Yes, only when preflight allows it |
 | `qa-agent run step/evidence/observe/cleanup/recover/complete RUN ...` | Internal Run persistence commands used by the host Agent to record actions, evidence, assertions, cleanup, recovery, and completion. | No; these continue an existing Run |
-| `qa-agent task operation list/show/review ...` | List, inspect, or approve an OperationPlan candidate after a successful Run. | No |
+| `qa-agent task operation list/show/review ...` | List, inspect, or approve an OperationPlan candidate after a successful Run. Approval requires explicit user confirmation. | No |
 | `qa-agent task regression sync/show/run/complete ...` | Build or execute a Task RegressionSuite from approved active OperationPlans. | `run` starts regression child Runs |
 | `qa-agent impact analyze ...` | Map changed files to affected Modules and Tasks. | No |
 | `qa-agent release check ...` | Build and optionally start an impact-aware release regression check. | Only without `--plan-only` and after gates pass |
