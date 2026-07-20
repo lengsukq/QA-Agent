@@ -78,7 +78,7 @@ export function initializeProject(root: string, options: { id?: string; name?: s
     source: { mode: 'host-provided', root: '' }, storage: { format: 'json', runIndexFormat: 'jsonl' }, createdAt: timestamp, updatedAt: timestamp,
   };
   writeJsonAtomic(existing, project);
-  writeJsonAtomic(qaPath(root, '.version'), { version: '0.2.2', initializedAt: timestamp });
+  writeJsonAtomic(qaPath(root, '.version'), { version: '0.2.3', initializedAt: timestamp });
   writeJsonAtomic(qaPath(root, '.template-hashes.json'), { version: 1, hashes: {} });
   writeJsonAtomic(qaPath(root, '.configured-hosts.json'), {});
   writeJsonAtomic(qaPath(root, 'policies.json'), defaultPolicies());
