@@ -8,6 +8,7 @@
   },
   "files": [
     "bin/",
+    "dist/",
     "src/",
     "skill/",
     "README.md",
@@ -16,11 +17,12 @@
     "package-lock.json"
   ],
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
     "qa-agent": "node --experimental-strip-types src/cli.ts",
     "cli": "node --experimental-strip-types src/cli.ts",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "validate": "npm run cli -- skill validate",
-    "pack:check": "npm pack --dry-run"
+    "pack:check": "npm run build && npm pack --dry-run"
   },
   "repository": {
     "type": "git",
@@ -40,5 +42,9 @@
   ],
   "engines": {
     "node": ">=22.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "typescript": "^5.9.3"
   }
 }
