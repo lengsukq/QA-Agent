@@ -7,6 +7,18 @@ function canonicalize(value: unknown): unknown {
   return value;
 }
 
+
+const reservedApproverIds = new Set(['qa-agent', 'qa agent', 'assistant', 'system', 'auto-approved', 'auto approved', 'unknown']);
+
+export function isHumanApprover(value: string | undefined): boolean {
+  if (!value?.trim()) return false;
+  return !reservedApproverIds.has(value.trim().toLowerCase());
+}
+
+export function assertHumanApprover(value: string): void {
+  if (!isHumanApprover(value)) throw new Error('Test Plan approval must identify the real human reviewer; qa-agent, assistant, system, auto-approved, and unknown are not valid approvers.');
+}
+
 /** Hash only the user-reviewed execution contract, never mutable run metadata. */
 export function testPlanHash(task: TestTask): string {
   const contract = {
@@ -19,7 +31,7 @@ export function testPlanHash(task: TestTask): string {
 }
 
 export function approvalIsCurrent(task: TestTask): boolean {
-  return Boolean(task.metadata.approval?.planHash && task.metadata.approval.planHash === testPlanHash(task));
+  return Boolean(task.metadata.approval?.planHash && task.metadata.approval.confirmationSource && isHumanApprover(task.metadata.approval.confirmedBy) && task.metadata.approval.planHash === testPlanHash(task));
 }
 
 export function invalidateApproval(task: TestTask): boolean {

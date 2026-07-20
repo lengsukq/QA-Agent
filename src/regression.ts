@@ -69,7 +69,7 @@ function memberKey(member: RegressionSuiteMember): string {
 }
 
 function suiteHashFor(suite: Pick<RegressionSuite,
-  'scope' | 'moduleId' | 'moduleIds' | 'taskId' | 'members' | 'selectionPolicy' | 'priorityThreshold' | 'impactedModules'
+  'scope' | 'moduleId' | 'moduleIds' | 'taskId' | 'members' | 'selectionPolicy' | 'priorityThreshold' | 'impactedModules' | 'requiredAssetGaps'
 >): string {
   return hash({
     scope: suite.scope,
@@ -79,6 +79,7 @@ function suiteHashFor(suite: Pick<RegressionSuite,
     selectionPolicy: suite.selectionPolicy,
     priorityThreshold: suite.priorityThreshold,
     impactedModules: suite.impactedModules ?? [],
+    requiredAssetGaps: suite.requiredAssetGaps ?? [],
     members: suite.members.map(memberKey),
   });
 }
@@ -97,6 +98,7 @@ function suiteBase(input: {
   impactedModules?: string[];
   selectionReasons?: string[];
   releaseGate?: boolean;
+  requiredAssetGaps?: RegressionSuite['requiredAssetGaps'];
 }): RegressionSuite {
   const timestamp = now();
   const moduleIds = [...new Set(input.moduleIds ?? input.members.map(member => member.moduleId))];
@@ -110,6 +112,7 @@ function suiteBase(input: {
     selectionPolicy: input.selectionPolicy ?? 'all-active-operation-plans',
     priorityThreshold: input.priorityThreshold ?? 'p3',
     impactedModules: input.impactedModules,
+    requiredAssetGaps: input.requiredAssetGaps,
   };
   return {
     $schema: input.scope === 'task'
@@ -214,6 +217,7 @@ export function buildReleaseRegressionSuite(
   const hasImpact = impacted.size > 0 || selectedTaskReasons.size > 0;
   const taskPaths = listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/task\.json$/.test(path)).sort();
   const selected: RegressionSuiteMember[] = [];
+  const requiredAssetGaps: NonNullable<RegressionSuite['requiredAssetGaps']> = [];
   const selectionReasons = new Set<string>();
 
   for (const path of taskPaths) {
@@ -246,7 +250,16 @@ export function buildReleaseRegressionSuite(
     if (!include) continue;
 
     const reason = reasons.join(' ');
-    for (const member of taskMembers(root, task, reason)) selected.push(member);
+    const members = taskMembers(root, task, reason);
+    const assetRequired = releaseGate || goldenPath || everyRelease || (hasImpact && impactedTask && allowedPriority) || (!hasImpact && allowedPriority && profile !== 'full');
+    if (!members.length && assetRequired) {
+      requiredAssetGaps.push({
+        moduleId: task.metadata.moduleId, taskId: task.metadata.id, priority: task.metadata.priority,
+        releaseGate, goldenPath, reason: `${reason} No active approved OperationPlan exists for this required Task.`,
+      });
+    } else {
+      for (const member of members) selected.push(member);
+    }
     reasons.forEach(item => selectionReasons.add(item));
   }
 
@@ -271,6 +284,7 @@ export function buildReleaseRegressionSuite(
     impactedModules: [...impacted],
     selectionReasons: [...selectionReasons],
     releaseGate: true,
+    requiredAssetGaps,
   });
 }
 
