@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, unlinkSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendJsonl, assertSafeId, ensureDir, listFiles, now, readJson, withFileLock, writeJsonAtomic, writeTextAtomic } from './store.ts';
@@ -78,7 +78,7 @@ export function initializeProject(root: string, options: { id?: string; name?: s
     source: { mode: 'host-provided', root: '' }, storage: { format: 'json', runIndexFormat: 'jsonl' }, createdAt: timestamp, updatedAt: timestamp,
   };
   writeJsonAtomic(existing, project);
-  writeJsonAtomic(qaPath(root, '.version'), { version: '0.2.5', initializedAt: timestamp });
+  writeJsonAtomic(qaPath(root, '.version'), { version: '0.2.6', initializedAt: timestamp });
   writeJsonAtomic(qaPath(root, '.template-hashes.json'), { version: 1, hashes: {} });
   writeJsonAtomic(qaPath(root, '.configured-hosts.json'), {});
   writeJsonAtomic(qaPath(root, 'policies.json'), defaultPolicies());
@@ -155,9 +155,16 @@ function buildRequirements(task: TestTask, module: QaModule): TestRequirements {
   return { $schema: '../../../../schemas/requirements.schema.json', apiVersion: 'qa-agent/v2', kind: 'TestRequirements', taskId: task.metadata.id, moduleId: module.id, businessGoals: task.objectives, actors: task.scope.roles, flows: module.coreFlows ?? [], rules: (module.businessRules ?? []).map((statement, index) => ({ id: `rule-${index + 1}`, statement, knowledgeLevel: 'inferred' as const, source: 'module definition' })), scope: { included: task.objectives, excluded: [] }, preconditions: task.preconditions, testDataRefs: [], environments: task.scope.environments, sourceRefs: module.sourceHints ?? [], risks: task.safety.stopBefore, userQuestions: [], confirmedDecisions: [], createdAt: timestamp, updatedAt: timestamp };
 }
 
+function resolveTaskAssetRef(root: string, moduleId: string, taskId: string, ref: string): string {
+  const base = resolve(taskDirectory(root, moduleId, taskId));
+  const path = resolve(base, ref);
+  if (path !== base && !path.startsWith(`${base}${sep}`)) throw new Error(`Task asset reference escapes Task directory: ${ref}.`);
+  return path;
+}
+
 export function readTask(root: string, moduleId: string, taskId: string): TestTask {
   const task = readJson<TestTask>(taskPath(root, moduleId, taskId));
-  task.scenarios = (task.scenarioRefs ?? []).map(ref => readJson<TestTask['scenarios'][number]>(join(taskDirectory(root, moduleId, taskId), ref)));
+  task.scenarios = (task.scenarioRefs ?? []).map(ref => readJson<TestTask['scenarios'][number]>(resolveTaskAssetRef(root, moduleId, taskId, ref)));
   task.moduleSnapshot = existsSync(taskModuleSnapshotPath(root, moduleId, taskId)) ? readJson<ModuleSnapshot>(taskModuleSnapshotPath(root, moduleId, taskId)) : undefined;
   task.requirements = existsSync(taskRequirementsPath(root, moduleId, taskId)) ? readJson<TestRequirements>(taskRequirementsPath(root, moduleId, taskId)) : undefined;
   task.testPlan = existsSync(taskPlanPath(root, moduleId, taskId)) ? readJson<TestPlan>(taskPlanPath(root, moduleId, taskId)) : undefined;

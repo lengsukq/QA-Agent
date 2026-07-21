@@ -29,7 +29,7 @@ export function copySkill(destination: string, force: boolean): void {
   cpSync(skillSource(), destination, { recursive: true, force, errorOnExist: !force });
 }
 
-export const QA_SUBSKILLS = ['test', 'operation', 'regression', 'archive'] as const;
+export const QA_SUBSKILLS = ['start', 'review', 'test', 'result', 'operation', 'regression', 'recovery', 'archive'] as const;
 
 export function copySubSkills(parent: string, force: boolean): string[] {
   const sourceRoot = skillSource();
@@ -67,15 +67,16 @@ export function detected(config: HostPlatformConfig, projectRoot: string): boole
 
 export const sharedGuidance = `# QA Agent
 
-Use the CLI as the only project mutation and Runtime entry point.
-1. Run qa-agent start --request "<request>" --module <module> --task <task>; it creates the complete Task package in one call. Never create Task JSON or Markdown files one by one.
-2. Present the returned plan, taskDirectory, planHash, and TodoList. Wait for human approval; approval must not start a Run.
-3. Persist approval only with qa-agent task review <task> --module <module> --approve --confirmed-by <human>.
-4. Only after review succeeds run qa-agent test --module <module> --task <task>; this is the command that starts execution.
-5. After a successful exploratory Run report, actively call qa-agent operation generate --module <module> --task <task> --run <run-id> [--scenario <scenario>] to persist the quick-regression OperationPlan candidate. Tell the user its ID, Scenario, source Run, plan hash, and issues, then ask for approval.
-6. Use qa-agent task operation review <task> --module <module> --operation <operation-id> --approve, then run qa-agent test again so the approved OperationPlan is really replayed and reported.
-7. Use qa-agent archive only after the successful replay/adapted regression Run and the complete screenshot, OperationPlan, and RegressionSuite gates pass.
-8. Never use UI tools unless the Runtime response has uiExecutionAllowed=true, mustStop=false, and runId. Never write a manual report or claim PASS.
+Use the qa-agent CLI as the only persistent state and Runtime entry point.
+1. Run qa-agent start --request "<request>" --module <module> --task <task>. Inspect relevant source, reviewed memory, historical Runs, and existing OperationPlans before asking the user; ask at most one user-owned decision per turn.
+2. Present the Runtime-generated plan, planHash, Scenario coverage, evidence, safety, and cleanup. Wait for explicit human approval.
+3. Persist TestPlan approval with qa-agent review --module <module> --task <task> --approve --confirmed-by <human>. Approval must not start a Run.
+4. Run qa-agent test --module <module> --task <task>. Follow only returned gates, allowedActions, nextActions, breadcrumb, resumeToken, and runId.
+5. Use UI tools only when uiExecutionAllowed=true and mustStop=false. Persist every action, screenshot, assertion, cleanup, evidence, recovery attempt, and completion through Runtime commands.
+6. Runtime automatically creates eligible OperationPlan candidates after a successful exploratory Run. Present candidates and request separate promotion approval; do not call operation generate in the normal workflow.
+7. After promotion approval, use qa-agent task operation review ... --approve --confirmed-by <human>, then qa-agent test for a real replay. Only validated OperationPlans enter formal RegressionSuites and archive gates.
+8. Use qa-agent archive only after all validated regression, Runtime report, screenshot, assertion, cleanup, and memory gates pass.
+9. Never write a manual formal report, bypass a blocking Gate, fabricate evidence, or claim PASS before Runtime completion.
 `;
 
 export function renderGuidance(config: HostPlatformConfig): string {

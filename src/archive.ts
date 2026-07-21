@@ -39,18 +39,24 @@ export function inspectTaskArchive(root: string, task: TestTask): ArchiveInspect
 
   let operations: OperationPlan[] = [];
   try { operations = listOperations(root, task); } catch (error) { errors.push(`OperationPlan read failed: ${(error as Error).message}`); }
-  const activeByScenario = new Map(task.scenarios.map(scenario => [scenario.id, operations.find(plan => plan.status === 'active' && plan.validationStatus === 'passed' && plan.scenarioId === scenario.id && plan.planHash === testPlanHash(task) && plan.steps.length > 0)]));
+  const activeByScenario = new Map(task.scenarios.map(scenario => [scenario.id, operations.filter(plan => plan.status === 'validated' && plan.scenarioId === scenario.id && plan.planHash === testPlanHash(task) && plan.steps.length > 0).sort((left, right) => right.version - left.version)[0]]));
   const operationsOk = task.scenarios.length > 0 && task.scenarios.every(scenario => Boolean(activeByScenario.get(scenario.id)));
-  check(checks, 'operation-plans', 'Validated active OperationPlan per Scenario', operationsOk, operationsOk ? [`${task.scenarios.length} active OperationPlan(s) passed a real replay Run`] : task.scenarios.filter(s => !activeByScenario.get(s.id)).map(s => `Scenario ${s.id} needs an active OperationPlan with the current planHash and validationStatus=passed from a successful replay Run`));
+  check(checks, 'operation-plans', 'Validated OperationPlan per Scenario', operationsOk, operationsOk ? [`${task.scenarios.length} validated OperationPlan(s) executed a complete real replay contract`] : task.scenarios.filter(s => !activeByScenario.get(s.id)).map(s => `Scenario ${s.id} needs a validated OperationPlan with the current planHash from a completely executed replay contract`));
 
   let suite: RegressionSuite | undefined;
   if (existsSync(taskRegressionSuitePath(root, task.metadata.moduleId, task.metadata.id))) {
     try { suite = readJson<RegressionSuite>(taskRegressionSuitePath(root, task.metadata.moduleId, task.metadata.id)); } catch (error) { errors.push(`RegressionSuite read failed: ${(error as Error).message}`); }
   }
   const covered = Boolean(suite && suite.status === 'active' && suite.scope === 'task' && suite.taskId === task.metadata.id && task.scenarios.every(scenario => suite!.members.some(member => member.scenarioId === scenario.id && member.operationPlanId === activeByScenario.get(scenario.id)?.id && member.taskPlanHash === testPlanHash(task))));
-  check(checks, 'regression-suite', 'RegressionSuite covers every Scenario', covered, covered ? ['all scenarios and active OperationPlans are covered'] : ['RegressionSuite must be active and cover every Scenario with its current active OperationPlan']);
+  check(checks, 'regression-suite', 'RegressionSuite covers every Scenario', covered, covered ? ['all scenarios and validated OperationPlans are covered'] : ['RegressionSuite must be active and cover every Scenario with its current validated OperationPlan']);
 
   const runs = listFiles(join(directory, 'runs'), path => /\/run\.json$/.test(path)).map(path => { try { return readJson<TestRun>(path); } catch { return undefined; } }).filter((run): run is TestRun => Boolean(run));
+  const completedRuns = runs.filter(run => Boolean(run.completedAt)).sort((left, right) => (right.completedAt ?? right.startedAt).localeCompare(left.completedAt ?? left.startedAt));
+  const latestCompletedRun = completedRuns[0];
+  const latestRunResolved = Boolean(latestCompletedRun && ['passed', 'adapted'].includes(latestCompletedRun.status));
+  check(checks, 'latest-run', 'Latest completed Run is resolved', latestRunResolved, latestRunResolved ? [`${latestCompletedRun!.id}: ${latestCompletedRun!.status}`] : [latestCompletedRun ? `${latestCompletedRun.id}: ${latestCompletedRun.status}; resolve the latest result and rerun before archiving` : 'No completed Runtime Run exists']);
+  const unresolvedKnownIssues = listFiles(join(directory, 'memory'), path => path.endsWith('.json')).map(path => { try { return readJson<{ id: string; type: string; status: string }>(path); } catch { return undefined; } }).filter((item): item is { id: string; type: string; status: string } => Boolean(item && item.type === 'known_issue' && item.status === 'candidate'));
+  check(checks, 'known-issues', 'No unresolved known-issue memory candidates', unresolvedKnownIssues.length === 0, unresolvedKnownIssues.length ? unresolvedKnownIssues.map(item => `${item.id} requires review, rejection, or resolution`) : ['no candidate known_issue memory remains']);
   const successful = runs.filter(run => ['passed', 'adapted'].includes(run.status) && Boolean(run.completedAt) && run.reportGeneratedBy === 'qa-agent-runtime');
   const runEvidenceOk = successful.some(run => {
     const reportPath = taskRunReportPath(root, task.metadata.moduleId, task.metadata.id, run.id);

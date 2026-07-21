@@ -37,6 +37,5 @@ export function approvalIsCurrent(task: TestTask): boolean {
 export function invalidateApproval(task: TestTask): boolean {
   if (!task.metadata.approval) return false;
   delete task.metadata.approval;
-  task.metadata.status = 'needs_review';
   return true;
 }

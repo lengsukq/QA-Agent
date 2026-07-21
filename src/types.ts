@@ -1,5 +1,7 @@
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
-export type TaskStatus = 'draft' | 'ready' | 'active' | 'blocked' | 'needs_review' | 'deprecated' | 'archived';
+export type TaskLifecycleState = 'draft' | 'planning' | 'awaiting_approval' | 'ready' | 'running' | 'reviewing_result' | 'regression_ready' | 'completed' | 'archived' | 'needs_input' | 'blocked' | 'paused' | 'deprecated' | 'superseded';
+/** Legacy states remain readable during the v0.2.x migration window. */
+export type TaskStatus = TaskLifecycleState | 'active' | 'needs_review';
 export type RunStatus = 'pending' | 'running' | 'passed' | 'failed' | 'blocked' | 'paused' | 'inconclusive' | 'not_applicable' | 'needs_confirmation' | 'adapted';
 export type ReplayStatus = 'not_replay' | 'replayed' | 'adapted';
 export type RunMode = 'explore' | 'replay';
@@ -17,14 +19,18 @@ export type RegressionFrequency = 'every-change' | 'every-release' | 'scheduled'
 export type RegressionProfile = 'fast' | 'normal' | 'full';
 export type RegressionSuiteScope = 'task' | 'module' | 'release';
 export type RegressionSuiteStatus = 'draft' | 'active' | 'stale' | 'superseded';
-export type RegressionSelectionPolicy = 'all-active-operation-plans' | 'priority-filtered' | 'impact-filtered' | 'release-gate-plus-impact';
+export type RegressionSelectionPolicy = 'all-validated-operation-plans' | 'all-active-operation-plans' | 'priority-filtered' | 'impact-filtered' | 'release-gate-plus-impact';
 export type WorkflowStatus = 'setup_required' | 'approval_required' | 'ready_to_run' | 'running' | 'completed' | 'blocked';
+export type WorkflowPhase = 'intake' | 'discovery' | 'planning' | 'approval' | 'preflight' | 'execution' | 'assertion' | 'result_review' | 'operation_promotion' | 'regression' | 'recovery' | 'archive';
+export type WorkflowGateStatus = 'satisfied' | 'blocking' | 'not_required';
+export interface WorkflowGate { id: string; status: WorkflowGateStatus; reasonCode?: string; requiredActor?: 'human' | 'runtime' | 'host'; artifactHash?: string; }
+export interface NextAction { id: string; description: string; command?: string; requiresHuman: boolean; requiredActor?: 'agent' | 'human' | 'runtime' | 'host'; blockingGate?: string; deprecatedAlias?: boolean; canonicalCommand?: string; }
 export type WorkflowTodoStatus = 'pending' | 'in_progress' | 'blocked' | 'completed';
 
 export interface WorkflowTodo { id: string; title: string; status: WorkflowTodoStatus; blocking?: boolean; }
 
 export interface QaWorkflowState {
-  apiVersion: 'qa-agent/v2';
+  apiVersion: 'qa-agent/v3';
   kind: 'WorkflowState';
   request?: string;
   moduleId: string;
@@ -33,6 +39,10 @@ export interface QaWorkflowState {
   taskDirectoryAbsolute?: string;
   taskAssetsReady: boolean;
   workflowStatus: WorkflowStatus;
+  taskState: TaskLifecycleState;
+  workflowPhase: WorkflowPhase;
+  reasonCode: string;
+  gates: WorkflowGate[];
   uiExecutionAllowed: boolean;
   mustStop: boolean;
   manualReportAllowed: false;
@@ -42,7 +52,12 @@ export interface QaWorkflowState {
   todoList: WorkflowTodo[];
   allowedActions: string[];
   forbiddenActions: string[];
+  /** Compatibility field; prefer nextActions. */
   nextAllowedAction: string;
+  nextActions: NextAction[];
+  breadcrumb: string;
+  resumeToken?: string;
+  contextHash: string;
   bootstrap?: { moduleCreated: boolean; taskCreated: boolean; taskDirectory: string; taskAssets: string[] };
 }
 
@@ -103,6 +118,7 @@ export interface TestRequirements {
   risks: string[];
   userQuestions: string[];
   confirmedDecisions: string[];
+  requirementTrace?: RequirementTrace[];
   createdAt: string;
   updatedAt: string;
 }
@@ -126,6 +142,14 @@ export interface TestPlan {
   approvedAt?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface RequirementTrace {
+  requirementId: string;
+  scenarioIds: string[];
+  assertionIds: string[];
+  sourceRefs: string[];
+  status: 'covered' | 'partial' | 'not_covered' | 'deferred';
 }
 
 export interface VisualAssertion {
@@ -166,16 +190,23 @@ export interface OperationStep {
   executionMode?: StepExecutionMode;
 }
 
+export type OperationPlanStatus = 'candidate' | 'approved_unverified' | 'validated' | 'stale' | 'rejected' | 'superseded';
+
 export interface OperationPlan {
   $schema: string;
   apiVersion: 'qa-agent/v2';
   kind: 'OperationPlan';
   id: string;
   version: number;
-  status: 'candidate' | 'active' | 'superseded' | 'deprecated';
-  validationStatus?: 'unverified' | 'passed' | 'failed';
+  status: OperationPlanStatus;
+  /** Deprecated compatibility field. New code uses status as the complete lifecycle. */
+  validationStatus?: 'unverified' | 'passed' | 'failed' | 'stale';
   validatedByRunId?: string;
   validatedAt?: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  rejectedBy?: string;
+  rejectedAt?: string;
   taskId: string;
   moduleId: string;
   scenarioId: string;
@@ -231,6 +262,8 @@ export interface QaModule {
   updatedAt: string;
 }
 
+export type ScenarioPlanningStatus = 'applicable' | 'not_applicable' | 'deferred' | 'needs_user_decision';
+
 export interface TestScenario {
   id: string;
   title: string;
@@ -241,6 +274,11 @@ export interface TestScenario {
   evidence: string[];
   cleanup: string[];
   risk: RiskLevel;
+  planningStatus?: ScenarioPlanningStatus;
+  priority?: TestPriority;
+  requirementRefs?: string[];
+  sourceRefs?: string[];
+  deferredReason?: string;
   visualAssertions?: VisualAssertion[];
 }
 
@@ -414,6 +452,7 @@ export interface TestRun {
   id: string;
   taskId: string;
   moduleId: string;
+  planHash?: string;
   context: ExecutionSnapshot;
   git: { branch?: string; commit?: string; dirtyWorkspace: boolean; changedFiles: string[] };
   status: RunStatus;

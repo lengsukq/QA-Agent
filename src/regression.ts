@@ -33,9 +33,10 @@ function taskMembers(root: string, task: TestTask, selectionReason?: string): Re
   const releaseGate = task.metadata.releaseGate ?? priority === 'p0';
   const estimatedDurationMinutes = task.metadata.estimatedDurationMinutes ?? 5;
   const tags = task.metadata.tags ?? [];
-  return listOperations(root, task)
-    .filter(plan => plan.status === 'active')
-    .sort((a, b) => a.scenarioId.localeCompare(b.scenarioId) || a.version - b.version)
+  const latestByScenario = new Map<string, ReturnType<typeof listOperations>[number]>();
+  for (const plan of listOperations(root, task).filter(item => item.status === 'validated').sort((a, b) => a.version - b.version)) latestByScenario.set(plan.scenarioId, plan);
+  return [...latestByScenario.values()]
+    .sort((a, b) => a.scenarioId.localeCompare(b.scenarioId))
     .map((plan, index) => ({
       taskId: task.metadata.id,
       moduleId: task.metadata.moduleId,
@@ -109,7 +110,7 @@ function suiteBase(input: {
     moduleIds,
     taskId: input.taskId,
     members,
-    selectionPolicy: input.selectionPolicy ?? 'all-active-operation-plans',
+    selectionPolicy: input.selectionPolicy ?? 'all-validated-operation-plans',
     priorityThreshold: input.priorityThreshold ?? 'p3',
     impactedModules: input.impactedModules,
     requiredAssetGaps: input.requiredAssetGaps,
@@ -160,6 +161,7 @@ function currentMembers(root: string, suite: RegressionSuite): RegressionSuiteMe
 }
 
 export function syncTaskRegressionSuite(root: string, task: TestTask): RegressionSuite {
+  task = readTask(root, task.metadata.moduleId, task.metadata.id);
   const suite = suiteBase({
     id: `${task.metadata.id}-regression`,
     scope: 'task',
@@ -168,7 +170,7 @@ export function syncTaskRegressionSuite(root: string, task: TestTask): Regressio
     taskId: task.metadata.id,
     members: taskMembers(root, task),
     name: `${task.metadata.name} regression`,
-    purpose: `Replay all active OperationPlans for ${task.metadata.name}.`,
+    purpose: `Replay all validated OperationPlans for ${task.metadata.name}.`,
   });
   writeJsonAtomic(taskRegressionSuitePath(root, task.metadata.moduleId, task.metadata.id), suite);
   task.regressionSuiteRef = 'regression-suite.json';
@@ -185,7 +187,7 @@ export function readTaskRegressionSuite(root: string, task: TestTask): Regressio
   return suite as RegressionSuite;
 }
 
-/** Module regression is a live aggregate of active Task OperationPlans, never a second persisted suite. */
+/** Module regression is a live aggregate of validated Task OperationPlans, never a second persisted suite. */
 export function buildModuleRegressionSuite(root: string, moduleId: string, priorityThreshold: TestPriority = 'p3'): RegressionSuite {
   const module = readModule(root, moduleId);
   const taskPaths = listFiles(join(modulePath(root, moduleId), 'tasks'), path => path.endsWith('/task.json')).sort();
@@ -201,7 +203,7 @@ export function buildModuleRegressionSuite(root: string, moduleId: string, prior
     members,
     name: `${module.name} regression`,
     purpose: `Replay approved ${module.name} flows up to priority ${priorityThreshold}.`,
-    selectionPolicy: priorityThreshold === 'p3' ? 'all-active-operation-plans' : 'priority-filtered',
+    selectionPolicy: priorityThreshold === 'p3' ? 'all-validated-operation-plans' : 'priority-filtered',
     priorityThreshold,
   });
 }
@@ -222,7 +224,7 @@ export function buildReleaseRegressionSuite(
 
   for (const path of taskPaths) {
     const manifest = readJson<TestTask>(path);
-    if (!['ready', 'active'].includes(manifest.metadata.status)) continue;
+    if (!['ready', 'running', 'reviewing_result', 'regression_ready', 'completed', 'active'].includes(manifest.metadata.status)) continue;
     const task = readTask(root, manifest.metadata.moduleId, manifest.metadata.id);
     const tags = task.metadata.tags ?? [];
     const goldenPath = tags.includes('golden-path');
@@ -255,7 +257,7 @@ export function buildReleaseRegressionSuite(
     if (!members.length && assetRequired) {
       requiredAssetGaps.push({
         moduleId: task.metadata.moduleId, taskId: task.metadata.id, priority: task.metadata.priority,
-        releaseGate, goldenPath, reason: `${reason} No active approved OperationPlan exists for this required Task.`,
+        releaseGate, goldenPath, reason: `${reason} No validated OperationPlan exists for this required Task.`,
       });
     } else {
       for (const member of members) selected.push(member);
@@ -279,7 +281,7 @@ export function buildReleaseRegressionSuite(
     members: selected,
     name: `${profile[0]!.toUpperCase()}${profile.slice(1)} release regression`,
     purpose: `Validate release gates, golden paths, and impacted business flows using the ${profile} profile.`,
-    selectionPolicy: profile === 'full' ? 'all-active-operation-plans' : 'release-gate-plus-impact',
+    selectionPolicy: profile === 'full' ? 'all-validated-operation-plans' : 'release-gate-plus-impact',
     priorityThreshold: threshold,
     impactedModules: [...impacted],
     selectionReasons: [...selectionReasons],

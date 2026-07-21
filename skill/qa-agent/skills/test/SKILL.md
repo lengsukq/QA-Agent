@@ -1,8 +1,12 @@
 ---
 name: qa-agent-test
-description: Create, continue, and execute approved QA Tasks through the qa-agent CLI.
+description: Execute an approved QA Task and persist UI actions, evidence, assertions, cleanup, and recovery through Runtime gates.
 ---
 
-# QA Agent Test
+# Test Execution
 
-Use `qa-agent start` to create the complete Task package in one CLI call. Present the returned plan, planHash, Task directory, and TodoList; wait for explicit human approval. Persist approval with `qa-agent task review`, then use `qa-agent test` to start the Run. After a successful exploratory Run, actively call `qa-agent operation generate --module <module> --task <task> --run <run-id>` to write the quick-regression OperationPlan candidate. Ask for approval, approve it through `qa-agent task operation review`, run `qa-agent test` again for a real replay/adapted regression check, and only then allow `qa-agent archive`. Never create Task files manually or write a report by hand.
+Start or resume with `qa-agent test --module <module> --task <task> [--scenario <scenario>]`. Follow only the returned `gates`, `allowedActions`, `nextActions`, breadcrumb, and `runId`.
+
+Use UI tools only when `uiExecutionAllowed=true` and `mustStop=false`. Persist actual actions with `run step`, evidence with `run evidence`, business assertions with `run observe`, cleanup with `run cleanup`, recovery with `run recover`, and finish with `run complete`.
+
+Runtime automatically creates eligible OperationPlan candidates when an exploratory Run completes. Do not call `operation generate` in the canonical workflow. Never write a manual formal report or claim PASS before Runtime completion.

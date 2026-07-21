@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { beginAgentGuidedRun, beginRegressionRun, buildExecutionSnapshot, completeAgentGuidedRun, completeRegressionRun, recordAgentStep, recordCleanupFinding, recordRecoveryAttempt, recordVisualFinding } from '../src/engine.ts';
-import { listOperations, reviewOperation } from '../src/operations.ts';
+import { listOperations, readOperation, reviewOperation } from '../src/operations.ts';
 import { createModule, initializeProject, readRunById, readTask, saveTask, taskDirectory, taskRunDirectory, taskRunReportPath } from '../src/project.ts';
 import { createTaskSkeleton } from '../src/planning.ts';
 import { reviewMemory } from '../src/memory.ts';
@@ -13,6 +13,8 @@ import { testPlanHash } from '../src/approval.ts';
 import type { TestTask } from '../src/types.ts';
 import { buildModuleRegressionSuite, syncTaskRegressionSuite } from '../src/regression.ts';
 import { HOST_CONFIGURATORS, HOST_PLATFORMS } from '../src/host-adapters.ts';
+import { inspectTaskArchive } from '../src/archive.ts';
+import { appendTaskEvent } from '../src/events.ts';
 
 const repository = process.cwd();
 const cli = join(repository, 'src', 'cli.ts');
@@ -77,8 +79,8 @@ test('initializes, plans, persists, validates, and requires host-driven executio
   assert.equal(validation.valid, true);
   const incompleteArchive = spawnSync(process.execPath, ['--experimental-strip-types', cli, 'task', 'archive', 'checkout-basic-flow', '--module', 'checkout'], { cwd: root, encoding: 'utf8' });
   assert.notEqual(incompleteArchive.status, 0);
-  assert.match(incompleteArchive.stdout, /Active OperationPlan|successful Runtime Run|RegressionSuite/);
-  assert.equal(readTask(root, 'checkout', 'checkout-basic-flow').metadata.status, 'ready');
+  assert.match(incompleteArchive.stdout, /Validated OperationPlan|successful Runtime Run|RegressionSuite/);
+  assert.equal(readTask(root, 'checkout', 'checkout-basic-flow').metadata.status, 'running');
 });
 
 test('syncs current closure prompts into an initialized project', () => {
@@ -102,7 +104,7 @@ test('start creates the Task package before approval and review does not start a
   assert.ok(started.bootstrap.taskDirectory);
   assert.ok(existsSync(join(root, started.bootstrap.taskDirectory, 'task.json')));
   assert.ok(existsSync(join(root, started.bootstrap.taskDirectory, 'test-plan.json')));
-  assert.equal(readTask(root, 'auth', 'login-flow').metadata.status, 'draft');
+  assert.equal(readTask(root, 'auth', 'login-flow').metadata.status, 'awaiting_approval');
   const reviewed = JSON.parse(run(root, 'task', 'review', 'login-flow', '--module', 'auth', '--approve', '--confirmed-by', 'human-reviewer'));
   assert.equal(reviewed.metadata.status, 'ready');
   assert.equal(existsSync(join(root, reviewed.metadata.moduleId, 'run.json')), false);
@@ -335,7 +337,8 @@ test('creates, approves, and replays a project-local Operation JSON with adaptiv
   assert.equal(generated.generated, false);
   assert.equal(generated.approvalRequired, true);
   assert.deepEqual(generated.operationCandidates, [candidates[0]!.id]);
-  reviewOperation(root, task, candidates[0]!.id, 'approve');
+  assert.throws(() => reviewOperation(root, task, candidates[0]!.id, 'approve', 'qa-agent'), /real human reviewer/i);
+  reviewOperation(root, task, candidates[0]!.id, 'approve', 'test-user');
   const replayViaOperationCommand = JSON.parse(run(root, 'operation', 'replay', candidates[0]!.id, '--module', 'checkout', '--task', 'checkout-replay-flow'));
   assert.equal(replayViaOperationCommand.status, 'running');
   assert.equal(replayViaOperationCommand.executionMode, 'replay');
@@ -377,6 +380,9 @@ test('creates, approves, and replays a project-local Operation JSON with adaptiv
   const replayViaTaskCommand = JSON.parse(run(root, 'task', 'run', 'checkout-replay-flow', '--module', 'checkout', '--operation', candidates[0]!.id));
   assert.equal(replayViaTaskCommand.status, 'running');
   assert.match(replayViaTaskCommand.compatibilityNote, /compatibility/);
+  run(root, 'run', 'step', replayViaTaskCommand.runId, '--action', 'Open checkout', '--detail', 'Completed compatibility replay.', '--screenshot', screenshot, '--operation-step', 'open-checkout');
+  run(root, 'run', 'observe', replayViaTaskCommand.runId, '--scenario', 'happy-path', '--assertion', 'business-outcome', '--expected', 'Checkout result is visible.', '--actual', 'Checkout result is visible.', '--status', 'passed', '--screenshot', screenshot);
+  run(root, 'run', 'complete', replayViaTaskCommand.runId);
   const taskSuite = syncTaskRegressionSuite(root, task);
   const moduleSuite = buildModuleRegressionSuite(root, 'checkout');
   assert.equal(taskSuite.scope, 'task');
@@ -393,6 +399,11 @@ test('creates, approves, and replays a project-local Operation JSON with adaptiv
   const moduleRegression = JSON.parse(run(root, 'module', 'regression', 'run', 'checkout'));
   assert.equal(moduleRegression.status, 'running');
   assert.equal(moduleRegression.childRuns.length, 1);
+  const moduleChild = moduleRegression.childRuns[0];
+  run(root, 'run', 'step', moduleChild.runId, '--action', 'Open checkout', '--detail', 'Completed module regression replay.', '--screenshot', screenshot, '--operation-step', 'open-checkout');
+  run(root, 'run', 'observe', moduleChild.runId, '--scenario', 'happy-path', '--assertion', 'business-outcome', '--expected', 'Checkout result is visible.', '--actual', 'Checkout result is visible.', '--status', 'passed', '--screenshot', screenshot);
+  run(root, 'run', 'complete', moduleChild.runId);
+  completeRegressionRun(root, moduleRegression);
   const regression = beginRegressionRun(root, taskSuite, buildExecutionSnapshot(root, task));
   assert.equal(regression.status, 'running');
   assert.equal(regression.childRuns.length, 1);
@@ -424,9 +435,20 @@ test('creates, approves, and replays a project-local Operation JSON with adaptiv
   recordVisualFinding(root, adaptedRun.id, { scenarioId: 'happy-path', assertionId: 'business-outcome', expected: 'Checkout result is visible.', actual: 'Checkout result is visible.', status: 'adapted', screenshotPath: screenshot });
   const adapted = completeAgentGuidedRun(root, task, adaptedRun.id);
   assert.equal(adapted.status, 'adapted');
-  const adaptedPlan = listOperations(root, task).find(item => item.version === 2);
-  assert.equal(adaptedPlan?.status, 'candidate');
-  assert.equal(adaptedPlan?.supersedes, candidates[0]!.id);
+  const adaptedPlan = listOperations(root, task).find(item => item.version === 2)!;
+  assert.equal(adaptedPlan.status, 'candidate');
+  assert.equal(adaptedPlan.supersedes, candidates[0]!.id);
+  reviewOperation(root, task, adaptedPlan.id, 'approve', 'test-user');
+  const adaptedValidationRun = beginAgentGuidedRun(root, task, { operationId: adaptedPlan.id });
+  recordAgentStep(root, adaptedValidationRun.id, { action: 'Open checkout', detail: 'Validated the adapted OperationPlan version.', screenshotPath: screenshot, operationStepId: adaptedPlan.steps[0]!.id });
+  recordVisualFinding(root, adaptedValidationRun.id, { scenarioId: 'happy-path', assertionId: 'business-outcome', expected: 'Checkout result is visible.', actual: 'Checkout result is visible.', status: 'passed', screenshotPath: screenshot });
+  completeAgentGuidedRun(root, task, adaptedValidationRun.id);
+  const versionedOperations = listOperations(root, readTask(root, 'checkout', 'checkout-replay-flow'));
+  assert.equal(versionedOperations.find(item => item.id === candidates[0]!.id)?.status, 'superseded');
+  assert.equal(versionedOperations.find(item => item.id === adaptedPlan.id)?.status, 'validated');
+  const latestSuite = syncTaskRegressionSuite(root, readTask(root, 'checkout', 'checkout-replay-flow'));
+  assert.equal(latestSuite.members.length, 1);
+  assert.equal(latestSuite.members[0]!.operationPlanId, adaptedPlan.id);
 });
 
 test('creates one OperationPlan per Scenario and enforces replay context and recovery policy', () => {
@@ -450,7 +472,7 @@ test('creates one OperationPlan per Scenario and enforces replay context and rec
   assert.deepEqual(operations.map(item => item.scenarioId).sort(), ['happy-path', 'permission-denied']);
   assert.equal(operations[0]!.executionSnapshot.device, 'pixel-8');
   assert.equal(operations[0]!.executionSnapshot.appVersion, '2.4.1');
-  const approved = reviewOperation(root, task, operations[0]!.id, 'approve');
+  const approved = reviewOperation(root, task, operations[0]!.id, 'approve', 'test-user');
   const mismatch = beginAgentGuidedRun(root, task, { operationId: approved.id, scenarioId: approved.scenarioId, device: 'pixel-8', appVersion: '2.5.0' });
   assert.equal(mismatch.status, 'blocked');
   assert.match(mismatch.steps[0]!.detail, /app version/);
@@ -534,7 +556,12 @@ test('plans and completes an impact-aware fast release check with Golden Path ga
     completeAgentGuidedRun(root, task, firstRun.id);
     const candidate = listOperations(root, task).find(operation => operation.status === 'candidate');
     assert.ok(candidate);
-    reviewOperation(root, task, candidate!.id, 'approve');
+    reviewOperation(root, task, candidate!.id, 'approve', 'test-user');
+    const replay = beginAgentGuidedRun(root, task, { operationId: candidate!.id, scenarioId: 'happy-path' });
+    recordAgentStep(root, replay.id, { action: `Replay ${task.metadata.name}`, detail: 'Executed the approved OperationPlan.', screenshotPath: screenshot, operationStepId: stepId });
+    recordVisualFinding(root, replay.id, { scenarioId: 'happy-path', assertionId: 'business-outcome', expected: 'The business result is visible.', actual: 'The business result is visible.', status: 'passed', screenshotPath: screenshot });
+    completeAgentGuidedRun(root, task, replay.id);
+    assert.equal(listOperations(root, task).find(operation => operation.id === candidate!.id)?.status, 'validated');
   }
 
   const impact = JSON.parse(run(root, 'impact', 'analyze', '--changed-files', 'lib/payment/payment_service.dart'));
@@ -785,5 +812,301 @@ test('stops blocked execution, rejects manual reports, and migrates legacy Task 
   const migratedRun = JSON.parse(readFileSync(legacyRunPath, 'utf8'));
   assert.equal(migratedRun.reportPath, `runs/${blocked.id}/report.md`);
   assert.equal(migratedRun.reportGeneratedBy, 'qa-agent-runtime');
+  assert.ok(migratedRun.planHash);
   assert.match(readFileSync(join(runRoot, 'report.md'), 'utf8'), new RegExp(`qa-agent-runtime-report:${blocked.id}`));
+});
+
+
+test('emits a v3 workflow breadcrumb and idempotent Task event history', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-workflow-v3-'));
+  run(root, 'init', '--id', 'workflow-v3');
+  const first = JSON.parse(run(root, 'start', '--request', 'Verify account profile editing', '--module', 'profile', '--task', 'profile-edit'));
+  assert.equal(first.apiVersion, 'qa-agent/v3');
+  assert.equal(first.taskState, 'awaiting_approval');
+  assert.equal(first.workflowPhase, 'approval');
+  assert.equal(first.reasonCode, 'test_plan_approval_required');
+  assert.ok(first.gates.some((gate: { id: string; status: string }) => gate.id === 'test_plan_approved' && gate.status === 'blocking'));
+  assert.equal(first.nextActions[0].id, 'request_test_plan_approval');
+  assert.equal(first.nextActions[0].requiresHuman, true);
+  assert.match(first.breadcrumb, /<qa-workflow-state>/);
+  assert.match(first.breadcrumb, /TaskState: awaiting_approval/);
+  assert.match(first.resumeToken, /^task:profile\/profile-edit:seq:1$/);
+  const eventsPath = join(root, '.qa-agent', 'modules', 'profile', 'tasks', 'profile-edit', 'events.jsonl');
+  assert.ok(existsSync(eventsPath));
+  assert.equal(readFileSync(eventsPath, 'utf8').trim().split('\n').length, 1);
+
+  const second = JSON.parse(run(root, 'start', '--request', 'Verify account profile editing', '--module', 'profile', '--task', 'profile-edit'));
+  assert.equal(second.resumeToken, first.resumeToken);
+  assert.equal(readFileSync(eventsPath, 'utf8').trim().split('\n').length, 1);
+
+  const reviewed = JSON.parse(run(root, 'review', '--module', 'profile', '--task', 'profile-edit', '--approve', '--confirmed-by', 'profile-owner'));
+  assert.equal(reviewed.task.metadata.status, 'ready');
+  assert.equal(reviewed.workflow.taskState, 'ready');
+  assert.equal(reviewed.workflow.workflowPhase, 'preflight');
+  const events = readFileSync(eventsPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(events.map(event => event.seq), [1, 2]);
+  assert.equal(events[1].type, 'test_plan_approved');
+  assert.equal(new Set(events.map(event => event.idempotencyKey)).size, events.length);
+});
+
+test('validation rejects a visual assertion without importance', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-schema-v3-'));
+  run(root, 'init', '--id', 'schema-v3');
+  run(root, 'start', '--request', 'Verify search results', '--module', 'search', '--task', 'search-results');
+  const scenarioPath = join(root, '.qa-agent', 'modules', 'search', 'tasks', 'search-results', 'scenarios', 'happy-path.json');
+  const scenario = JSON.parse(readFileSync(scenarioPath, 'utf8'));
+  delete scenario.visualAssertions[0].importance;
+  writeFileSync(scenarioPath, `${JSON.stringify(scenario, null, 2)}\n`, 'utf8');
+  const validation = spawnSync(process.execPath, ['--experimental-strip-types', cli, 'validate'], { cwd: root, encoding: 'utf8' });
+  assert.notEqual(validation.status, 0);
+  const result = JSON.parse(validation.stdout);
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((error: string) => /visual assertion.*importance/i.test(error)));
+});
+
+test('migrate persists legacy Task and OperationPlan lifecycle states and creates an event baseline', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-migrate-v3-'));
+  initializeProject(root, { id: 'migrate-v3' });
+  const module = createModule(root, { id: 'checkout', name: 'Checkout', description: 'Legacy lifecycle fixture' });
+  const task = createTaskSkeleton(module, 'legacy-checkout'); approveTask(task); saveTask(root, task);
+  importHostSnapshot(root, [{ id: 'browser-mcp', capabilities: ['browser.interact', 'browser.inspect'], permissionStatus: 'verified' }]);
+  const screenshot = join(root, 'legacy.png');
+  writeFileSync(screenshot, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'));
+  const exploratory = beginAgentGuidedRun(root, task);
+  recordAgentStep(root, exploratory.id, { action: 'Open checkout', operationAction: 'click', detail: 'Legacy fixture action.', screenshotPath: screenshot, locator: { strategy: 'text', value: 'Checkout' } });
+  recordVisualFinding(root, exploratory.id, { scenarioId: 'happy-path', assertionId: 'business-outcome', expected: 'Checkout is visible.', actual: 'Checkout is visible.', status: 'passed', screenshotPath: screenshot });
+  completeAgentGuidedRun(root, task, exploratory.id);
+
+  const taskRoot = taskDirectory(root, 'checkout', 'legacy-checkout');
+  const operationPath = join(taskRoot, 'operation-plans', 'happy-path', 'v1.json');
+  const candidate = listOperations(root, readTask(root, 'checkout', 'legacy-checkout'))[0]!;
+  reviewOperation(root, readTask(root, 'checkout', 'legacy-checkout'), candidate.id, 'approve', 'test-user');
+  const replay = beginAgentGuidedRun(root, readTask(root, 'checkout', 'legacy-checkout'), { operationId: candidate.id });
+  recordAgentStep(root, replay.id, { action: 'Open checkout', operationAction: 'click', detail: 'Legacy replay action.', screenshotPath: screenshot, operationStepId: candidate.steps[0]!.id, locator: { strategy: 'text', value: 'Checkout' } });
+  recordVisualFinding(root, replay.id, { scenarioId: 'happy-path', assertionId: 'business-outcome', expected: 'Checkout is visible.', actual: 'Checkout is visible.', status: 'passed', screenshotPath: screenshot });
+  completeAgentGuidedRun(root, readTask(root, 'checkout', 'legacy-checkout'), replay.id);
+  const legacyOperation = JSON.parse(readFileSync(operationPath, 'utf8'));
+  legacyOperation.status = 'active';
+  legacyOperation.validationStatus = 'unverified';
+  delete legacyOperation.approvedBy;
+  delete legacyOperation.approvedAt;
+  delete legacyOperation.validatedByRunId;
+  delete legacyOperation.validatedAt;
+  writeFileSync(operationPath, `${JSON.stringify(legacyOperation, null, 2)}\n`, 'utf8');
+  const taskManifestPath = join(taskRoot, 'task.json');
+  const legacyTask = JSON.parse(readFileSync(taskManifestPath, 'utf8'));
+  legacyTask.metadata.status = 'active';
+  writeFileSync(taskManifestPath, `${JSON.stringify(legacyTask, null, 2)}\n`, 'utf8');
+  const eventsPath = join(taskRoot, 'events.jsonl');
+  writeFileSync(eventsPath, '', 'utf8');
+  for (const runId of [exploratory.id, replay.id]) {
+    const legacyRunPath = join(taskRunDirectory(root, 'checkout', 'legacy-checkout', runId), 'run.json');
+    const legacyRun = JSON.parse(readFileSync(legacyRunPath, 'utf8'));
+    delete legacyRun.planHash;
+    writeFileSync(legacyRunPath, `${JSON.stringify(legacyRun, null, 2)}\n`, 'utf8');
+  }
+
+  const migrated = JSON.parse(run(root, 'migrate'));
+  assert.equal(migrated.migratedOperationPlans, 1);
+  assert.equal(migrated.normalizedTaskStates, 1);
+  assert.equal(migrated.createdTaskEventLogs, 1);
+  assert.ok(migrated.backfilledRunPlanHashes >= 1);
+  const migratedOperation = JSON.parse(readFileSync(operationPath, 'utf8'));
+  assert.equal(migratedOperation.status, 'validated');
+  assert.equal(migratedOperation.approvedBy, 'test-user');
+  assert.ok(migratedOperation.approvedAt);
+  assert.equal(JSON.parse(readFileSync(taskManifestPath, 'utf8')).metadata.status, 'ready');
+  const event = JSON.parse(readFileSync(eventsPath, 'utf8').trim());
+  assert.equal(event.type, 'migration_baseline_created');
+  assert.equal(event.toState, 'ready');
+  assert.equal(migrated.validation.valid, true);
+});
+
+
+test('repeated test resumes the active Run and workflow tokens track Run progress', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-active-run-'));
+  run(root, 'init', '--id', 'active-run');
+  run(root, 'start', '--request', 'Verify the active run', '--module', 'profile', '--task', 'active-run');
+  run(root, 'review', '--module', 'profile', '--task', 'active-run', '--approve', '--confirmed-by', 'profile-owner');
+  importHostSnapshot(root, [{ id: 'browser-mcp', capabilities: ['browser.interact', 'browser.inspect'], permissionStatus: 'verified' }]);
+  const screenshot = join(root, 'active.png');
+  writeFileSync(screenshot, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'));
+
+  const started = JSON.parse(run(root, 'test', '--module', 'profile', '--task', 'active-run'));
+  const repeated = JSON.parse(run(root, 'test', '--module', 'profile', '--task', 'active-run'));
+  assert.equal(repeated.runId, started.runId);
+  const mismatched = spawnSync(process.execPath, ['--experimental-strip-types', cli, 'test', '--module', 'profile', '--task', 'active-run', '--environment', 'staging'], { cwd: root, encoding: 'utf8' });
+  assert.notEqual(mismatched.status, 0);
+  assert.match(mismatched.stderr, /active Run.*environment/i);
+  assert.equal(readdirSync(join(taskDirectory(root, 'profile', 'active-run'), 'runs')).filter(name => name.startsWith('run-')).length, 1);
+  const before = JSON.parse(run(root, 'workflow', 'status', '--module', 'profile', '--task', 'active-run'));
+  run(root, 'run', 'step', started.runId, '--scenario', 'happy-path', '--action', 'Open profile', '--detail', 'Opened profile.', '--screenshot', screenshot, '--operation-action', 'click', '--locator-strategy', 'text', '--locator-value', 'Profile');
+  const after = JSON.parse(run(root, 'workflow', 'status', '--module', 'profile', '--task', 'active-run'));
+  assert.notEqual(after.resumeToken, before.resumeToken);
+  assert.notEqual(after.contextHash, before.contextHash);
+  assert.equal(after.nextActions[0].id, 'record_business_assertion');
+  assert.equal(readTask(root, 'profile', 'active-run').metadata.status, 'running');
+  const changed = readTask(root, 'profile', 'active-run');
+  changed.scenarios[0]!.expected = { outcome: 'A changed outcome requiring approval.' };
+  saveTask(root, changed);
+  assert.throws(() => recordAgentStep(root, started.runId, { action: 'Continue profile', detail: 'Must stop after plan drift.', screenshotPath: screenshot, scenarioId: 'happy-path' }), /plan changed.*new TestPlan approval/i);
+  const stopped = JSON.parse(run(root, 'test', '--module', 'profile', '--task', 'active-run'));
+  assert.equal(stopped.status, 'needs_confirmation');
+  assert.equal(readTask(root, 'profile', 'active-run').metadata.status, 'blocked');
+  const reapproved = JSON.parse(run(root, 'review', '--module', 'profile', '--task', 'active-run', '--approve', '--confirmed-by', 'profile-owner'));
+  assert.equal(reapproved.task.metadata.status, 'ready');
+});
+
+test('a failed business assertion keeps an executable replay contract validated', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-business-failure-'));
+  initializeProject(root, { id: 'business-failure' });
+  const module = createModule(root, { id: 'checkout', name: 'Checkout', description: 'Business failure fixture' });
+  const task = createTaskSkeleton(module, 'checkout-regression'); approveTask(task); saveTask(root, task);
+  importHostSnapshot(root, [{ id: 'browser-mcp', capabilities: ['browser.interact', 'browser.inspect'], permissionStatus: 'verified' }]);
+  const screenshot = join(root, 'failure.png');
+  writeFileSync(screenshot, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'));
+
+  const explore = beginAgentGuidedRun(root, task);
+  recordAgentStep(root, explore.id, { action: 'Open checkout', operationAction: 'click', detail: 'Opened checkout.', screenshotPath: screenshot, operationStepId: 'open-checkout', locator: { strategy: 'text', value: 'Checkout' } });
+  recordVisualFinding(root, explore.id, { scenarioId: 'happy-path', assertionId: 'business-outcome', expected: 'Checkout succeeds.', actual: 'Checkout succeeds.', status: 'passed', screenshotPath: screenshot });
+  completeAgentGuidedRun(root, task, explore.id);
+  const candidate = listOperations(root, readTask(root, 'checkout', 'checkout-regression'))[0]!;
+  reviewOperation(root, readTask(root, 'checkout', 'checkout-regression'), candidate.id, 'approve', 'qa-owner');
+
+  const replay = beginAgentGuidedRun(root, readTask(root, 'checkout', 'checkout-regression'), { operationId: candidate.id });
+  recordAgentStep(root, replay.id, { action: 'Open checkout', detail: 'Replay contract executed.', screenshotPath: screenshot, operationStepId: candidate.steps[0]!.id });
+  recordVisualFinding(root, replay.id, { scenarioId: 'happy-path', assertionId: 'business-outcome', expected: 'Checkout succeeds.', actual: 'Checkout displays an application error.', status: 'failed', screenshotPath: screenshot });
+  const failed = completeAgentGuidedRun(root, readTask(root, 'checkout', 'checkout-regression'), replay.id);
+  assert.equal(failed.status, 'failed');
+  const operation = listOperations(root, readTask(root, 'checkout', 'checkout-regression')).find(item => item.id === candidate.id)!;
+  assert.equal(operation.status, 'validated');
+  assert.equal(operation.validationStatus, 'passed');
+  assert.equal(operation.validatedByRunId, replay.id);
+  assert.equal(readTask(root, 'checkout', 'checkout-regression').metadata.status, 'reviewing_result');
+  assert.ok(syncTaskRegressionSuite(root, readTask(root, 'checkout', 'checkout-regression')).members.some(member => member.operationPlanId === candidate.id));
+  const workflow = JSON.parse(run(root, 'workflow', 'status', '--module', 'checkout', '--task', 'checkout-regression'));
+  assert.equal(workflow.nextActions[0].id, 'review_failed_result');
+  assert.notEqual(workflow.nextActions[0].id, 'archive_or_continue');
+  const archive = inspectTaskArchive(root, readTask(root, 'checkout', 'checkout-regression'));
+  assert.equal(archive.valid, false);
+  assert.equal(archive.checks.find(check => check.id === 'latest-run')?.status, 'failed');
+  assert.equal(archive.checks.find(check => check.id === 'known-issues')?.status, 'failed');
+
+  const changed = readTask(root, 'checkout', 'checkout-regression');
+  changed.scenarios[0]!.expected = { outcome: 'A revised approved checkout result.' };
+  saveTask(root, changed);
+  const reapproved = JSON.parse(run(root, 'review', '--module', 'checkout', '--task', 'checkout-regression', '--approve', '--confirmed-by', 'qa-owner'));
+  assert.equal(reapproved.task.metadata.status, 'ready');
+  const stale = listOperations(root, readTask(root, 'checkout', 'checkout-regression')).find(item => item.id === candidate.id)!;
+  assert.equal(stale.status, 'stale');
+  assert.equal(existsSync(join(taskDirectory(root, 'checkout', 'checkout-regression'), 'operation-plans', 'happy-path', 'current.json')), false);
+  assert.equal(reapproved.workflow.nextActions[0].id, 'start_test');
+});
+
+test('multi-Scenario regression starts one child Run at a time', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-serial-regression-'));
+  initializeProject(root, { id: 'serial-regression' });
+  const module = createModule(root, { id: 'checkout', name: 'Checkout', description: 'Serial regression fixture' });
+  const task = createTaskSkeleton(module, 'checkout-scenarios');
+  task.scenarios.push({ ...task.scenarios[0]!, id: 'permission-denied', title: 'Permission denied', intent: 'Restricted users cannot submit.', expected: { outcome: 'Submit is unavailable.' }, requirementRefs: ['requirement-2'], visualAssertions: [{ id: 'permission-state', expected: 'Submit is unavailable.', importance: 'high' }] });
+  task.requirements!.requirementTrace!.push({ requirementId: 'requirement-2', scenarioIds: ['permission-denied'], assertionIds: ['permission-state'], sourceRefs: [], status: 'covered' });
+  approveTask(task); saveTask(root, task);
+  importHostSnapshot(root, [{ id: 'browser-mcp', capabilities: ['browser.interact', 'browser.inspect'], permissionStatus: 'verified' }]);
+  const screenshot = join(root, 'serial.png');
+  writeFileSync(screenshot, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'));
+
+  for (const scenario of task.scenarios) {
+    const assertion = scenario.visualAssertions![0]!;
+    const explore = beginAgentGuidedRun(root, readTask(root, 'checkout', 'checkout-scenarios'), { scenarioId: scenario.id });
+    recordAgentStep(root, explore.id, { action: `Open ${scenario.id}`, operationAction: 'click', detail: `Executed ${scenario.id}.`, screenshotPath: screenshot, operationStepId: `open-${scenario.id}`, scenarioId: scenario.id, locator: { strategy: 'text', value: scenario.title } });
+    recordVisualFinding(root, explore.id, { scenarioId: scenario.id, assertionId: assertion.id, expected: assertion.expected, actual: assertion.expected, status: 'passed', screenshotPath: screenshot });
+    completeAgentGuidedRun(root, readTask(root, 'checkout', 'checkout-scenarios'), explore.id);
+  }
+  for (const candidate of listOperations(root, readTask(root, 'checkout', 'checkout-scenarios'))) {
+    reviewOperation(root, readTask(root, 'checkout', 'checkout-scenarios'), candidate.id, 'approve', 'qa-owner');
+    const replay = beginAgentGuidedRun(root, readTask(root, 'checkout', 'checkout-scenarios'), { operationId: candidate.id, scenarioId: candidate.scenarioId });
+    const scenario = readTask(root, 'checkout', 'checkout-scenarios').scenarios.find(item => item.id === candidate.scenarioId)!;
+    const assertion = scenario.visualAssertions![0]!;
+    recordAgentStep(root, replay.id, { action: `Replay ${scenario.id}`, detail: `Replayed ${scenario.id}.`, screenshotPath: screenshot, operationStepId: candidate.steps[0]!.id, scenarioId: scenario.id });
+    recordVisualFinding(root, replay.id, { scenarioId: scenario.id, assertionId: assertion.id, expected: assertion.expected, actual: assertion.expected, status: 'passed', screenshotPath: screenshot });
+    completeAgentGuidedRun(root, readTask(root, 'checkout', 'checkout-scenarios'), replay.id);
+  }
+
+  const currentTask = readTask(root, 'checkout', 'checkout-scenarios');
+  const suite = syncTaskRegressionSuite(root, currentTask);
+  assert.equal(suite.members.length, 2);
+  const regression = beginRegressionRun(root, suite, buildExecutionSnapshot(root, currentTask));
+  assert.equal(regression.childRuns.filter(child => child.status === 'running').length, 1);
+  assert.equal(regression.childRuns.filter(child => child.status === 'pending').length, 1);
+
+  const completeChild = (child: typeof regression.childRuns[number]): void => {
+    const operation = listOperations(root, readTask(root, child.moduleId, child.taskId)).find(item => item.id === child.operationPlanId)!;
+    const scenario = readTask(root, child.moduleId, child.taskId).scenarios.find(item => item.id === child.scenarioId)!;
+    const assertion = scenario.visualAssertions![0]!;
+    recordAgentStep(root, child.runId, { action: `Regression ${scenario.id}`, detail: `Replayed ${scenario.id}.`, screenshotPath: screenshot, operationStepId: operation.steps[0]!.id, scenarioId: scenario.id });
+    recordVisualFinding(root, child.runId, { scenarioId: scenario.id, assertionId: assertion.id, expected: assertion.expected, actual: assertion.expected, status: 'passed', screenshotPath: screenshot });
+    completeAgentGuidedRun(root, readTask(root, child.moduleId, child.taskId), child.runId);
+  };
+
+  completeChild(regression.childRuns.find(child => child.status === 'running')!);
+  const progressed = completeRegressionRun(root, regression);
+  assert.equal(progressed.childRuns.filter(child => child.status === 'running').length, 1);
+  assert.equal(progressed.childRuns.filter(child => child.status === 'pending').length, 0);
+  completeChild(progressed.childRuns.find(child => child.status === 'running')!);
+  const completed = completeRegressionRun(root, progressed);
+  assert.equal(completed.status, 'passed');
+  assert.ok(completed.childRuns.every(child => child.status === 'passed'));
+});
+
+test('archived Tasks expose no next action and cannot start a new Run', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-archived-state-'));
+  initializeProject(root, { id: 'archived-state' });
+  const module = createModule(root, { id: 'profile', name: 'Profile', description: 'Archived state fixture' });
+  const task = createTaskSkeleton(module, 'archived-profile'); approveTask(task); task.metadata.status = 'archived'; saveTask(root, task);
+  const state = JSON.parse(run(root, 'workflow', 'status', '--module', 'profile', '--task', 'archived-profile'));
+  assert.equal(state.workflowPhase, 'archive');
+  assert.equal(state.reasonCode, 'task_archived');
+  assert.deepEqual(state.nextActions, []);
+  assert.throws(() => beginAgentGuidedRun(root, readTask(root, 'profile', 'archived-profile')), /archived.*cannot start/i);
+});
+
+
+test('Task and Operation asset references cannot escape the Task directory', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-safe-refs-'));
+  initializeProject(root, { id: 'safe-refs' });
+  const module = createModule(root, { id: 'checkout', name: 'Checkout', description: 'Safe reference fixture' });
+  const task = createTaskSkeleton(module, 'safe-task'); saveTask(root, task);
+  assert.throws(() => readOperation(root, task, '../outside.json'), /escapes Task directory/i);
+
+  const taskRoot = taskDirectory(root, 'checkout', 'safe-task');
+  const manifestPath = join(taskRoot, 'task.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  manifest.scenarioRefs = ['../outside.json'];
+  writeFileSync(join(taskRoot, '..', 'outside.json'), JSON.stringify(task.scenarios[0]), 'utf8');
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  assert.throws(() => readTask(root, 'checkout', 'safe-task'), /escapes Task directory/i);
+});
+
+
+test('compatibility task create writes an event baseline and plan-changing update requires reapproval', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-task-update-events-'));
+  run(root, 'init', '--id', 'task-update-events');
+  run(root, 'module', 'create', 'profile', '--name', 'Profile');
+  run(root, 'task', 'create', 'edit-profile', '--module', 'profile', '--name', 'Edit profile');
+  const eventsPath = join(taskDirectory(root, 'profile', 'edit-profile'), 'events.jsonl');
+  let events = readFileSync(eventsPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(events[0].type, 'task_created');
+  assert.equal(events[0].toState, 'draft');
+  assert.throws(() => appendTaskEvent(root, { type: 'task_created', actor: { type: 'agent', id: 'qa-agent' }, moduleId: 'profile', taskId: 'edit-profile', toState: 'draft', reasonCode: 'conflicting_reason', artifactHash: events[0].artifactHash, idempotencyKey: events[0].idempotencyKey }), /idempotency conflict/i);
+
+  run(root, 'review', '--module', 'profile', '--task', 'edit-profile', '--approve', '--confirmed-by', 'profile-owner');
+  const updated = JSON.parse(run(root, 'task', 'update', 'edit-profile', '--module', 'profile', '--name', 'Edit all profile fields'));
+  assert.equal(updated.metadata.status, 'awaiting_approval');
+  assert.equal(updated.metadata.approval, undefined);
+  events = readFileSync(eventsPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(events.at(-1).type, 'test_plan_changed');
+  assert.equal(events.at(-1).toState, 'awaiting_approval');
+  const workflow = JSON.parse(run(root, 'workflow', 'status', '--module', 'profile', '--task', 'edit-profile'));
+  assert.equal(workflow.workflowStatus, 'approval_required');
+  assert.equal(workflow.nextActions[0].id, 'request_test_plan_approval');
 });

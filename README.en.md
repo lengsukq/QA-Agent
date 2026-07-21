@@ -218,34 +218,37 @@ qa-agent configure \
   --name "My App"
 ```
 
-`configure` only initializes the project and injects the host integration. Use `qa-agent start`, `qa-agent test`, `qa-agent operation generate`, `qa-agent task regression`, and `qa-agent archive` for the QA lifecycle afterward. In Cursor, `/qa-agent` is the main Skill and `/qa-agent-cli` is the explicit Command; they no longer share the same name.
+`configure` only initializes the project and injects the host integration. Use `qa-agent start`, `qa-agent review`, `qa-agent test`, `qa-agent task regression`, and `qa-agent archive` for the QA lifecycle afterward. Runtime automatically generates eligible OperationPlan candidates when a successful exploratory Run completes. In Cursor, `/qa-agent` is the main Skill and `/qa-agent-cli` is the explicit Command; they no longer share the same name.
 
 The CLI is the execution entry point. Host Skills tell Codex, Cursor, and other Agents when to call the CLI and how to use approved browser, simulator, and diagnostic tools. Project data, Tasks, Runs, screenshots, and reports always remain inside the tested project's `.qa-agent/` boundary.
 
-## Recommended workflow: start → conversation approval → test → archive
+## Recommended workflow: start → review → test → replay validation → archive
 
 ```bash
 qa-agent configure --project /path/to/your-app --host cursor --scope project
 qa-agent start --request "Validate the Checkout core flow" --module checkout --task checkout-basic-flow
 # Review planHash, Scenarios, evidence, and safety boundaries in the Codex/Cursor conversation
+qa-agent review --module checkout --task checkout-basic-flow --approve --confirmed-by "qa-reviewer"
 qa-agent test --module checkout --task checkout-basic-flow
 # After the Runtime creates a successful report, screenshots, and OperationPlan:
 qa-agent archive --module checkout --task checkout-basic-flow
 ```
 
-`start` creates or reuses the Module/Task, generates the complete Task package and TodoList, and stops at `approval_required`; it never starts a browser, simulator, device, or UI action. `test` executes only an approved Task and automatically selects first-run `explore` or compatible `replay`. `operation generate` only writes the quick-regression script; it becomes valid only after approval and a successful real replay through `test`. `archive` is a strict regression-readiness gate: it checks background, a validated current-hash OperationPlan for every Scenario, RegressionSuite coverage, Runtime-owned reports, existing screenshots, Markdown image evidence, and project validation. Failed checks do not change Task state.
+`start` creates or reuses the Module/Task, generates the complete Task package, event baseline, and TodoList, and stops at `approval_required`. `review` persists explicit TestPlan approval without starting a Run. `test` automatically selects first-run Explore or compatible Replay. Runtime creates a `candidate`; separate promotion changes it to `approved_unverified`, and a completely executed structured replay contract changes it to `validated`; a business FAIL remains a Run result. `archive` is a strict regression-readiness gate: it checks background, a validated current-hash OperationPlan for every Scenario, RegressionSuite coverage, Runtime-owned reports, existing screenshots, Markdown image evidence, and project validation. Failed checks do not change Task state.
 
 `init` only initializes the tested project's `.qa-agent/` runtime boundary and does not inject a host Skill. `configure` performs project initialization plus host Skill/prompt injection and never overwrites an existing `.qa-agent` data set. The host Skill owns conversation approval, TodoList mirroring, and UI tools; the CLI Runtime owns state, evidence, reports, and archiving.
 
-The lower-level commands `workflow bootstrap`, `task explore`, `task run`, `operation replay`, `task review`, and `task archive` remain available for compatibility and automation.
+The lower-level commands `workflow bootstrap`, `task explore`, `task run`, `operation replay`, `operation generate`, `task review`, and `task archive` remain available for compatibility and automation.
 
 ### Injected Skill responsibilities
 
 All hosts share the same business state machine, while the host renderer changes how the workflow is invoked:
 
 - `qa-agent`: the main entry point for `start → review → test → archive` and safety gates.
-- `qa-agent-test`: executes approved Tasks, selects explore or compatible replay, and surfaces OperationPlan candidates after reporting.
-- `qa-agent-operation`: writes quick-regression OperationPlan candidates from successful exploratory Runs and requires replay validation after approval.
+- `qa-agent-start` / `qa-agent-review`: inspect project context, build Scenario coverage, and persist separate TestPlan approval.
+- `qa-agent-test`: executes approved Tasks and selects Explore or compatible Replay; Runtime creates candidates automatically.
+- `qa-agent-result` / `qa-agent-operation`: present and promote candidates, then require real replay validation.
+- `qa-agent-recovery`: resume blocked or interrupted work only through Runtime `nextActions`.
 - `qa-agent-regression`: runs only approved, context-compatible OperationPlans and RegressionSuites.
 - `qa-agent-archive`: checks Task background, plans, reports, screenshots, suites, and OperationPlans before archiving.
 
@@ -484,12 +487,12 @@ Load the active project's memory and Module
 
 Source code can reveal candidate rules and aid diagnosis, but never replaces real business validation. Candidate memory always enters the active project's review queue; it never becomes cross-project or global knowledge automatically.
 
-### 1. Bootstrap the Task and Test Plan
+### 1. Start the Task and Test Plan
 
-Every new QA request starts with Workflow Bootstrap. Mirror the returned `todoList` into the host IDE TodoList. Browser, simulator, device, and UI tools are forbidden until the runtime returns `uiExecutionAllowed: true`, `mustStop: false`, and a `runId`. Bootstrap immediately creates and returns `bootstrap.taskDirectory` and `bootstrap.taskAssets`.
+Every new QA request starts with `qa-agent start`. Mirror the returned `todoList` into the host IDE TodoList. Browser, simulator, device, and UI tools are forbidden until the runtime returns `uiExecutionAllowed: true`, `mustStop: false`, and a `runId`. `start` immediately creates and returns `bootstrap.taskDirectory` and `bootstrap.taskAssets`.
 
 ```bash
-qa-agent workflow bootstrap \
+qa-agent start \
   --request "Verify that the user can review and submit correct checkout information" \
   --module checkout \
   --task checkout-basic-flow \
@@ -517,8 +520,9 @@ The first response is an approval gate:
 The host may use read-only source analysis to refine the plan, then presents the current `plan` and `planHash`. A real human reviewer must approve it before any UI operation:
 
 ```bash
-qa-agent task review checkout-basic-flow \
+qa-agent review \
   --module checkout \
+  --task checkout-basic-flow \
   --approve \
   --confirmed-by "qa-reviewer"
 ```
@@ -526,7 +530,7 @@ qa-agent task review checkout-basic-flow \
 After the host capability snapshot is verified, start the Run:
 
 ```bash
-qa-agent task explore checkout-basic-flow --module checkout
+qa-agent test --module checkout --task checkout-basic-flow
 ```
 
 ```json
@@ -561,7 +565,7 @@ This is the preferred business-QA mode. The runtime uses the `qa-agent/v2` data 
 
 ```bash
 qa-agent context module checkout
-qa-agent task explore checkout-basic-flow --module checkout
+qa-agent test --module checkout --task checkout-basic-flow
 qa-agent run step <run-id> --action "Open checkout" --detail "The Agent opened the real checkout screen." --screenshot /absolute/path/checkout-open.png --visual-inspection not-required
 qa-agent run evidence <run-id> --type console --summary "Host browser console output" --file /absolute/path/console.log
 qa-agent run observe <run-id> \
@@ -578,7 +582,7 @@ qa-agent run complete <run-id>
 
 A successful first Run also receives an OperationPlan replay-quality check. `navigate/click/input/fill` steps need explicit actions and locators, while `input/fill` steps also need structured redacted `inputRefs`. Business verification may PASS while replay readiness fails; in that case the report lists `OperationPlan candidate issues` instead of generating an unstable JSON contract. Existing projects can run `qa-agent prompts sync` to refresh `.qa-agent/prompts/`.
 
-When upgrading an existing project, first run `qa-agent migrate` to move legacy `Task/reports/` assets into `runs/<run-id>/report.md` and quarantine reports that cannot be tied to a Run under `.qa-agent/orphans/reports/`; then run `qa-agent prompts sync`. Legacy approvals without `confirmationSource` must be reviewed again by a real human through `task review --approve --confirmed-by <reviewer>`; automated identities such as `qa-agent`, `assistant`, or `system` cannot approve their own plans. A state-mutating Scenario should declare Cleanup and persist its result through `run cleanup` before completion. Human interaction with a system picker must use `--execution-mode user-assisted`; it remains valid business evidence but cannot produce a fully automated OperationPlan.
+When upgrading an existing project, first run `qa-agent migrate` to move legacy `Task/reports/` assets into `runs/<run-id>/report.md` and quarantine reports that cannot be tied to a Run under `.qa-agent/orphans/reports/`; then run `qa-agent prompts sync`. Legacy approvals without `confirmationSource` must be reviewed again by a real human through `qa-agent review --approve --confirmed-by <reviewer>`; automated identities such as `qa-agent`, `assistant`, or `system` cannot approve their own plans. A state-mutating Scenario should declare Cleanup and persist its result through `run cleanup` before completion. Human interaction with a system picker must use `--execution-mode user-assisted`; it remains valid business evidence but cannot produce a fully automated OperationPlan.
 
 Each Task is a self-contained test asset directory:
 
@@ -615,21 +619,14 @@ qa-agent operation replay OPERATION_ID \
 The response contains the complete `operationPlan`, `nextOperationStep`, `remainingOperationSteps`, and `checkpoints`. The host follows the order strictly. Every Replay still creates a new Run, report, and checkpoint screenshots.
 
 
-After a successful run, the Agent should explicitly call the command below to write a quick-regression OperationPlan candidate. This command only writes the plan; it does not approve, execute, or archive it:
+When a successful exploratory Run completes, Runtime automatically creates an OperationPlan `candidate` from structurally complete steps, screenshots, assertions, and Cleanup. The Agent presents it and requests separate promotion approval. `operation generate` remains only as a repair or migration command for older Runs.
 
-```bash
-qa-agent operation generate \
-  --module checkout \
-  --task checkout-basic-flow \
-  --run RUN_ID
-```
-
-The candidate is stored under `.qa-agent/modules/<module>/tasks/<task>/operation-plans/<scenario>/` with `validationStatus: unverified`. After approval and a successful real replay, the Runtime sets `validationStatus: passed`; only then can the Task be archived:
+The candidate is stored under `.qa-agent/modules/<module>/tasks/<task>/operation-plans/<scenario>/`. Promotion changes it to `approved_unverified`; another `qa-agent test` must perform a real replay before the lifecycle becomes `validated` and the plan can enter formal regression or archive gates:
 
 ```bash
 qa-agent task operation list checkout-basic-flow --module checkout
-qa-agent task operation review checkout-basic-flow --module checkout --operation OPERATION_ID --approve
-qa-agent task run checkout-basic-flow --module checkout --operation OPERATION_ID
+qa-agent task operation review checkout-basic-flow --module checkout --operation OPERATION_ID --approve --confirmed-by qa-reviewer
+qa-agent test --module checkout --task checkout-basic-flow
 qa-agent run recover <run-id> --reason "Element was not ready" --action wait --detail "Element appeared; resume from checkpoint" --outcome continued
 qa-agent task regression sync checkout-basic-flow --module checkout
 qa-agent task regression run checkout-basic-flow --module checkout
@@ -637,12 +634,12 @@ qa-agent module regression run checkout
 qa-agent archive --module checkout --task checkout-basic-flow
 ```
 
-Replay is permitted only when the Task plan hash and user approval, an active OperationPlan, platform/device/app or Web version, environment/role, test data, required MCPs, and verified macOS permissions are compatible. It skips rediscovery, not business assertions. Outcomes are `PASS`, `FAIL`, `ADAPTED`, `BLOCKED`, or `NEEDS_CONFIRMATION`. Recovery is limited to `wait`, `refresh`, `back`, `restart-app`, `reset-sandbox-data`, `reconnect-mcp`, `fallback-locator`, and `resume-checkpoint`; never modify source code, bypass permissions, or fabricate results.
+Replay is permitted only when the Task plan hash and user approval, an `approved_unverified` or `validated` OperationPlan, platform/device/app or Web version, environment/role, test data, required MCPs, and verified macOS permissions are compatible. It skips rediscovery, not business assertions. Outcomes are `PASS`, `FAIL`, `ADAPTED`, `BLOCKED`, or `NEEDS_CONFIRMATION`. Recovery is limited to `wait`, `refresh`, `back`, `restart-app`, `reset-sandbox-data`, `reconnect-mcp`, `fallback-locator`, and `resume-checkpoint`; never modify source code, bypass permissions, or fabricate results.
 
 OperationPlans are Scenario-specific. Each step stores an operation action, primary and fallback locators, redacted input references, preconditions, expected state, assertion references, screenshot and visual-inspection policies, safety action, and checkpoint. During replay every `run step` must reference the next `operationStepId`; steps cannot be skipped or duplicated.
-`candidate`/`active` describe generation and approval only. An OperationPlan becomes valid for archiving only after a successful replay/adapted Run writes `validationStatus: passed`.
+The lifecycle is `candidate → approved_unverified → validated`. When the structured replay contract executes completely, the OperationPlan becomes or remains `validated` even if a business assertion fails; the FAIL belongs to the Run result and must not invalidate the script. Incomplete or incompatible replay does not automatically validate the plan, and `stale` is reserved for explicit contract drift or invalidation. Rejected and replaced plans become `rejected` and `superseded`. Only `validated` plans satisfy formal regression, release, and archive gates.
 
-A Task-level RegressionSuite organizes all active OperationPlans for one Task. Module replay dynamically aggregates active OperationPlans across Tasks at start, instead of persisting a second Module Suite. It runs independent flows serially, continues after an isolated business failure, and produces an aggregate report. `run.json` is a result record; OperationPlan is the executable operation definition.
+A Task-level RegressionSuite organizes all validated OperationPlans for one Task. Module replay dynamically aggregates validated OperationPlans across Tasks at start, instead of persisting a second Module Suite. It runs independent flows serially, continues after an isolated business failure, and produces an aggregate report. `run.json` is a result record; OperationPlan is the executable operation definition.
 
 ### 5. Fast pre-release regression
 
@@ -671,7 +668,7 @@ Profiles:
 
 - `fast`: global release gates, Golden Paths, `every-release` Tasks, and impacted P0 flows.
 - `normal`: fast plus impacted P1 flows.
-- `full`: every reviewed active OperationPlan.
+- `full`: every reviewed validated OperationPlan.
 
 ImpactAnalysis uses Module ids, source hints, entry points, dependencies, and Task triggers, while preserving unmatched files and selection reasons. ReleaseCheck returns `GO`, `NO-GO`, or `REVIEW`. Its report is stored at `.qa-agent/reports/<release-check-id>.md` and references child Task reports and screenshot evidence without duplicating every image.
 

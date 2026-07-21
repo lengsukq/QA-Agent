@@ -1,8 +1,10 @@
 ---
 name: qa-agent-archive
-description: Validate and archive completed QA Tasks without dropping evidence.
+description: Validate and archive completed QA Tasks without dropping evidence or unvalidated regression assets.
 ---
 
-# QA Agent Archive
+# Archive
 
-Find completed but unarchived Tasks and run `qa-agent archive --module <module> --task <task>` only after an approved OperationPlan has passed a replay/adapted regression Run. Do not archive incomplete background assets, reports, screenshots, OperationPlans, RegressionSuite coverage, or Runtime validation. A failed archive check must preserve Task status and all evidence.
+Run `qa-agent archive --module <module> --task <task>` only when every required Scenario has current approval, complete planning assets, a `validated` current-planHash OperationPlan, RegressionSuite coverage, successful Runtime-owned exploratory and replay/adapted reports, existing screenshots, declared assertions, cleanup, and resolved or deferred memory candidates.
+
+A failed archive inspection must preserve Task state and all evidence. Never manually mark a Task archived.

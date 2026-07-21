@@ -220,34 +220,37 @@ qa-agent configure \
   --name "My App"
 ```
 
-`configure` 只负责项目初始化和宿主注入；后续通过 `qa-agent start`、`qa-agent test`、`qa-agent operation generate`、`qa-agent task regression`、`qa-agent archive` 等命令执行 QA 工作流。Cursor 中 `/qa-agent` 是主 Skill，`/qa-agent-cli` 是显式 Command；两者不会再使用同一个名称。
+`configure` 只负责项目初始化和宿主注入；后续通过 `qa-agent start`、`qa-agent review`、`qa-agent test`、`qa-agent task regression`、`qa-agent archive` 执行 QA 工作流。OperationPlan 候选由 Runtime 在成功探索 Run 完成时自动生成。Cursor 中 `/qa-agent` 是主 Skill，`/qa-agent-cli` 是显式 Command；两者不会再使用同一个名称。
 
 CLI 是执行入口；宿主 Skill 只负责让 Codex、Cursor 等 Agent 知道何时调用哪些 CLI 命令，以及如何使用浏览器、模拟器和其他已批准工具。项目数据、Task、Run、截图和报告始终保存在被测项目的 `.qa-agent/` 内。
 
-## 推荐工作流：start → 对话确认 → test → archive
+## 推荐工作流：start → review → test → 回归验证 → archive
 
 ```bash
 qa-agent configure --project /path/to/your-app --host cursor --scope project
 qa-agent start --request "验证 Checkout 核心流程" --module checkout --task checkout-basic-flow
 # 在 Codex/Cursor 对话中审阅 planHash、Scenario、证据和安全边界，并明确确认
+qa-agent review --module checkout --task checkout-basic-flow --approve --confirmed-by "qa-reviewer"
 qa-agent test --module checkout --task checkout-basic-flow
 # Run 完成并生成 Runtime 报告、截图和 OperationPlan 后：
 qa-agent archive --module checkout --task checkout-basic-flow
 ```
 
-`start` 只负责创建或复用 Module/Task、生成 Task 目录、Test Plan、Scenario 和 TodoList，并停在 `approval_required`；它不会启动浏览器、模拟器或设备。`test` 只执行已确认的 Task，并自动在首次 `explore` 与兼容的 `replay` 之间选择。`operation generate` 只负责写入快速回归脚本，脚本必须经过审批并由 `test` 实测通过后才算有效。`archive` 是严格的可回归门禁：它会检查背景、计划、每个 Scenario 的已实测有效 OperationPlan、RegressionSuite、Runtime 报告和实际存在的 Markdown 图片证据；失败时不会改变 Task 状态。
+`start` 创建或复用 Module/Task、生成完整 Task 资产、事件基线和 TodoList，并停在 `approval_required`。`review` 只持久化真实用户的 TestPlan 审批，不启动 Run。`test` 自动选择首次 Explore 或兼容 Replay。成功探索后 Runtime 自动生成 `candidate`，独立审批后进入 `approved_unverified`，结构化 Replay 契约完整执行后才成为 `validated`；业务 FAIL 仍保留为 Run 结果。`archive` 是严格的可回归门禁：它会检查背景、计划、每个 Scenario 的已实测有效 OperationPlan、RegressionSuite、Runtime 报告和实际存在的 Markdown 图片证据；失败时不会改变 Task 状态。
 
 `init` 只初始化被测项目的 `.qa-agent/` 运行边界，不注入宿主 Skill。`configure` 负责“一站式”项目初始化和宿主提示词/Skill 注入；已经初始化的 `.qa-agent` 数据不会被覆盖。宿主 Skill 负责对话确认、TodoList 镜像和实际 UI 工具调用，CLI Runtime 负责状态、证据、报告和归档。
 
-兼容旧项目的底层命令仍保留，包括 `workflow bootstrap`、`task explore`、`task run`、`operation replay`、`task review` 和 `task archive`；新项目优先使用上面的语义入口。
+兼容旧项目的底层命令仍保留，包括 `workflow bootstrap`、`task explore`、`task run`、`operation replay`、`operation generate`、`task review` 和 `task archive`；新项目优先使用上面的语义入口。
 
 ### 注入的子 Skill 职责
 
 所有宿主共享同一套业务状态机，但会按宿主能力渲染不同的调用方式：
 
 - `qa-agent`：总入口，负责 `start → review → test → archive` 的对话引导和安全门禁。
-- `qa-agent-test`：执行已审批 Task，自动选择首次探索或兼容回归，并在报告后主动提示 OperationPlan 候选。
-- `qa-agent-operation`：从成功的探索 Run 写入快速回归 OperationPlan 候选；审批后要求通过 replay 实测。
+- `qa-agent-start` / `qa-agent-review`：研究项目、生成场景矩阵并持久化独立 TestPlan 审批。
+- `qa-agent-test`：执行已审批 Task，自动选择首次探索或兼容回归；候选由 Runtime 自动生成。
+- `qa-agent-result` / `qa-agent-operation`：展示并审批候选，审批后要求通过真实 Replay 验证。
+- `qa-agent-recovery`：根据 Runtime 的 `nextActions` 恢复阻塞或中断流程。
 - `qa-agent-regression`：只运行已审批、上下文兼容的 OperationPlan 和 RegressionSuite。
 - `qa-agent-archive`：检查背景、计划、报告、截图、回归套件和 OperationPlan 完整性后归档。
 
@@ -497,12 +500,12 @@ node /path/to/QA-Agent/bin/qa-agent.mjs doctor
 
 源码可以帮助发现待验证规则和定位问题，但不能代替真实业务验证；候选记忆永远先进入当前项目的审核队列，不会自动成为跨项目或全局知识。
 
-### 1. 使用 Workflow Bootstrap 创建 Task 和计划
+### 1. 使用 `start` 创建 Task 和计划
 
-每次新的 QA 请求都先进入 Bootstrap。宿主应把返回的 `todoList` 同步到 IDE TodoList；在返回 `uiExecutionAllowed: true`、`mustStop: false` 和 `runId` 之前，禁止调用浏览器、模拟器或设备工具。Bootstrap 会立即创建并返回 `bootstrap.taskDirectory` 与 `bootstrap.taskAssets`。
+每次新的 QA 请求都先进入 `start`。宿主应把返回的 `todoList` 同步到 IDE TodoList；在返回 `uiExecutionAllowed: true`、`mustStop: false` 和 `runId` 之前，禁止调用浏览器、模拟器或设备工具。`start` 会立即创建并返回 `bootstrap.taskDirectory` 与 `bootstrap.taskAssets`。
 
 ```bash
-qa-agent workflow bootstrap \
+qa-agent start \
   --request "验证用户可以查看并提交正确的结算信息" \
   --module checkout \
   --task checkout-basic-flow \
@@ -530,16 +533,17 @@ qa-agent workflow bootstrap \
 宿主可以在此阶段只读分析源码以完善计划，然后向用户展示当前 `plan` 和 `planHash`。任何 UI 操作之前必须由真实用户审批：
 
 ```bash
-qa-agent task review checkout-basic-flow \
+qa-agent review \
   --module checkout \
+  --task checkout-basic-flow \
   --approve \
   --confirmed-by "qa-reviewer"
 ```
 
-审批后仍需验证宿主能力。只有 `task explore` 返回正式门禁字段后才可开始 UI 操作：
+审批后仍需验证宿主能力。只有 `test` 返回正式门禁字段后才可开始 UI 操作：
 
 ```bash
-qa-agent task explore checkout-basic-flow --module checkout
+qa-agent test --module checkout --task checkout-basic-flow
 ```
 
 ```json
@@ -590,7 +594,7 @@ Agent 在后台通过以下命令持久化真实执行轨迹：
 
 ```bash
 qa-agent context module checkout
-qa-agent task explore checkout-basic-flow --module checkout
+qa-agent test --module checkout --task checkout-basic-flow
 qa-agent run step <run-id> --action "打开结算页" --detail "已进入真实结算页面" --screenshot /absolute/path/checkout-open.png --visual-inspection not-required
 qa-agent run evidence <run-id> --type console --summary "宿主浏览器控制台输出" --file /absolute/path/console.log
 qa-agent run observe <run-id> \
@@ -607,7 +611,7 @@ qa-agent run complete <run-id>
 
 首次成功运行还会检查 OperationPlan 的可回放质量。`navigate/click/input/fill` 需要明确的操作类型和定位器，`input/fill` 还需要结构化且脱敏的 `inputRefs`。业务验证可以 PASS，但如果这些字段不完整，报告会输出 `OperationPlan 未生成原因`，而不会生成不可稳定回放的 JSON。旧项目可运行 `qa-agent prompts sync` 更新 `.qa-agent/prompts/`。
 
-升级已有项目时，先运行 `qa-agent migrate` 将旧 `Task/reports/` 迁移到 `runs/<run-id>/report.md`，并将无法绑定 Run 的手写报告保留到 `.qa-agent/orphans/reports/`；再运行 `qa-agent prompts sync`。旧版审批没有 `confirmationSource`，需要由真实审核人重新执行 `task review --approve --confirmed-by <reviewer>`；`qa-agent`、`assistant`、`system` 等自动身份不能审批自己的计划。创建或修改状态的 Scenario 应声明 Cleanup，并在完成前使用 `run cleanup` 记录结果。人工操作系统 Picker 等步骤应使用 `--execution-mode user-assisted`，此类证据可用于业务结论，但不会生成全自动 OperationPlan。
+升级已有项目时，先运行 `qa-agent migrate` 将旧 `Task/reports/` 迁移到 `runs/<run-id>/report.md`，并将无法绑定 Run 的手写报告保留到 `.qa-agent/orphans/reports/`；再运行 `qa-agent prompts sync`。旧版审批没有 `confirmationSource`，需要由真实审核人重新执行 `qa-agent review --approve --confirmed-by <reviewer>`；`qa-agent`、`assistant`、`system` 等自动身份不能审批自己的计划。创建或修改状态的 Scenario 应声明 Cleanup，并在完成前使用 `run cleanup` 记录结果。人工操作系统 Picker 等步骤应使用 `--execution-mode user-assisted`，此类证据可用于业务结论，但不会生成全自动 OperationPlan。
 
 每个 Task 是一个自包含测试资产目录：
 
@@ -644,21 +648,14 @@ qa-agent operation replay OPERATION_ID \
 返回结果包含完整 `operationPlan`、`nextOperationStep`、`remainingOperationSteps` 和 `checkpoints`。宿主严格按顺序执行；每次 Replay 都创建新的 Run、报告和关键节点截图。
 
 
-首次成功运行后，Agent 应显式调用下面的命令写入快速回归 OperationPlan 候选。这个命令只写脚本，不审批、不执行、不归档：
+首次成功探索运行完成时，Runtime 会自动从结构完整的步骤、截图、断言和 Cleanup 中生成 OperationPlan `candidate`。Agent 只负责展示候选并请求独立审批；`operation generate` 仅保留给旧 Run 修复和迁移。
 
-```bash
-qa-agent operation generate \
-  --module checkout \
-  --task checkout-basic-flow \
-  --run RUN_ID
-```
-
-候选会保存到 `.qa-agent/modules/<module>/tasks/<task>/operation-plans/<scenario>/`，初始为 `validationStatus: unverified`。审批并实测通过后，Runtime 才会把它标记为 `validationStatus: passed`，之后才能归档：
+候选保存在 `.qa-agent/modules/<module>/tasks/<task>/operation-plans/<scenario>/`。审批后状态为 `approved_unverified`，再次执行 `qa-agent test` 完成真实 Replay 后才会进入 `validated`，随后才能加入正式 RegressionSuite 和归档：
 
 ```bash
 qa-agent task operation list checkout-basic-flow --module checkout
-qa-agent task operation review checkout-basic-flow --module checkout --operation OPERATION_ID --approve
-qa-agent task run checkout-basic-flow --module checkout --operation OPERATION_ID
+qa-agent task operation review checkout-basic-flow --module checkout --operation OPERATION_ID --approve --confirmed-by qa-reviewer
+qa-agent test --module checkout --task checkout-basic-flow
 qa-agent run recover <run-id> --reason "元素尚未出现" --action wait --detail "元素出现后继续" --outcome continued
 qa-agent task regression sync checkout-basic-flow --module checkout
 qa-agent task regression run checkout-basic-flow --module checkout
@@ -666,11 +663,11 @@ qa-agent module regression run checkout
 qa-agent archive --module checkout --task checkout-basic-flow
 ```
 
-只有 Task 计划哈希、用户确认、active OperationPlan、平台/设备/App 或 Web 版本、环境/角色、测试数据、所需 MCP 和 macOS 权限都兼容时才会回放；否则回到计划确认或能力接入。回放不跳过业务断言，只跳过重复探索。结果为 `PASS`、`FAIL`、`ADAPTED`、`BLOCKED` 或 `NEEDS_CONFIRMATION`。安全恢复只能使用 `wait`、`refresh`、`back`、`restart-app`、`reset-sandbox-data`、`reconnect-mcp`、`fallback-locator` 或 `resume-checkpoint`，不能改代码、绕过权限或伪造结果。
+只有 Task 计划哈希、用户确认、`approved_unverified` 或 `validated` OperationPlan、平台/设备/App 或 Web 版本、环境/角色、测试数据、所需 MCP 和 macOS 权限都兼容时才会回放；否则回到计划确认或能力接入。回放不跳过业务断言，只跳过重复探索。结果为 `PASS`、`FAIL`、`ADAPTED`、`BLOCKED` 或 `NEEDS_CONFIRMATION`。安全恢复只能使用 `wait`、`refresh`、`back`、`restart-app`、`reset-sandbox-data`、`reconnect-mcp`、`fallback-locator` 或 `resume-checkpoint`，不能改代码、绕过权限或伪造结果。
 
-OperationPlan 按 Scenario 独立保存，步骤包含操作类型、主/备用定位器、输入引用、前置条件、预期状态、断言引用、截图策略、视觉识别策略、风险动作和 checkpoint。回放时每个 `run step` 必须引用下一个 `operationStepId`，不能跳步或重复提交。`candidate`/`active` 只表示生成和审批状态；只有成功的 replay/adapted Run 才会写入 `validationStatus: passed`，未实测通过的 OperationPlan 不满足归档门禁。
+OperationPlan 按 Scenario 独立保存，步骤包含操作类型、主/备用定位器、输入引用、前置条件、预期状态、断言引用、截图策略、视觉识别策略、风险动作和 checkpoint。回放时每个 `run step` 必须引用下一个 `operationStepId`，不能跳步或重复提交。OperationPlan 生命周期为 `candidate → approved_unverified → validated`。只要结构化回放契约完整执行，即使业务断言结果为 FAIL，OperationPlan 仍可成为或保持 `validated`；业务失败属于 Run 结果，不能误判为脚本失效。未完成或上下文不兼容的回放不会自动验证计划，`stale` 仅用于明确的契约漂移或失效；拒绝或替换分别进入 `rejected`、`superseded`。未达到 `validated` 的 OperationPlan 不满足正式回归、发布或归档门禁。
 
-Task 级 RegressionSuite 组织一个 Task 的所有 active OperationPlan；Module 回归在启动时从各 Task 的 active OperationPlan 动态聚合，不再保存第二份 Module Suite。模块回归会串行自动执行所有独立流程，单个业务失败后继续其他流程，最后生成模块汇总报告。`run.json` 是结果记录，OperationPlan 才是可执行操作定义。
+Task 级 RegressionSuite 组织一个 Task 的所有 validated OperationPlan；Module 回归在启动时从各 Task 的 validated OperationPlan 动态聚合，不再保存第二份 Module Suite。模块回归会串行自动执行所有独立流程，单个业务失败后继续其他流程，最后生成模块汇总报告。`run.json` 是结果记录，OperationPlan 才是可执行操作定义。
 
 ### 5. 发布前快速回归
 

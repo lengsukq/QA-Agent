@@ -4,14 +4,16 @@ import { basename, join } from 'node:path';
 import { capabilityAdvice, capabilitySnapshot, checkCapabilities, platformCapabilities } from './capabilities.ts';
 import { checkpointRun, gitMetadata, qaPath, readProjectPromptBundle, readRunById, readTask, saveRun, saveTask, taskEvidenceDirectory, taskRunDirectory, taskRunIndexPath, taskRunLatestPath } from './project.ts';
 import { rebuildIndexes } from './indexer.ts';
-import { hasSecrets, now, readJson, writeJsonAtomic } from './store.ts';
+import { appendTaskEvent } from './events.ts';
+import { normalizeTaskState, transitionTaskState } from './workflow-model.ts';
+import { hasSecrets, listFiles, now, readJson, withFileLock, writeJsonAtomic } from './store.ts';
 import { writeReport } from './report.ts';
 import { curateFailedRun, curateObservedBusinessRules } from './memory.ts';
 import type { ExecutionSnapshot, Locator, OperationAction, OperationStep, RegressionRun, RegressionSuite, RunStatus, StepExecutionMode, TestRun, TestTask, VisualInspectionStatus } from './types.ts';
-import { approvalIsCurrent } from './approval.ts';
+import { approvalIsCurrent, testPlanHash } from './approval.ts';
 import { approvedOperationForReplay, createOperationCandidates, readOperation, recordOperationValidation } from './operations.ts';
 import { assertRecoveryAction, assertSafeAction, type RecoveryAction } from './safety.ts';
-import { newRegressionRun, saveRegressionRun, suitePreflight, writeRegressionReport } from './regression.ts';
+import { newRegressionRun, saveRegressionRun, suitePreflight, syncTaskRegressionSuite, writeRegressionReport } from './regression.ts';
 
 type RunContextInput = Partial<ExecutionSnapshot> & { operationId?: string; scenarioId?: string };
 
@@ -36,11 +38,28 @@ function newRun(root: string, task: TestTask, input: RunContextInput = {}): Test
   const context = buildExecutionSnapshot(root, task, input);
   return {
     $schema: '../../../../schemas/run.schema.json', id: `run-${startedAt.replace(/[-:.TZ]/g, '').slice(0, 14)}-${randomUUID().slice(0, 8)}`,
-    taskId: task.metadata.id, moduleId: task.metadata.moduleId, context, git: gitMetadata(root), status: 'pending', safeMode: policy.safeMode,
+    taskId: task.metadata.id, moduleId: task.metadata.moduleId, planHash: task.metadata.approval?.planHash ?? testPlanHash(task), context, git: gitMetadata(root), status: 'pending', safeMode: policy.safeMode,
     mode: input.operationId ? 'replay' : 'explore',
     steps: [], scenarioResults: [], evidence: [], visualFindings: [], replayStatus: 'not_replay', replayStage: 'idle', replayCursor: 0,
     scenarioId: input.scenarioId, screenshots: [], recoveryAttempts: [], cleanupFindings: [], startedAt,
   };
+}
+
+function startNextRegressionChild(root: string, run: RegressionRun): boolean {
+  const child = run.childRuns.find(item => item.status === 'pending');
+  if (!child) return false;
+  try {
+    const task = readTask(root, child.moduleId, child.taskId);
+    const started = beginAgentGuidedRun(root, task, { ...run.context, scenarioId: child.scenarioId, operationId: child.operationPlanId });
+    child.runId = started.id;
+    child.status = started.status;
+    child.reportPath = childReportRef(started);
+    child.detail = started.conclusion;
+  } catch (error) {
+    child.status = 'blocked';
+    child.detail = (error as Error).message;
+  }
+  return true;
 }
 
 export function beginRegressionRun(root: string, suite: RegressionSuite, context: ExecutionSnapshot): RegressionRun {
@@ -51,20 +70,19 @@ export function beginRegressionRun(root: string, suite: RegressionSuite, context
     run.childRuns = suite.members.map(member => ({ runId: '', taskId: member.taskId, moduleId: member.moduleId, scenarioId: member.scenarioId, operationPlanId: member.operationPlanId, priority: member.priority, releaseGate: member.releaseGate, status: run.status, detail: errors.find(error => error.includes(member.taskId)) ?? errors.join(' ') }));
     run.completedAt = now(); run.reportPath = run.suiteScope === 'release' ? `reports/${run.id}.md` : `modules/${run.moduleId}/reports/${run.id}.md`; saveRegressionRun(root, run); writeRegressionReport(root, run); return run;
   }
-  for (const member of suite.members) {
-    const task = readTask(root, member.moduleId, member.taskId);
-    const child = beginAgentGuidedRun(root, task, { ...context, scenarioId: member.scenarioId, operationId: member.operationPlanId });
-    run.childRuns.push({ runId: child.id, taskId: member.taskId, moduleId: member.moduleId, scenarioId: member.scenarioId, operationPlanId: member.operationPlanId, priority: member.priority, releaseGate: member.releaseGate, status: child.status, reportPath: childReportRef(child), detail: child.conclusion });
-  }
+  run.childRuns = suite.members.map(member => ({ runId: '', taskId: member.taskId, moduleId: member.moduleId, scenarioId: member.scenarioId, operationPlanId: member.operationPlanId, priority: member.priority, releaseGate: member.releaseGate, status: 'pending' }));
+  startNextRegressionChild(root, run);
   saveRegressionRun(root, run); return run;
 }
 
 export function completeRegressionRun(root: string, run: RegressionRun): RegressionRun {
+  if (run.completedAt && run.childRuns.every(child => !['pending', 'running'].includes(child.status))) return run;
   for (const child of run.childRuns) {
     if (!child.runId) continue;
     try { const childRun = readRunById(root, child.runId); child.status = childRun.status; child.reportPath = childReportRef(childRun); child.detail = childRun.conclusion; } catch { /* Child may not have been started by the host yet. */ }
   }
-  if (run.childRuns.some(child => child.status === 'running' || child.status === 'pending')) return run;
+  if (run.childRuns.some(child => child.status === 'running')) { saveRegressionRun(root, run); return run; }
+  if (startNextRegressionChild(root, run)) { saveRegressionRun(root, run); return run; }
   const statuses = run.childRuns.map(child => child.status);
   run.status = finalStatus(statuses); run.completedAt = now(); run.reportPath = run.suiteScope === 'release' ? `reports/${run.id}.md` : `modules/${run.moduleId}/reports/${run.id}.md`; saveRegressionRun(root, run); writeRegressionReport(root, run); return run;
 }
@@ -89,7 +107,21 @@ function finish(root: string, task: TestTask, run: TestRun): TestRun {
       run.conclusion = `${run.conclusion ?? 'Business verification completed.'} No OperationPlan candidate was generated because the replay contract is incomplete. ${summary}`;
     }
   }
-  recordOperationValidation(root, task, run);
+  const taskStateBeforeFinish = normalizeTaskState(task.metadata.status);
+  const operationValidation = recordOperationValidation(root, task, run);
+  if (operationValidation?.contractValidated) syncTaskRegressionSuite(root, task);
+  const targetTaskState = run.status === 'paused'
+    ? 'paused'
+    : ['blocked', 'needs_confirmation', 'inconclusive'].includes(run.status) || run.steps.some(step => step.id === 'preflight')
+      ? 'blocked'
+      : operationValidation?.contractValidated && ['passed', 'adapted'].includes(run.status)
+        ? 'regression_ready'
+        : 'reviewing_result';
+  if (taskStateBeforeFinish === targetTaskState) {
+    appendTaskEvent(root, { type: 'run_completed', actor: { type: 'runtime', id: 'qa-agent-runtime' }, moduleId: task.metadata.moduleId, taskId: task.metadata.id, fromState: taskStateBeforeFinish, toState: targetTaskState, reasonCode: `run_${run.status}`, artifactHash: task.metadata.approval?.planHash, idempotencyKey: `run-completed:${run.id}`, metadata: { runId: run.id, status: run.status, mode: run.mode } });
+  } else {
+    transitionTaskState(root, task, targetTaskState, 'run_completed', `run_${run.status}`, { artifactHash: task.metadata.approval?.planHash, idempotencyKey: `run-completed:${run.id}`, metadata: { runId: run.id, status: run.status, mode: run.mode } });
+  }
   run.reportPath = `runs/${run.id}/report.md`;
   run.reportGeneratedBy = 'qa-agent-runtime';
   run.reportGeneratedAt = now();
@@ -116,11 +148,29 @@ function block(root: string, task: TestTask, run: TestRun, detail: string, statu
   return finish(root, task, run);
 }
 
-export function beginAgentGuidedRun(root: string, task: TestTask, context: RunContextInput = {}): TestRun {
+function activeTaskRun(root: string, task: TestTask): TestRun | undefined {
+  return listFiles(qaPath(root, 'modules', task.metadata.moduleId, 'tasks', task.metadata.id, 'runs'), path => path.endsWith('/run.json'))
+    .map(path => readJson<TestRun>(path))
+    .filter(run => run.status === 'running')
+    .sort((left, right) => right.startedAt.localeCompare(left.startedAt))[0];
+}
+
+function beginAgentGuidedRunUnlocked(root: string, task: TestTask, context: RunContextInput = {}): TestRun {
+  const current = activeTaskRun(root, task);
+  if (current) {
+    if (!approvalIsCurrent(task)) return block(root, task, current, `Task plan changed after active Run ${current.id} started. Stop execution and obtain a new TestPlan approval before resuming.`, 'needs_confirmation');
+    if (context.operationId && current.operationPlanId !== context.operationId) throw new Error(`Task ${task.metadata.id} already has active Run ${current.id} for a different OperationPlan.`);
+    if (context.scenarioId && current.scenarioId && current.scenarioId !== context.scenarioId) throw new Error(`Task ${task.metadata.id} already has active Run ${current.id} for Scenario ${current.scenarioId}.`);
+    const contextKeys = ['environment', 'platform', 'role', 'device', 'deviceModel', 'osVersion', 'appVersion', 'webBuild', 'testDataFingerprint'] as const;
+    for (const key of contextKeys) if (context[key] !== undefined && context[key] !== current.context[key]) throw new Error(`Task ${task.metadata.id} already has active Run ${current.id} with ${key}=${current.context[key] ?? 'unknown'}, not ${context[key]}.`);
+    return current;
+  }
+  const taskState = normalizeTaskState(task.metadata.status);
+  if (['archived', 'deprecated', 'superseded'].includes(taskState)) throw new Error(`Task ${task.metadata.id} is ${taskState} and cannot start a new Run.`);
   const run = newRun(root, task, context);
   const promptBundle = readProjectPromptBundle(root);
   if (!promptBundle.current) return block(root, task, run, `Canonical project prompts are missing or stale. Run qa-agent prompts sync before execution. Missing: ${promptBundle.missing.join(', ') || 'none'}. Stale: ${promptBundle.stale.join(', ') || 'none'}.`, 'needs_confirmation');
-  if (!['ready', 'active'].includes(task.metadata.status)) return block(root, task, run, `Task status is ${task.metadata.status}; review and mark it ready before execution.`);
+  if (!['ready', 'reviewing_result', 'regression_ready', 'completed', 'blocked', 'paused', 'active'].includes(task.metadata.status)) return block(root, task, run, `Task status is ${task.metadata.status}; review and mark it ready before execution.`);
   if (!approvalIsCurrent(task)) return block(root, task, run, 'Generated test cases are unapproved or changed after approval. Present the current plan and obtain user confirmation before execution.', 'needs_confirmation');
   const required = [...new Set([...task.capabilities.required, ...platformCapabilities(run.context.platform)])];
   const capabilities = checkCapabilities(root, required, task.capabilities.optional);
@@ -137,12 +187,23 @@ export function beginAgentGuidedRun(root: string, task: TestTask, context: RunCo
   run.steps.push(run.mode === 'replay'
     ? { id: 'strict-replay-contract', action: 'Strict OperationPlan replay', status: 'passed', detail: 'Execute the approved OperationPlan JSON in order. Planning and source review are not part of Replay. Capture required screenshots and declared business assertions.', at: now(), source: 'internal' }
     : { id: 'agent-guided-preflight', action: 'Agent-guided Explore preflight', status: 'passed', detail: 'Required capabilities are available. The host may explore the approved flow, while persisting every real UI action and required evidence.', at: now(), source: 'internal' });
+  transitionTaskState(root, task, 'running', 'run_started', run.mode === 'replay' ? 'approved_replay_started' : 'approved_explore_started', { artifactHash: task.metadata.approval?.planHash, idempotencyKey: `run-started:${run.id}`, metadata: { runId: run.id, mode: run.mode, scenarioId: run.scenarioId } });
+  saveTask(root, task);
   checkpointRun(root, run); return run;
+}
+
+export function beginAgentGuidedRun(root: string, task: TestTask, context: RunContextInput = {}): TestRun {
+  const moduleId = task.metadata.moduleId;
+  const taskId = task.metadata.id;
+  const lockPath = qaPath(root, '.locks', `run-start-${moduleId}-${taskId}.lock`);
+  return withFileLock(lockPath, () => beginAgentGuidedRunUnlocked(root, readTask(root, moduleId, taskId), context));
 }
 
 export function recordAgentStep(root: string, runId: string, input: { action: string; operationAction?: OperationAction; safetyAction?: string; detail: string; status?: RunStatus; screenshotPath?: string; visualInspection?: VisualInspectionStatus; source?: TestRun['steps'][number]['source']; executionMode?: StepExecutionMode; operationStepId?: string; scenarioId?: string; locator?: Locator; actualLocator?: Locator; inputRefs?: Record<string, string>; expectedState?: string; actualState?: string; adaptation?: string }): TestRun {
   const run = readRunById(root, runId); if (run.status !== 'running') throw new Error(`Run ${runId} is not running.`);
-  const task = readTask(root, run.moduleId, run.taskId); const scenarioId = input.scenarioId ?? run.scenarioId ?? (task.scenarios.length === 1 ? task.scenarios[0]?.id : undefined);
+  const task = readTask(root, run.moduleId, run.taskId);
+  if (!approvalIsCurrent(task)) throw new Error(`Task ${task.metadata.id} plan changed after Run ${run.id} started; stop UI execution and obtain a new TestPlan approval.`);
+  const scenarioId = input.scenarioId ?? run.scenarioId ?? (task.scenarios.length === 1 ? task.scenarios[0]?.id : undefined);
   if (!scenarioId) throw new Error('A UI step must specify --scenario when the Task contains multiple scenarios.');
   const source = input.source ?? (run.replayStatus === 'replayed' || run.replayStatus === 'adapted' ? 'operation-replay' : 'ui'); const visualInspection = input.visualInspection ?? 'not-required'; const executionMode = input.executionMode ?? 'host-automated';
   if (executionMode === 'system-component-blocked' && ['passed', 'adapted'].includes(input.status ?? 'passed')) throw new Error('A system-component-blocked step cannot be recorded as passed or adapted. Use blocked, paused, or inconclusive.');
@@ -195,13 +256,15 @@ export function recordRecoveryAttempt(root: string, runId: string, input: { reas
   const attempt = { id: `recovery-${run.recoveryAttempts.length + 1}`, reason: input.reason, action: input.action, outcome: input.outcome, detail: input.detail, failedStepId: input.failedStepId, at: now() };
   run.recoveryAttempts.push(attempt); run.steps.push({ id: attempt.id, action: `Recovery: ${input.action}`, status: input.outcome === 'continued' ? 'passed' : input.outcome, detail: `${input.reason}\n${input.detail}`, at: attempt.at, source: 'recovery', scenarioId: run.scenarioId, visualInspection: 'not-required' });
   if (input.outcome === 'continued') { run.status = 'running'; run.replayStage = run.replayStatus === 'not_replay' ? 'ready' : 'step_pending'; checkpointRun(root, run); return run; }
-  run.status = input.outcome; run.replayStage = input.outcome === 'paused' ? 'blocked' : 'blocked'; run.scenarioResults = task.scenarios.map(scenario => ({ scenarioId: scenario.id, status: input.outcome, detail: `Recovery stopped the run: ${input.detail}` })); run.conclusion = `Run stopped during recovery: ${input.outcome}.`; return finish(root, task, run);
+  run.status = input.outcome; run.replayStage = input.outcome === 'paused' ? 'blocked' : 'blocked'; run.scenarioResults = task.scenarios.map(scenario => ({ scenarioId: scenario.id, status: input.outcome === 'continued' ? 'running' : input.outcome, detail: `Recovery stopped the run: ${input.detail}` })); run.conclusion = `Run stopped during recovery: ${input.outcome}.`; return finish(root, task, run);
 }
 
 export function recordVisualFinding(root: string, runId: string, input: { scenarioId: string; assertionId: string; expected: string; actual: string; status: RunStatus; screenshotPath?: string; inspectionProvider?: string }): TestRun {
   const run = readRunById(root, runId); if (run.status !== 'running') throw new Error(`Run ${runId} is not running.`);
   if (!['passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable', 'needs_confirmation', 'adapted'].includes(input.status)) throw new Error('A visual observation must use a terminal QA conclusion status.');
-  const task = readTask(root, run.moduleId, run.taskId); const scenario = task.scenarios.find(item => item.id === input.scenarioId); if (!scenario) throw new Error(`Scenario ${input.scenarioId} does not belong to task ${run.taskId}.`);
+  const task = readTask(root, run.moduleId, run.taskId);
+  if (!approvalIsCurrent(task)) throw new Error(`Task ${task.metadata.id} plan changed after Run ${run.id} started; stop assertion recording and obtain a new TestPlan approval.`);
+  const scenario = task.scenarios.find(item => item.id === input.scenarioId); if (!scenario) throw new Error(`Scenario ${input.scenarioId} does not belong to task ${run.taskId}.`);
   if (run.scenarioId && run.scenarioId !== input.scenarioId) throw new Error(`Run is scoped to scenario ${run.scenarioId}; received visual finding for ${input.scenarioId}.`);
   if (scenario.visualAssertions?.length && !scenario.visualAssertions.some(item => item.id === input.assertionId)) throw new Error(`Visual assertion ${input.assertionId} is not declared for scenario ${input.scenarioId}.`);
   if (['passed', 'failed', 'adapted'].includes(input.status) && !input.screenshotPath) throw new Error('A terminal visual observation requires a screenshot artifact.');
@@ -215,7 +278,8 @@ export function recordVisualFinding(root: string, runId: string, input: { scenar
 
 export function recordCleanupFinding(root: string, runId: string, input: { scenarioId: string; cleanup: string; actual: string; status: RunStatus; screenshotPath?: string }): TestRun {
   const run = readRunById(root, runId); if (run.status !== 'running') throw new Error(`Run ${runId} is not running.`);
-  const task = readTask(root, run.moduleId, run.taskId); const scenario = task.scenarios.find(item => item.id === input.scenarioId);
+  const task = readTask(root, run.moduleId, run.taskId);
+  const scenario = task.scenarios.find(item => item.id === input.scenarioId);
   if (!scenario) throw new Error(`Scenario ${input.scenarioId} does not belong to task ${run.taskId}.`);
   if (run.scenarioId && run.scenarioId !== input.scenarioId) throw new Error(`Run is scoped to scenario ${run.scenarioId}; received cleanup for ${input.scenarioId}.`);
   if (!scenario.cleanup.includes(input.cleanup)) throw new Error(`Cleanup ${input.cleanup} is not declared for scenario ${input.scenarioId}.`);
@@ -231,6 +295,9 @@ Actual: ${input.actual}`, at: finding.at, scenarioId: input.scenarioId, source: 
 
 export function completeAgentGuidedRun(root: string, task: TestTask, runId: string): TestRun {
   const run = readRunById(root, runId); if (run.status !== 'running') throw new Error(`Run ${runId} is not running.`);
+  const currentTask = readTask(root, run.moduleId, run.taskId);
+  if (!approvalIsCurrent(currentTask)) return block(root, currentTask, run, 'Task plan changed after this Run started. Stop execution and obtain a new TestPlan approval before retrying.', 'needs_confirmation');
+  task = currentTask;
   if (run.replayStatus !== 'not_replay' && run.operationPlanId) { const operation = readOperation(root, task, run.operationPlanId); if ((run.replayCursor ?? 0) < operation.steps.length) return block(root, task, run, `Replay is incomplete: ${operation.steps.length - (run.replayCursor ?? 0)} Operation steps remain.`, 'blocked'); }
   const active = task.scenarios.filter(scenario => !run.scenarioId || scenario.id === run.scenarioId);
   const replayOperation = run.operationPlanId ? readOperation(root, task, run.operationPlanId) : undefined;

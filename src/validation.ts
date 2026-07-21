@@ -4,7 +4,9 @@ import { qaPath } from './project.ts';
 import { hasSecrets, isSafeId, listFiles, readJson } from './store.ts';
 import { isHumanApprover } from './approval.ts';
 import { hasRuntimeReportMarker, RUNTIME_REPORT_GENERATOR } from './report-contract.ts';
-import type { RegressionRun } from './types.ts';
+import type { RegressionRun, TaskLifecycleState } from './types.ts';
+import { readTaskEvents } from './events.ts';
+import { normalizeTaskState } from './workflow-model.ts';
 
 export interface ValidationResult { valid: boolean; errors: string[]; checked: number; }
 
@@ -22,13 +24,26 @@ function validateDomainObject(path: string): string[] {
   if (/\/tasks\/[^/]+\/task\.json$/.test(path)) {
     if (value.apiVersion !== 'qa-agent/v2') errors.push(`${path}: Task must use qa-agent/v2.`);
     if (!value.metadata || !isSafeId(value.metadata.id) || !isSafeId(value.metadata.moduleId)) errors.push(`${path}: invalid task metadata.`);
-    if (['ready', 'active'].includes(value.metadata?.status) && (!isHumanApprover(value.metadata.approval?.confirmedBy) || !value.metadata.approval?.confirmedAt || !value.metadata.approval?.confirmationSource || !value.metadata.approval?.planHash)) errors.push(`${path}: ready or active task requires explicit approval from a real human reviewer with confirmation source.`);
+    const taskStatuses = ['draft', 'planning', 'awaiting_approval', 'ready', 'running', 'reviewing_result', 'regression_ready', 'completed', 'archived', 'needs_input', 'blocked', 'paused', 'deprecated', 'superseded', 'active', 'needs_review'];
+    if (!taskStatuses.includes(value.metadata?.status)) errors.push(`${path}: invalid Task lifecycle state ${value.metadata?.status}.`);
+    if (['ready', 'running', 'reviewing_result', 'regression_ready', 'completed', 'archived', 'active'].includes(value.metadata?.status) && (!isHumanApprover(value.metadata.approval?.confirmedBy) || !value.metadata.approval?.confirmedAt || !value.metadata.approval?.confirmationSource || !value.metadata.approval?.planHash)) errors.push(`${path}: executable or completed task requires explicit approval from a real human reviewer with confirmation source.`);
     if (!Array.isArray(value.scenarioRefs) || !value.scenarioRefs.length) errors.push(`${path}: scenarioRefs must be a non-empty array.`);
+    else for (const ref of value.scenarioRefs) if (typeof ref !== 'string' || !/^scenarios\/[a-z0-9][a-z0-9-]{0,62}\.json$/.test(ref)) errors.push(`${path}: invalid Scenario reference ${String(ref)}.`);
     if (value.reportIndexRef !== 'runs/index.json') errors.push(`${path}: reportIndexRef must be runs/index.json; Task reports belong to self-contained Run packages.`);
   }
-  if (/\/scenarios\/[^/]+\.json$/.test(path) && (!isSafeId(value.id) || typeof value.intent !== 'string' || !value.expected || !Array.isArray(value.preconditions))) errors.push(`${path}: invalid Scenario contract.`);
+  if (/\/scenarios\/[^/]+\.json$/.test(path)) {
+    if (!isSafeId(value.id) || typeof value.title !== 'string' || typeof value.intent !== 'string' || !value.expected || !Array.isArray(value.preconditions) || !Array.isArray(value.evidence) || !Array.isArray(value.cleanup) || !['low', 'medium', 'high', 'critical'].includes(value.risk)) errors.push(`${path}: invalid Scenario contract.`);
+    if (value.planningStatus && !['applicable', 'not_applicable', 'deferred', 'needs_user_decision'].includes(value.planningStatus)) errors.push(`${path}: invalid Scenario planningStatus.`);
+    if (!Array.isArray(value.visualAssertions) || !value.visualAssertions.length) errors.push(`${path}: visualAssertions must be a non-empty array.`);
+    for (const [index, assertion] of (value.visualAssertions ?? []).entries()) {
+      if (!assertion || !isSafeId(assertion.id) || typeof assertion.expected !== 'string' || !assertion.expected.trim() || !['low', 'medium', 'high', 'critical'].includes(assertion.importance)) errors.push(`${path}: visual assertion ${index + 1} requires id, expected, and importance low|medium|high|critical.`);
+    }
+  }
   if (path.endsWith('/module-snapshot.json') && (value.apiVersion !== 'qa-agent/v2' || value.kind !== 'ModuleSnapshot' || !isSafeId(value.moduleId) || typeof value.snapshotHash !== 'string')) errors.push(`${path}: invalid module snapshot.`);
-  if (path.endsWith('/requirements.json') && (value.apiVersion !== 'qa-agent/v2' || value.kind !== 'TestRequirements' || !isSafeId(value.taskId) || !isSafeId(value.moduleId))) errors.push(`${path}: invalid test requirements.`);
+  if (path.endsWith('/requirements.json')) {
+    if (value.apiVersion !== 'qa-agent/v2' || value.kind !== 'TestRequirements' || !isSafeId(value.taskId) || !isSafeId(value.moduleId)) errors.push(`${path}: invalid test requirements.`);
+    for (const [index, trace] of (value.requirementTrace ?? []).entries()) if (!trace.requirementId || !Array.isArray(trace.scenarioIds) || !Array.isArray(trace.assertionIds) || !['covered', 'partial', 'not_covered', 'deferred'].includes(trace.status)) errors.push(`${path}: invalid requirementTrace entry ${index + 1}.`);
+  }
   if (/\/memory\/[^/]+\.json$/.test(path) || /\/shared-memory\/entries\/[^/]+\.json$/.test(path)) {
     if (!isSafeId(value.id) || !['candidate', 'active', 'superseded', 'deprecated'].includes(value.status)) errors.push(`${path}: invalid memory id or status.`);
     if (hasSecrets({ content: value.content, structuredRule: value.structuredRule })) errors.push(`${path}: contains a potential secret.`);
@@ -36,6 +51,7 @@ function validateDomainObject(path: string): string[] {
   if (/\/runs\/[^/]+\/run\.json$/.test(path)) {
     if (!['pending', 'running', 'passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable', 'needs_confirmation', 'adapted'].includes(value.status)) errors.push(`${path}: invalid run status.`);
     if (value.completedAt) {
+      if (typeof value.planHash !== 'string' || !value.planHash) errors.push(`${path}: completed Run requires planHash; run qa-agent migrate for legacy assets.`);
       const expectedReportPath = `runs/${value.id}/report.md`;
       if (value.reportPath !== expectedReportPath) errors.push(`${path}: completed Run reportPath must be ${expectedReportPath}.`);
       if (value.reportGeneratedBy !== RUNTIME_REPORT_GENERATOR) errors.push(`${path}: completed Run must declare reportGeneratedBy=${RUNTIME_REPORT_GENERATOR}.`);
@@ -55,7 +71,10 @@ function validateDomainObject(path: string): string[] {
   }
   if (/\/operation-plans\/[^/]+\/v\d+\.json$/.test(path)) {
     if (value.apiVersion !== 'qa-agent/v2') errors.push(`${path}: OperationPlan must use qa-agent/v2.`);
-    if (!isSafeId(value.id) || value.kind !== 'OperationPlan' || !['candidate', 'active', 'superseded', 'deprecated'].includes(value.status) || (value.validationStatus && !['unverified', 'passed', 'failed'].includes(value.validationStatus))) errors.push(`${path}: invalid OperationPlan identity, status, or validationStatus.`);
+    const operationStatuses = ['candidate', 'approved_unverified', 'validated', 'stale', 'rejected', 'superseded', 'active', 'deprecated'];
+    if (!isSafeId(value.id) || value.kind !== 'OperationPlan' || !operationStatuses.includes(value.status) || (value.validationStatus && !['unverified', 'passed', 'failed', 'stale'].includes(value.validationStatus))) errors.push(`${path}: invalid OperationPlan identity, status, or validationStatus.`);
+    if (['approved_unverified', 'validated'].includes(value.status) && (!isHumanApprover(value.approvedBy) || !value.approvedAt)) errors.push(`${path}: approved or validated OperationPlan requires approvedBy and approvedAt from a real human reviewer.`);
+    if (value.status === 'validated' && (!value.validatedByRunId || !value.validatedAt)) errors.push(`${path}: validated OperationPlan requires validatedByRunId and validatedAt.`);
     if (!Array.isArray(value.steps)) errors.push(`${path}: OperationPlan steps must be an array.`);
     for (const [index, step] of (value.steps ?? []).entries()) {
       if (!step || typeof step !== 'object') { errors.push(`${path}: step ${index + 1} must be an object.`); continue; }
@@ -94,6 +113,7 @@ export function validateProject(root: string): ValidationResult {
   files.push(...listFiles(qaPath(root, 'modules'), path => path.endsWith('/module-snapshot.json')).map(path => [path, ['apiVersion', 'kind', 'moduleId', 'moduleName', 'moduleRevision', 'snapshotHash', 'capturedAt']] as [string, string[]]));
   files.push(...listFiles(qaPath(root, 'modules'), path => path.endsWith('/requirements.json')).map(path => [path, ['apiVersion', 'kind', 'taskId', 'moduleId', 'businessGoals', 'actors', 'flows', 'rules', 'scope', 'preconditions', 'testDataRefs', 'environments']] as [string, string[]]));
   files.push(...listFiles(qaPath(root, 'modules'), path => path.endsWith('/test-plan.json')).map(path => [path, ['apiVersion', 'kind', 'taskId', 'moduleId', 'version', 'planHash', 'scenarioRefs', 'capabilities', 'safety', 'evidencePolicy', 'recoveryPolicy', 'status']] as [string, string[]]));
+  files.push(...listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/scenarios\/[^/]+\.json$/.test(path)).map(path => [path, ['id', 'title', 'input', 'preconditions', 'intent', 'expected', 'evidence', 'cleanup', 'risk', 'visualAssertions']] as [string, string[]]));
   files.push(...listFiles(qaPath(root, 'modules'), path => /\/operation-plans\/[^/]+\/v\d+\.json$/.test(path)).map(path => [path, ['apiVersion', 'kind', 'id', 'version', 'status', 'taskId', 'moduleId', 'scenarioId', 'planHash', 'executionSnapshot', 'steps']] as [string, string[]]));
   files.push(...listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/runs\/[^/]+\/run\.json$/.test(path)).map(path => [path, ['id', 'taskId', 'moduleId', 'context', 'status', 'steps', 'startedAt']] as [string, string[]]));
   files.push(...listFiles(qaPath(root, 'modules'), path => /\/regression-suite\.json$/.test(path)).map(path => [path, ['apiVersion', 'kind', 'id', 'scope', 'name', 'purpose', 'moduleId', 'moduleIds', 'members', 'priorityThreshold', 'suiteHash', 'status']] as [string, string[]]));
@@ -107,6 +127,69 @@ export function validateProject(root: string): ValidationResult {
   for (const [path, fields] of files) if (existsSync(path)) {
     errors.push(...validateObject(path, fields));
     try { errors.push(...validateDomainObject(path)); } catch (error) { errors.push(`${path}: ${(error as Error).message}`); }
+  }
+
+  const taskManifests = listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/task\.json$/.test(path));
+  const validTaskStates = new Set<TaskLifecycleState>(['draft', 'planning', 'awaiting_approval', 'ready', 'running', 'reviewing_result', 'regression_ready', 'completed', 'archived', 'needs_input', 'blocked', 'paused', 'deprecated', 'superseded']);
+  for (const manifestPath of taskManifests) {
+    const manifest = readJson<Record<string, any>>(manifestPath);
+    const moduleId = manifest.metadata?.moduleId;
+    const taskId = manifest.metadata?.id;
+    if (!moduleId || !taskId) continue;
+    try {
+      const taskEvents = readTaskEvents(root, moduleId, taskId);
+      const seenIds = new Set<string>();
+      const seenKeys = new Set<string>();
+      for (const [index, event] of taskEvents.entries()) {
+        if (event.seq !== index + 1) errors.push(`${manifestPath}: events.jsonl sequence expected ${index + 1}, received ${event.seq}.`);
+        if (!event.id || seenIds.has(event.id)) errors.push(`${manifestPath}: duplicate or missing event id at seq ${event.seq}.`); else seenIds.add(event.id);
+        if (!event.idempotencyKey || seenKeys.has(event.idempotencyKey)) errors.push(`${manifestPath}: duplicate or missing event idempotencyKey at seq ${event.seq}.`); else seenKeys.add(event.idempotencyKey);
+        if (!event.type || !event.reasonCode || event.moduleId !== moduleId || event.taskId !== taskId) errors.push(`${manifestPath}: invalid event identity at seq ${event.seq}.`);
+        if (event.fromState && !validTaskStates.has(event.fromState)) errors.push(`${manifestPath}: invalid event fromState ${event.fromState}.`);
+        if (event.toState && !validTaskStates.has(event.toState)) errors.push(`${manifestPath}: invalid event toState ${event.toState}.`);
+      }
+      const lastStateEvent = [...taskEvents].reverse().find(event => event.toState);
+      if (lastStateEvent?.toState && lastStateEvent.toState !== normalizeTaskState(manifest.metadata?.status)) errors.push(`${manifestPath}: Task state ${manifest.metadata?.status} does not match latest state event ${lastStateEvent.toState}.`);
+    } catch (error) { errors.push((error as Error).message); }
+
+    const taskDir = dirname(manifestPath);
+    const taskOperations = listFiles(join(taskDir, 'operation-plans'), path => /\/v\d+\.json$/.test(path)).map(path => readJson<Record<string, any>>(path));
+    const taskRuns = listFiles(join(taskDir, 'runs'), path => path.endsWith('/run.json')).map(path => readJson<Record<string, any>>(path));
+    const runningRuns = taskRuns.filter(run => run.status === 'running');
+    if (runningRuns.length > 1) errors.push(`${manifestPath}: Task has multiple active Runs: ${runningRuns.map(run => run.id).join(', ')}.`);
+    for (const operation of taskOperations.filter(item => item.status === 'validated')) {
+      const validationRun = taskRuns.find(run => run.id === operation.validatedByRunId && run.operationPlanId === operation.id && run.replayStatus !== 'not_replay' && ['passed', 'adapted', 'failed'].includes(run.status) && run.replayStage === 'completed' && Boolean(run.completedAt));
+      if (!validationRun) errors.push(`${manifestPath}: validated OperationPlan ${operation.id} requires a completed persisted replay Run that executed its contract.`);
+    }
+    for (const pointerPath of listFiles(join(taskDir, 'operation-plans'), path => path.endsWith('/current.json'))) {
+      const pointer = readJson<Record<string, any>>(pointerPath);
+      const pointed = taskOperations.find(operation => operation.id === pointer.operationPlanId);
+      if (!pointed || !['approved_unverified', 'validated'].includes(pointed.status)) errors.push(`${pointerPath}: current OperationPlan pointer must reference an approved_unverified or validated plan.`);
+    }
+
+    if (manifest.metadata?.status === 'archived') {
+      const approvedPlanHash = manifest.metadata?.approval?.planHash;
+      const scenarioIds = (manifest.scenarioRefs ?? []).map((ref: string) => basename(ref, '.json'));
+      const operations = taskOperations;
+      const runs = taskRuns;
+      const unresolvedKnownIssues = listFiles(join(taskDir, 'memory'), path => path.endsWith('.json')).map(path => readJson<Record<string, any>>(path)).filter(memory => memory.type === 'known_issue' && memory.status === 'candidate');
+      if (unresolvedKnownIssues.length) errors.push(`${manifestPath}: archived Task has unresolved known_issue memory candidates: ${unresolvedKnownIssues.map(memory => memory.id).join(', ')}.`);
+      const completedRuns = runs.filter(run => Boolean(run.completedAt)).sort((left, right) => (right.completedAt ?? right.startedAt).localeCompare(left.completedAt ?? left.startedAt));
+      if (!completedRuns[0] || !['passed', 'adapted'].includes(completedRuns[0].status)) errors.push(`${manifestPath}: archived Task requires its latest completed Run to be passed or adapted.`);
+      const suitePath = join(taskDir, 'regression-suite.json');
+      const suite = existsSync(suitePath) ? readJson<Record<string, any>>(suitePath) : undefined;
+      if (!suite || suite.status !== 'active') errors.push(`${manifestPath}: archived Task requires an active RegressionSuite.`);
+      for (const scenarioId of scenarioIds) {
+        const operation = operations.filter(item => item.scenarioId === scenarioId && item.status === 'validated' && item.planHash === approvedPlanHash).sort((left, right) => Number(right.version ?? 0) - Number(left.version ?? 0))[0];
+        if (!operation) {
+          errors.push(`${manifestPath}: archived Scenario ${scenarioId} requires a validated OperationPlan with the current approved planHash.`);
+          continue;
+        }
+        const validationRun = runs.find(run => run.id === operation.validatedByRunId && run.operationPlanId === operation.id && run.replayStatus !== 'not_replay' && ['passed', 'adapted'].includes(run.status) && Boolean(run.completedAt));
+        if (!validationRun) errors.push(`${manifestPath}: validated OperationPlan ${operation.id} requires a successful persisted replay/adapted Run.`);
+        if (!suite?.members?.some((member: any) => member.scenarioId === scenarioId && member.operationPlanId === operation.id && member.taskPlanHash === approvedPlanHash)) errors.push(`${manifestPath}: RegressionSuite does not cover archived Scenario ${scenarioId} with its validated OperationPlan.`);
+      }
+    }
   }
 
   const legacyTaskReports = listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/reports\/.+\.md$/.test(path));

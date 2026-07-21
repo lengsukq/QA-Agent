@@ -13,15 +13,17 @@ import { validateProject, validateSkill } from './validation.ts';
 import { createMemoryCandidate, reviewMemory } from './memory.ts';
 import { configuredHostRecords, installHostIntegration, recordHostInstall, supportedHosts, updateHostIntegrations } from './host-adapters.ts';
 import { detectConfiguredHosts, hostsFromFlags, HOST_PLATFORMS } from './host-configurators/registry.ts';
-import { assertHumanApprover, testPlanHash } from './approval.ts';
+import { approvalIsCurrent, assertHumanApprover, invalidateApproval, testPlanHash } from './approval.ts';
 import { hostCapabilityDiagnosis } from './capabilities.ts';
-import { createOperationCandidates, listOperations, operationSummary, readOperation, reviewOperation } from './operations.ts';
+import { createOperationCandidates, listOperations, markOperationsStaleForPlanHash, operationSummary, readOperation, reviewOperation } from './operations.ts';
 import { buildModuleRegressionSuite, buildReleaseRegressionSuite, readTaskRegressionSuite, syncTaskRegressionSuite } from './regression.ts';
 import { analyzeProjectImpact } from './impact-analysis.ts';
 import { attachRegressionRun, createReleaseCheck, finalizeReleaseCheck, readReleaseCheck, saveReleaseCheck, writeReleaseReport } from './release.ts';
 import { bootstrapWorkflow, workflowStatus } from './workflow.ts';
 import { migrateProjectArtifacts } from './migration.ts';
 import { inspectTaskArchive } from './archive.ts';
+import { appendTaskEvent } from './events.ts';
+import { normalizeTaskState, transitionTaskState } from './workflow-model.ts';
 
 const args = process.argv.slice(2);
 const packageMetadata = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
@@ -38,8 +40,10 @@ Commands:
   doctor | validate | migrate | index rebuild | prompts sync
   update [--force] [--migrate]
   start --request TEXT --module ID --task ID [--module-name NAME] [--task-name NAME] [--platforms web,android,ios] [--risk low|medium|high|critical]
+  review --module MODULE --task TASK --approve --confirmed-by USER [--confirmation-source current-chat-explicit-approval]
   test --module MODULE --task TASK [--scenario SCENARIO] [execution context flags]
   archive --module MODULE --task TASK
+  Compatibility and administration:
   workflow bootstrap --request TEXT --module ID --task ID [--module-name NAME] [--task-name NAME] [--platforms web,android,ios] [--risk low|medium|high|critical]
   workflow status --module ID --task ID
   operation generate --module MODULE --task TASK [--run RUN_ID] [--scenario SCENARIO]
@@ -50,7 +54,7 @@ Commands:
   host list | host attest --id ID --capabilities CAP1,CAP2 --permission-status verified|missing|unknown [--host HOST] [--version VERSION] | host import --file HOST_CAPABILITIES.json | host doctor [--platform android|ios]
   context module MODULE
   module list | module create ID --name NAME [--description TEXT] [--platforms web,android,ios] [--source-hints PATHS] [--entry-points PATHS] [--dependencies MODULES] | module update ID [--name NAME] [--description TEXT] [--risk LEVEL] [same mapping flags] | module archive ID | module plan ID | module coverage ID
-  task list | task create ID --module MODULE [--name NAME] [--priority p0|p1|p2|p3] [--frequency every-change|every-release|scheduled|manual] [--release-gate true|false] [--estimated-minutes N] [--tags TAGS] [--triggers PATHS] [--golden-path] | task update ID --module MODULE [same metadata flags] | task plan ID --module MODULE | task explore ID --module MODULE [execution context flags] | task run ID --module MODULE [--operation OPERATION_ID] [--scenario SCENARIO] [--environment ENV] [--platform PLATFORM] [--role ROLE] [--device DEVICE] [--device-model MODEL] [--os-version VERSION] [--app-version VERSION] [--web-build BUILD] [--test-data-fingerprint FINGERPRINT] | task operation generate|list|show|review ID --module MODULE [--run RUN_ID] [--approve|--reject] | task regression sync|show|run|complete ID --module MODULE | task review ID --module MODULE --approve --confirmed-by USER [--confirmation-source current-chat-explicit-approval] | task archive ID --module MODULE
+  task list | task create ID --module MODULE [--name NAME] [--priority p0|p1|p2|p3] [--frequency every-change|every-release|scheduled|manual] [--release-gate true|false] [--estimated-minutes N] [--tags TAGS] [--triggers PATHS] [--golden-path] | task update ID --module MODULE [same metadata flags] | task plan ID --module MODULE | task explore ID --module MODULE [execution context flags] | task run ID --module MODULE [--operation OPERATION_ID] [--scenario SCENARIO] [--environment ENV] [--platform PLATFORM] [--role ROLE] [--device DEVICE] [--device-model MODEL] [--os-version VERSION] [--app-version VERSION] [--web-build BUILD] [--test-data-fingerprint FINGERPRINT] | task operation generate|list|show|review ID --module MODULE [--run RUN_ID] [--approve|--reject] [--confirmed-by HUMAN] | task regression sync|show|run|complete ID --module MODULE | task review ID --module MODULE --approve --confirmed-by USER [--confirmation-source current-chat-explicit-approval] | task archive ID --module MODULE
   module regression show|run|complete MODULE [--priority p0|p1|p2|p3]
   memory list | memory search TEXT | memory add ID --module MODULE [--task TASK] --title TEXT --content TEXT | memory review ID --module MODULE [--task TASK] --approve|--reject
   run step RUN --action TEXT --detail TEXT --screenshot PATH [--operation-action launch|navigate|click|input|fill|swipe|back|wait|assert|screenshot|reset|restart-app] [--safety-action ACTION] [--scenario SCENARIO] [--status passed|failed|paused|blocked|adapted] [--visual-inspection performed|not-required|skipped] [--execution-mode host-automated|user-assisted|system-component-blocked|preseeded-test-data] [--operation-step STEP] [--locator-strategy STRATEGY] [--locator-value VALUE] [--actual-locator-strategy STRATEGY] [--actual-locator-value VALUE] [--input-refs key=ref,key=ref] [--expected-state TEXT] [--actual-state TEXT] [--adaptation TEXT]
@@ -222,8 +226,10 @@ function archiveTask(projectRoot: string, moduleId: string, taskId: string): voi
     process.exitCode = 1;
     return;
   }
-  task.metadata.status = 'archived'; task.metadata.version += 1; task.updatedAt = now(); saveTask(projectRoot, task); rebuildIndexes(projectRoot);
-  output({ ...task, archive: completeness });
+  if (normalizeTaskState(task.metadata.status) !== 'completed') transitionTaskState(projectRoot, task, 'completed', 'task_completed', 'archive_gates_satisfied', { idempotencyKey: `task-completed:${task.metadata.id}:${task.metadata.version}` });
+  transitionTaskState(projectRoot, task, 'archived', 'task_archived', 'archive_assets_complete', { idempotencyKey: `task-archived:${task.metadata.id}:${task.metadata.version}` });
+  task.metadata.version += 1; task.updatedAt = now(); saveTask(projectRoot, task); rebuildIndexes(projectRoot);
+  output({ ...task, archive: completeness, workflow: workflowStatus(projectRoot, moduleId, taskId) });
 }
 
 function generateOperationPlan(projectRoot: string, moduleId: string, taskId: string): void {
@@ -246,7 +252,7 @@ function generateOperationPlan(projectRoot: string, moduleId: string, taskId: st
 
   const existing = listOperations(projectRoot, task).filter(plan => plan.sourceRunId === run.id && (!requestedScenario || plan.scenarioId === requestedScenario));
   if (existing.length) {
-    output({ command: 'operation generate', generated: false, approvalRequired: true, runId: run.id, operationCandidates: existing.map(plan => plan.id), operationCandidateIssues: run.operationCandidateIssues ?? [], next: 'Present these OperationPlan candidates to the user. After approval, run qa-agent test for a real regression check, then qa-agent archive.' });
+    output({ command: 'operation generate', deprecatedAlias: true, canonicalBehavior: 'Runtime automatically generates OperationPlan candidates when an exploratory Run completes.', generated: false, approvalRequired: true, runId: run.id, operationCandidates: existing.map(plan => plan.id), operationCandidateIssues: run.operationCandidateIssues ?? [], next: 'Present these OperationPlan candidates to the user. After approval, run qa-agent test for a real regression check, then qa-agent archive.' });
     return;
   }
 
@@ -254,7 +260,28 @@ function generateOperationPlan(projectRoot: string, moduleId: string, taskId: st
   run.operationCandidates = [...new Set([...(run.operationCandidates ?? []), ...result.candidates])];
   run.operationCandidateIssues = result.issues.length ? result.issues : undefined;
   saveRun(projectRoot, run); task.updatedAt = now(); saveTask(projectRoot, task); rebuildIndexes(projectRoot);
-  output({ command: 'operation generate', generated: result.candidates.length > 0, approvalRequired: result.candidates.length > 0, runId: run.id, operationCandidates: result.candidates, operationCandidateIssues: result.issues, next: result.candidates.length ? 'Present the candidates and request explicit approval. After approval, run qa-agent test for a real regression check, then qa-agent archive.' : 'Fix the listed replay contract issues, complete a valid successful Run, and run operation generate again.' });
+  output({ command: 'operation generate', deprecatedAlias: true, canonicalBehavior: 'Runtime automatically generates OperationPlan candidates when an exploratory Run completes.', generated: result.candidates.length > 0, approvalRequired: result.candidates.length > 0, runId: run.id, operationCandidates: result.candidates, operationCandidateIssues: result.issues, next: result.candidates.length ? 'Present the candidates and request explicit approval. After approval, run qa-agent test for a real regression check, then qa-agent archive.' : 'Fix the listed replay contract issues, complete a valid successful Run, and complete a new valid exploratory Run; the Runtime will generate candidates automatically.' });
+}
+
+function reviewTask(projectRoot: string, moduleId: string, taskId: string): TestTask {
+  const task = readTask(projectRoot, moduleId, taskId);
+  if (!args.includes('--approve')) throw new Error('Review requires --approve after verifying scope, business logic, scenarios, evidence, safety stops, and cleanup.');
+  const confirmedBy = requiredFlag('--confirmed-by'); assertHumanApprover(confirmedBy);
+  const confirmationSource = flag('--confirmation-source') ?? 'current-chat-explicit-approval';
+  if (!['current-chat-explicit-approval', 'external-review-record'].includes(confirmationSource)) throw new Error('--confirmation-source must be current-chat-explicit-approval or external-review-record.');
+  if (!task.scenarios.length) throw new Error('A task needs at least one scenario before approval.');
+  if (task.scenarios.some(scenario => !scenario.intent || !Object.keys(scenario.expected ?? {}).length || !(scenario.visualAssertions?.length))) throw new Error('Task review requires every Scenario to declare business intent, expected result, and visual assertions.');
+  if (task.scenarios.some(scenario => (scenario.visualAssertions ?? []).some(assertion => !assertion.importance))) throw new Error('Task review requires every visual assertion to declare importance.');
+  const currentPlanHash = testPlanHash(task);
+  if (approvalIsCurrent(task) && task.metadata.approval?.confirmedBy === confirmedBy && task.metadata.approval.confirmationSource === confirmationSource && normalizeTaskState(task.metadata.status) === 'ready') return task;
+  const currentState = normalizeTaskState(task.metadata.status);
+  if (currentState === 'running') throw new Error(`Task ${task.metadata.id} has an active Run; stop or complete it before approving a changed TestPlan.`);
+  if (currentState !== 'awaiting_approval') transitionTaskState(projectRoot, task, 'awaiting_approval', 'test_plan_approval_requested', 'current_plan_ready_for_review', { actor: { type: 'agent', id: 'qa-agent' }, artifactHash: currentPlanHash, idempotencyKey: `test-plan-review-requested:${task.metadata.id}:${currentPlanHash}` });
+  task.metadata.approval = { confirmedBy, confirmedAt: now(), confirmationSource: confirmationSource as 'current-chat-explicit-approval' | 'external-review-record', statement: 'User confirmed the generated test cases and business logic before execution.', planHash: currentPlanHash };
+  markOperationsStaleForPlanHash(projectRoot, task, currentPlanHash);
+  transitionTaskState(projectRoot, task, 'ready', 'test_plan_approved', 'explicit_chat_approval', { actor: { type: 'human', id: confirmedBy }, artifactHash: task.metadata.approval.planHash, idempotencyKey: `test-plan-approved:${task.metadata.id}:${task.metadata.approval.planHash}:${confirmedBy}` });
+  task.metadata.version += 1; task.updatedAt = now(); saveTask(projectRoot, task); rebuildIndexes(projectRoot);
+  return task;
 }
 
 async function main(): Promise<void> {
@@ -312,14 +339,16 @@ async function main(): Promise<void> {
     output({ projectRoot, prompts: promptPaths, migration, hostUpdate, migrated: args.includes('--migrate'), next: hostUpdate.conflicts.length ? 'Review conflicts or rerun qa-agent update --force.' : 'Project templates are current.' }); return;
   }
   if (group === 'start') { bootstrapFromFlags(root()); return; }
+  if (group === 'review') { const projectRoot = root(); const moduleId = requiredFlag('--module'); const taskId = requiredFlag('--task'); const task = reviewTask(projectRoot, moduleId, taskId); output({ task, workflow: workflowStatus(projectRoot, moduleId, taskId) }); return; }
   if (group === 'test') {
     const projectRoot = root(); const moduleId = requiredFlag('--module'); const taskId = requiredFlag('--task'); const task = readTask(projectRoot, moduleId, taskId);
     const requestedScenario = flag('--scenario');
-    const active = listFiles(join(qaPath(projectRoot, 'modules'), moduleId, 'tasks', taskId, 'operation-plans'), path => /\/v\d+\.json$/.test(path))
-      .map(path => readJson<{ id: string; status: string; scenarioId: string; planHash: string; version: number }>(path))
-      .filter(plan => plan.status === 'active' && plan.planHash === testPlanHash(task) && (!requestedScenario || plan.scenarioId === requestedScenario));
-    if (!requestedScenario && active.length > 1) throw new Error('Multiple active OperationPlans exist; specify --scenario to select one.');
-    const operation = active[0];
+    const replayable = listOperations(projectRoot, task)
+      .filter(plan => ['approved_unverified', 'validated'].includes(plan.status) && plan.planHash === testPlanHash(task) && (!requestedScenario || plan.scenarioId === requestedScenario))
+      .sort((left, right) => Number(right.status === 'approved_unverified') - Number(left.status === 'approved_unverified') || right.version - left.version);
+    const scenarioIds = [...new Set(replayable.map(plan => plan.scenarioId))];
+    if (!requestedScenario && scenarioIds.length > 1) throw new Error('Multiple replayable OperationPlans exist; specify --scenario to select one.');
+    const operation = replayable[0];
     const started = beginAgentGuidedRun(projectRoot, task, { ...runContextFromFlags(), operationId: operation?.id, scenarioId: operation?.scenarioId ?? requestedScenario });
     rebuildIndexes(projectRoot);
     output({ ...executionEnvelope(projectRoot, started), mode: operation ? 'replay' : 'explore', workflow: workflowStatus(projectRoot, moduleId, taskId), canonicalPrompts: readProjectPromptBundle(projectRoot) });
@@ -367,7 +396,7 @@ ${usage}`);
       output({
         connection,
         warning: 'Attestation is a host claim. Use verified only after the host has confirmed the tool exists and required OS permissions are granted.',
-        next: permissionStatus === 'verified' ? 'Run host doctor for the target platform, then retry task explore or operation replay.' : 'Resolve missing or unknown permissions before UI execution.',
+        next: permissionStatus === 'verified' ? 'Run host doctor for the target platform, then retry qa-agent test.' : 'Resolve missing or unknown permissions before UI execution.',
       });
       return;
     }
@@ -505,11 +534,23 @@ ${usage}`);
     if (!subject) throw new Error('task id is required.');
     if (action === 'create') {
       const task = applyTaskRegressionMetadata(createTaskSkeleton(readModule(projectRoot, moduleId), subject, flag('--name')));
-      saveTask(projectRoot, task); rebuildIndexes(projectRoot); output(task); return;
+      saveTask(projectRoot, task);
+      appendTaskEvent(projectRoot, { type: 'task_created', actor: { type: 'agent', id: 'qa-agent' }, moduleId, taskId: task.metadata.id, toState: 'draft', reasonCode: 'compatibility_task_create', artifactHash: testPlanHash(task), idempotencyKey: `task-created:${moduleId}:${task.metadata.id}:draft` });
+      rebuildIndexes(projectRoot); output(task); return;
     }
     if (action === 'update') {
-      const task = applyTaskRegressionMetadata(readTask(projectRoot, moduleId, subject));
+      const task = readTask(projectRoot, moduleId, subject);
+      const beforePlanHash = testPlanHash(task);
+      const hadApproval = Boolean(task.metadata.approval);
+      applyTaskRegressionMetadata(task);
       const name = flag('--name'); if (name) task.metadata.name = name;
+      const currentPlanHash = testPlanHash(task);
+      if (hadApproval && beforePlanHash !== currentPlanHash) {
+        if (normalizeTaskState(task.metadata.status) === 'running') throw new Error(`Task ${task.metadata.id} has an active Run; stop or complete it before changing the approved TestPlan.`);
+        invalidateApproval(task);
+        if (normalizeTaskState(task.metadata.status) !== 'awaiting_approval') transitionTaskState(projectRoot, task, 'awaiting_approval', 'test_plan_changed', 'task_update_changed_plan_hash', { actor: { type: 'agent', id: 'qa-agent' }, artifactHash: currentPlanHash, idempotencyKey: `test-plan-changed:${task.metadata.id}:${currentPlanHash}` });
+        markOperationsStaleForPlanHash(projectRoot, task, currentPlanHash);
+      }
       saveTask(projectRoot, task); rebuildIndexes(projectRoot); output(task); return;
     }
     const nestedAction = action === 'operation' || action === 'regression' ? subject : undefined;
@@ -525,7 +566,7 @@ ${usage}`);
       if (operationAction === 'review') {
         const approve = args.includes('--approve'); const reject = args.includes('--reject');
         if (approve === reject) throw new Error('Specify exactly one of --approve or --reject.');
-        const reviewed = reviewOperation(projectRoot, task, requiredFlag('--operation'), approve ? 'approve' : 'reject'); if (approve) syncTaskRegressionSuite(projectRoot, task); rebuildIndexes(projectRoot); return output(reviewed);
+        const reviewed = reviewOperation(projectRoot, task, requiredFlag('--operation'), approve ? 'approve' : 'reject', requiredFlag('--confirmed-by')); rebuildIndexes(projectRoot); return output({ operationPlan: reviewed, nextActions: approve ? [{ id: 'validate_operation_plan', command: 'qa-agent test', requiresHuman: false }] : [] });
       }
       throw new Error('Operation action must be list, show, or review.');
     }
@@ -541,30 +582,25 @@ ${usage}`);
       throw new Error('Regression action must be sync, show, or run.');
     }
     if (action === 'review') {
-      if (!args.includes('--approve')) throw new Error('Task review requires --approve after verifying scope, business logic, scenarios, evidence, and safety stops.');
-      const confirmedBy = requiredFlag('--confirmed-by'); assertHumanApprover(confirmedBy);
-      const confirmationSource = flag('--confirmation-source') ?? 'current-chat-explicit-approval';
-      if (!['current-chat-explicit-approval', 'external-review-record'].includes(confirmationSource)) throw new Error('--confirmation-source must be current-chat-explicit-approval or external-review-record.');
-      if (!task.scenarios.length) throw new Error('A task needs at least one scenario before approval.');
-      if (task.scenarios.some(scenario => !scenario.intent || !Object.keys(scenario.expected ?? {}).length || !(scenario.visualAssertions?.length))) throw new Error('Task review requires every Scenario to declare business intent, expected result, and visual assertions.');
-      task.metadata.status = 'ready'; task.metadata.approval = { confirmedBy, confirmedAt: now(), confirmationSource: confirmationSource as 'current-chat-explicit-approval' | 'external-review-record', statement: 'User confirmed the generated test cases and business logic before execution.', planHash: testPlanHash(task) }; task.metadata.version += 1; task.updatedAt = now(); saveTask(projectRoot, task); rebuildIndexes(projectRoot); output(task); return;
+      const reviewed = reviewTask(projectRoot, moduleId, taskId);
+      output({ ...reviewed, deprecatedAlias: true, canonicalCommand: 'qa-agent review --module MODULE --task TASK --approve --confirmed-by USER', workflow: workflowStatus(projectRoot, moduleId, taskId) }); return;
     }
     if (action === 'archive') {
       archiveTask(projectRoot, moduleId, taskId); return;
     }
     if (action === 'explore') {
-      if (flag('--operation')) throw new Error('task explore does not accept --operation. Use operation replay for an active OperationPlan.');
+      if (flag('--operation')) throw new Error('task explore does not accept --operation. Use qa-agent test for an approved_unverified or validated OperationPlan.');
       const started = beginAgentGuidedRun(projectRoot, task, { ...runContextFromFlags(), operationId: undefined });
       rebuildIndexes(projectRoot);
       const workflow = workflowStatus(projectRoot, moduleId, taskId);
-      output({ ...executionEnvelope(projectRoot, started), workflow, canonicalPrompts: readProjectPromptBundle(projectRoot) });
+      output({ ...executionEnvelope(projectRoot, started), workflow, canonicalPrompts: readProjectPromptBundle(projectRoot), deprecatedAlias: true, canonicalCommand: 'qa-agent test --module MODULE --task TASK' });
       return;
     }
     if (action === 'run') {
       const started = beginAgentGuidedRun(projectRoot, task, runContextFromFlags());
       rebuildIndexes(projectRoot);
       const workflow = workflowStatus(projectRoot, moduleId, taskId);
-      output({ ...executionEnvelope(projectRoot, started), workflow, canonicalPrompts: readProjectPromptBundle(projectRoot), compatibilityNote: 'task run is retained for compatibility. Use task explore for first execution and operation replay for fast regression.' });
+      output({ ...executionEnvelope(projectRoot, started), workflow, canonicalPrompts: readProjectPromptBundle(projectRoot), deprecatedAlias: true, canonicalCommand: 'qa-agent test --module MODULE --task TASK', compatibilityNote: 'compatibility alias: task run is retained for existing automation only.' });
       return;
     }
   }
@@ -630,7 +666,7 @@ ${usage}`);
     if (!moduleId || moduleId.startsWith('--')) throw new Error('module id is required.');
     if (regressionAction === 'show') return output(buildModuleRegressionSuite(projectRoot, moduleId, priorityValue() ?? 'p3'));
     if (regressionAction === 'run') {
-      const suite = buildModuleRegressionSuite(projectRoot, moduleId, priorityValue() ?? 'p3'); const first = suite.members[0]; if (!first) throw new Error(`Module ${moduleId} has no active OperationPlan.`);
+      const suite = buildModuleRegressionSuite(projectRoot, moduleId, priorityValue() ?? 'p3'); const first = suite.members[0]; if (!first) throw new Error(`Module ${moduleId} has no validated OperationPlan.`);
       const task = readTask(projectRoot, moduleId, first.taskId); const context = buildExecutionSnapshot(projectRoot, task, { environment: flag('--environment'), platform: flag('--platform'), role: flag('--role'), device: flag('--device'), deviceModel: flag('--device-model'), osVersion: flag('--os-version'), appVersion: flag('--app-version'), webBuild: flag('--web-build'), testDataFingerprint: flag('--test-data-fingerprint') });
       const started = beginRegressionRun(projectRoot, suite, context); rebuildIndexes(projectRoot); return output(started);
     }

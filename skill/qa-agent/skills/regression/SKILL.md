@@ -1,8 +1,10 @@
 ---
 name: qa-agent-regression
-description: Replay approved OperationPlans and run project-local QA regression suites.
+description: Strictly replay approved OperationPlans and validate reusable project-local regression assets.
 ---
 
-# QA Agent Regression
+# Regression
 
-Use only active, approved OperationPlans whose planHash and execution context are compatible. Run `qa-agent task regression sync` after OperationPlan approval, then execute `qa-agent task regression run`. Preserve screenshotPolicy, checkpoints, visual assertions, cleanup, and Runtime reports for every Scenario. Stop on stale hashes, missing capabilities, missing screenshots, or unsafe actions.
+Use `qa-agent test` for an `approved_unverified` or `validated` OperationPlan. Execute the persisted steps in order. Do not re-plan or replace the OperationPlan with source review. Preserve screenshots, declared assertions, cleanup, and checkpoints.
+
+A limited semantic/accessibility locator adaptation is allowed only when business meaning remains unchanged and the adaptation is recorded. A completely executed structured replay contract changes the plan to `validated` and Runtime synchronizes the RegressionSuite, even when business assertions fail. Incomplete or incompatible replay does not validate the plan; `stale` is reserved for explicit contract drift or invalidation.
