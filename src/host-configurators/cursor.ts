@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { existsSync, readFileSync, unlinkSync } from 'node:fs';
 import { hostConfig, type HostConfigurator } from './registry.ts';
-import { copySkill, copySubSkills, detected, managedTemplate, requireProjectPath, renderCursorRule, sharedGuidance, writeManagedText } from './shared.ts';
+import { copyMainSkill, copySubSkills, detected, managedTemplate, requireProjectPath, renderCursorRule, sharedGuidance, writeManagedText } from './shared.ts';
 
 export const cursorConfigurator: HostConfigurator = {
   configure(options) {
@@ -15,7 +15,7 @@ export const cursorConfigurator: HostConfigurator = {
     writeManagedText(command, sharedGuidance, force);
     const legacyCommand = join(project, '.cursor', 'commands', 'qa-agent.md');
     if (existsSync(legacyCommand) && (force || readFileSync(legacyCommand, 'utf8') === sharedGuidance)) unlinkSync(legacyCommand);
-    copySkill(skill, force);
+    copyMainSkill(skill, force);
     const subskills = copySubSkills(join(project, '.cursor', 'skills'), force);
     return { host: 'cursor', paths: [rule, command, skill, ...subskills], message: 'Installed Cursor QA Agent rule, CLI command, main skill, and subskills.' };
   },

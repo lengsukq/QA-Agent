@@ -1,4 +1,4 @@
-import { cpSync, existsSync, readFileSync, statSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,10 +23,20 @@ function contentHash(path: string): string {
   return hash.digest('hex');
 }
 
-export function copySkill(destination: string, force: boolean): void {
-  if (existsSync(destination) && !force && contentHash(destination) === contentHash(skillSource())) return;
-  if (existsSync(destination) && !force) throw new Error(`Host integration already exists at ${destination}. Use --force only if replacing it is intended.`);
-  cpSync(skillSource(), destination, { recursive: true, force, errorOnExist: !force });
+/** Keep the main skill separate from the flat subskills so each subskill is
+ * represented by exactly one discoverable SKILL.md. */
+export function copyMainSkill(destination: string, force: boolean): void {
+  const source = join(skillSource(), 'SKILL.md');
+  const target = join(destination, 'SKILL.md');
+  if (existsSync(target) && !force && readFileSync(target, 'utf8') !== readFileSync(source, 'utf8')) {
+    throw new Error(`Host integration already exists at ${target}. Use --force only if replacing it is intended.`);
+  }
+  mkdirSync(destination, { recursive: true });
+  if (!existsSync(target) || force) cpSync(source, target, { force });
+
+  // Clean up nested subskills produced by older installations.
+  const legacySubskills = join(destination, 'skills');
+  if (existsSync(legacySubskills)) rmSync(legacySubskills, { recursive: true, force: true });
 }
 
 export const QA_SUBSKILLS = ['start', 'review', 'test', 'result', 'operation', 'regression', 'recovery', 'archive'] as const;
@@ -73,10 +83,11 @@ Use the qa-agent CLI as the only persistent state and Runtime entry point.
 3. Persist TestPlan approval with qa-agent review --module <module> --task <task> --approve --confirmed-by <human>. Approval must not start a Run.
 4. Run qa-agent test --module <module> --task <task>. Follow only returned gates, allowedActions, nextActions, breadcrumb, resumeToken, and runId.
 5. Use UI tools only when uiExecutionAllowed=true and mustStop=false. Persist every action, screenshot, assertion, cleanup, evidence, recovery attempt, and completion through Runtime commands.
-6. Runtime automatically creates eligible OperationPlan candidates after a successful exploratory Run. Present candidates and request separate promotion approval; do not call operation generate in the normal workflow.
-7. After promotion approval, use qa-agent task operation review ... --approve --confirmed-by <human>, then qa-agent test for a real replay. Only validated OperationPlans enter formal RegressionSuites and archive gates.
-8. Use qa-agent archive only after all validated regression, Runtime report, screenshot, assertion, cleanup, and memory gates pass.
-9. Never write a manual formal report, bypass a blocking Gate, fabricate evidence, or claim PASS before Runtime completion.
+6. Treat an OperationPlan as a persisted, Scenario-specific and repeatable business operation path. It fixes the ordered actions, locators, inputs, expected states, assertions, evidence, and cleanup. Runtime stores each generated plan under its owning Task at .qa-agent/modules/<module>/tasks/<task>/operation-plans/<scenario>/; never create a standalone OperationPlan outside the Task directory. The path may be executed manually, with Agent assistance, or by a dedicated browser/device executor such as Playwright, Python plus fb-idb, or ADB. Every replay must begin from the application's home page or defined initial entry point, with the approved initial state restored or confirmed; never start from an intermediate page or leftover state. When an approved OperationPlan exists, replay it; do not start over with discovery or re-planning.
+7. Runtime automatically creates eligible OperationPlan candidates after a successful exploratory Run. Present candidates and request separate promotion approval; do not call operation generate in the normal workflow.
+8. After promotion approval, use qa-agent task operation review ... --approve --confirmed-by <human>, then qa-agent test for a real replay. The executor must follow the persisted path in order and must not skip, duplicate, or replace it with a newly designed flow. Only validated OperationPlans enter formal RegressionSuites and archive gates.
+9. Use qa-agent archive only after all validated regression, Runtime report, screenshot, assertion, cleanup, and memory gates pass.
+10. Never write a manual formal report, bypass a blocking Gate, fabricate evidence, or claim PASS before Runtime completion.
 `;
 
 export function renderGuidance(config: HostPlatformConfig): string {

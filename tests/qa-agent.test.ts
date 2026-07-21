@@ -147,8 +147,10 @@ test('installs native host integrations without changing the host-neutral runtim
   assert.ok(existsSync(join(target, '.claude', 'skills', 'qa-agent', 'SKILL.md')));
   assert.ok(existsSync(join(target, '.cursor', 'rules', 'qa-agent.mdc')));
   assert.ok(existsSync(join(target, '.cursor', 'commands', 'qa-agent-cli.md')));
+  assert.ok(existsSync(join(target, '.cursor', 'skills', 'qa-agent', 'SKILL.md')));
   assert.ok(existsSync(join(target, '.cursor', 'skills', 'qa-agent-test', 'SKILL.md')));
   assert.ok(existsSync(join(target, '.cursor', 'skills', 'qa-agent-operation', 'SKILL.md')));
+  assert.equal(existsSync(join(target, '.cursor', 'skills', 'qa-agent', 'skills')), false);
   assert.ok(existsSync(join(target, '.opencode', 'skills', 'qa-agent', 'SKILL.md')));
   assert.ok(existsSync(join(target, '.github', 'skills', 'qa-agent', 'SKILL.md')));
   assert.ok(existsSync(join(target, '.github', 'agents', 'qa-agent.agent.md')));
@@ -166,9 +168,11 @@ test('initializes multiple registered hosts, shared skills, metadata, and idempo
   const records = JSON.parse(readFileSync(join(target, '.qa-agent', '.configured-hosts.json'), 'utf8'));
   assert.deepEqual(Object.keys(records).sort(), ['claude', 'codex', 'cursor']);
   assert.ok(existsSync(join(target, '.codex', 'skills', 'qa-agent', 'SKILL.md')));
-  assert.ok(existsSync(join(target, '.agents', 'skills', 'qa-agent', 'skills', 'test', 'SKILL.md')));
+  assert.ok(existsSync(join(target, '.agents', 'skills', 'qa-agent-test', 'SKILL.md')));
+  assert.equal(existsSync(join(target, '.agents', 'skills', 'qa-agent', 'skills')), false);
   assert.ok(existsSync(join(target, '.cursor', 'rules', 'qa-agent.mdc')));
-  assert.ok(existsSync(join(target, '.cursor', 'skills', 'qa-agent', 'skills', 'regression', 'SKILL.md')));
+  assert.ok(existsSync(join(target, '.cursor', 'skills', 'qa-agent', 'SKILL.md')));
+  assert.equal(existsSync(join(target, '.cursor', 'skills', 'qa-agent', 'skills')), false);
   assert.ok(existsSync(join(target, '.claude', 'commands', 'qa-agent.md')));
   assert.ok(existsSync(join(target, '.claude', 'skills', 'qa-agent-archive', 'SKILL.md')));
   assert.ok(existsSync(join(target, '.claude', 'skills', 'qa-agent-operation', 'SKILL.md')));

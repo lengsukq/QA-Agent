@@ -7,6 +7,8 @@ description: Plan, execute, verify, replay, report, and archive project-level QA
 
 QA Agent is a thin workflow router. The CLI Runtime owns persistent state, transitions, approvals, evidence, reports, OperationPlans, regression assets, and archive gates. The host Agent owns the conversation and approved UI/MCP tools.
 
+An OperationPlan is a persisted, Scenario-specific and repeatable business operation path. It defines the ordered actions, locators, input references, expected states, assertions, evidence, and cleanup. Each plan belongs to its owning Task and is stored under `.qa-agent/modules/<module>/tasks/<task>/operation-plans/<scenario>/`; never create a standalone project-level OperationPlan script. It is independent of the executor: a person, an Agent with human assistance, or a dedicated browser/device executor such as Playwright, Python plus fb-idb, or ADB may perform it. Every replay starts from the application's home page or defined initial entry point, with the approved initial state restored or confirmed, so execution never depends on leftover navigation or data. Once an OperationPlan exists, execution replays that path; it must not restart discovery or redesign the flow.
+
 ## Canonical lifecycle
 
 ```text
@@ -85,7 +87,7 @@ Task creation is non-destructive and can happen automatically. Human approval is
 
 TestPlan approval authorizes execution of the unchanged planHash. It does not approve a reusable regression script.
 
-OperationPlan approval promotes a Runtime-generated `candidate` to `approved_unverified`. A completely executed structured replay contract changes it to `validated`, even when the Run correctly reports a business FAIL; the FAIL remains a Run result. Only `validated` OperationPlans may enter formal RegressionSuites, release gates, or satisfy archive requirements.
+OperationPlan approval promotes a Runtime-generated `candidate` to `approved_unverified`. Approval selects a reusable replay path; it does not require that a particular Agent be the executor. A completely executed structured replay contract changes it to `validated`, even when the Run correctly reports a business FAIL; the FAIL remains a Run result. Only `validated` OperationPlans may enter formal RegressionSuites, release gates, or satisfy archive requirements.
 
 ## Execution and evidence
 
