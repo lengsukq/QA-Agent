@@ -45,15 +45,15 @@ Do not use UI tools unless `uiExecutionAllowed=true`, `mustStop=false`, and a `r
 
 | Condition | Load |
 | --- | --- |
-| No Task or incomplete intake | `skills/start/SKILL.md` |
-| Planning or TestPlan approval | `skills/review/SKILL.md` |
-| Approved Task or active Run | `skills/test/SKILL.md` |
-| Completed Run or candidate promotion | `skills/result/SKILL.md` |
-| Approved-unverified or validated replay | `skills/regression/SKILL.md` |
-| Blocked, paused, interrupted, or stale context | `skills/recovery/SKILL.md` |
-| All completion assets are ready | `skills/archive/SKILL.md` |
+| No Task or incomplete intake | Skill `qa-agent-start` |
+| Planning or TestPlan approval | Skill `qa-agent-review` |
+| Approved Task or active Run | Skill `qa-agent-test` |
+| Completed Run or candidate promotion | Skill `qa-agent-result` |
+| Approved-unverified or validated replay | Skill `qa-agent-regression` |
+| Blocked, paused, interrupted, or stale context | Skill `qa-agent-recovery` |
+| All completion assets are ready | Skill `qa-agent-archive` |
 
-Load only the current phase instructions instead of carrying the full workflow in every prompt.
+Load only the current phase Skill by its installed Skill name instead of looking for a nested `skills/` directory or carrying the full workflow in every prompt.
 
 ## Responsibility boundary
 
@@ -79,7 +79,7 @@ Never manually write Task manifests, Scenario JSON, OperationPlan JSON, formal R
 
 ## Planning behavior
 
-Before asking a question, inspect the relevant Module, Task, source, tests, configuration, reviewed memory, historical Runs, existing OperationPlans, environment, and capability snapshot. Ask at most one highest-value user decision per turn. State why it matters, give the recommended answer, and explain the effect of alternatives.
+Before asking a question, inspect the relevant Module, Task, source, tests, configuration, reviewed memory, historical Runs, existing OperationPlans, environment, and capability snapshot. Materialize the resulting Scenario matrix through `qa-agent plan apply --file <plan-draft.json>`; never edit Runtime-owned JSON directly. Ask at most one highest-value user decision per turn. State why it matters, give the recommended answer, and explain the effect of alternatives.
 
 Task creation is non-destructive and can happen automatically. Human approval is required for the TestPlan business contract, high-risk actions, OperationPlan promotion, and any user-owned decision that cannot be safely inferred.
 

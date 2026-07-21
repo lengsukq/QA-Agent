@@ -282,6 +282,53 @@ export interface TestScenario {
   visualAssertions?: VisualAssertion[];
 }
 
+export interface PlanDraftAssertion {
+  id?: string;
+  expected: string;
+  importance?: RiskLevel;
+  businessRuleRef?: string;
+}
+
+export interface PlanDraftScenario {
+  id?: string;
+  title: string;
+  intent: string;
+  input?: Record<string, unknown>;
+  preconditions?: string[];
+  expected: Record<string, unknown> | string;
+  evidence?: string[];
+  cleanup?: string[];
+  risk?: RiskLevel;
+  planningStatus?: ScenarioPlanningStatus;
+  priority?: TestPriority;
+  requirementRefs?: string[];
+  sourceRefs?: string[];
+  visualAssertions?: PlanDraftAssertion[];
+}
+
+export interface PlanDraft {
+  apiVersion: 'qa-agent/plan-draft/v1';
+  moduleId: string;
+  taskId: string;
+  taskName?: string;
+  description: string;
+  objectives: string[];
+  scope?: {
+    platforms?: string[];
+    environments?: string[];
+    roles?: string[];
+    included?: string[];
+    excluded?: string[];
+  };
+  preconditions?: string[];
+  testDataRefs?: string[];
+  sourceRefs?: string[];
+  risks?: string[];
+  userQuestions?: string[];
+  confirmedDecisions?: string[];
+  scenarios: PlanDraftScenario[];
+}
+
 export interface TestTask {
   $schema: string;
   apiVersion: 'qa-agent/v2';

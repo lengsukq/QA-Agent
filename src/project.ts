@@ -7,7 +7,7 @@ import type { ModuleSnapshot, ProjectConfig, QaModule, TestPlan, TestRequirement
 import { schemas } from './schemas.ts';
 import { prompts } from './prompts.ts';
 import { builtInSkills } from './built-in-skills.ts';
-import { approvalIsCurrent } from './approval.ts';
+import { approvalIsCurrent, testPlanHash } from './approval.ts';
 
 export const QA_DIRECTORY = '.qa-agent';
 
@@ -179,16 +179,26 @@ export function saveTask(root: string, task: TestTask): void {
     task.moduleSnapshot ??= buildModuleSnapshot(module); task.requirements ??= buildRequirements(task, module);
     task.scenarioRefs = task.scenarios.map(scenario => `scenarios/${scenario.id}.json`);
     const approvalCurrent = approvalIsCurrent(task);
-    task.testPlan ??= { $schema: '../../../../schemas/test-plan.schema.json', apiVersion: 'qa-agent/v2', kind: 'TestPlan', taskId: task.metadata.id, moduleId: task.metadata.moduleId, version: task.metadata.version, planHash: approvalCurrent ? task.metadata.approval!.planHash : '', scenarioRefs: task.scenarioRefs, requiredSkills: task.requiredSkills, capabilities: task.capabilities, safety: task.safety, evidencePolicy: task.evidencePolicy, recoveryPolicy: task.recoveryPolicy, status: approvalCurrent ? 'approved' : 'draft', approvedBy: approvalCurrent ? task.metadata.approval!.confirmedBy : undefined, approvedAt: approvalCurrent ? task.metadata.approval!.confirmedAt : undefined, createdAt: task.createdAt, updatedAt: task.updatedAt };
+    const currentPlanHash = testPlanHash(task);
+    task.testPlan ??= { $schema: '../../../../schemas/test-plan.schema.json', apiVersion: 'qa-agent/v2', kind: 'TestPlan', taskId: task.metadata.id, moduleId: task.metadata.moduleId, version: task.metadata.version, planHash: currentPlanHash, scenarioRefs: task.scenarioRefs, requiredSkills: task.requiredSkills, capabilities: task.capabilities, safety: task.safety, evidencePolicy: task.evidencePolicy, recoveryPolicy: task.recoveryPolicy, status: approvalCurrent ? 'approved' : 'draft', approvedBy: approvalCurrent ? task.metadata.approval!.confirmedBy : undefined, approvedAt: approvalCurrent ? task.metadata.approval!.confirmedAt : undefined, createdAt: task.createdAt, updatedAt: task.updatedAt };
     writeJsonAtomic(taskModuleSnapshotPath(root, task.metadata.moduleId, task.metadata.id), task.moduleSnapshot);
     writeJsonAtomic(taskRequirementsPath(root, task.metadata.moduleId, task.metadata.id), task.requirements);
-    task.testPlan.planHash = approvalCurrent ? task.metadata.approval!.planHash : task.testPlan.planHash;
-    task.testPlan.status = approvalCurrent ? 'approved' : task.testPlan.status === 'approved' ? 'awaiting_confirmation' : task.testPlan.status;
+    task.testPlan.version = task.metadata.version;
+    task.testPlan.planHash = currentPlanHash;
+    task.testPlan.scenarioRefs = task.scenarioRefs;
+    task.testPlan.requiredSkills = task.requiredSkills;
+    task.testPlan.capabilities = task.capabilities;
+    task.testPlan.safety = task.safety;
+    task.testPlan.evidencePolicy = task.evidencePolicy;
+    task.testPlan.recoveryPolicy = task.recoveryPolicy;
+    task.testPlan.status = approvalCurrent ? 'approved' : ['draft', 'planning'].includes(task.metadata.status) ? 'draft' : 'awaiting_confirmation';
     task.testPlan.approvedBy = approvalCurrent ? task.metadata.approval!.confirmedBy : undefined;
     task.testPlan.approvedAt = approvalCurrent ? task.metadata.approval!.confirmedAt : undefined;
     task.testPlan.updatedAt = task.updatedAt;
     writeJsonAtomic(taskPlanPath(root, task.metadata.moduleId, task.metadata.id), task.testPlan);
+    const expectedScenarioPaths = new Set(task.scenarios.map(scenario => taskScenarioPath(root, task.metadata.moduleId, task.metadata.id, scenario.id)));
     for (const scenario of task.scenarios) writeJsonAtomic(taskScenarioPath(root, task.metadata.moduleId, task.metadata.id, scenario.id), scenario);
+    for (const path of listFiles(join(directory, 'scenarios'), item => item.endsWith('.json'))) if (!expectedScenarioPaths.has(path)) unlinkSync(path);
     const { scenarios: _scenarios, moduleSnapshot: _snapshot, requirements: _requirements, testPlan: _testPlan, ...manifest } = task;
     writeJsonAtomic(taskPath(root, task.metadata.moduleId, task.metadata.id), manifest);
   });

@@ -140,7 +140,7 @@ qa-agent validate
 qa-agent doctor
 ```
 
-`qa-agent update` 会同步当前版本的五个 Prompt、总入口 Skill、`test/regression/archive` 子 Skill、平台 Rule/Command/Agent/Prompt，并更新 `.qa-agent/.version`、`.template-hashes.json`。它不会重新创建 Project、Module、Task，也不会删除 Task、Run、截图、报告、OperationPlan、RegressionSuite 或 Memory。
+`qa-agent update` 会同步当前版本的八个阶段 Prompt、总入口 Skill、全部阶段子 Skill、平台 Rule/Command/Agent/Prompt，并更新 `.qa-agent/.version`、`.template-hashes.json`。它不会重新创建 Project、Module、Task，也不会删除 Task、Run、截图、报告、OperationPlan、RegressionSuite 或 Memory。
 
 如果项目使用了较早版本的旧目录或旧报告格式，执行结构迁移：
 
@@ -236,7 +236,7 @@ qa-agent test --module checkout --task checkout-basic-flow
 qa-agent archive --module checkout --task checkout-basic-flow
 ```
 
-`start` 创建或复用 Module/Task、生成完整 Task 资产、事件基线和 TodoList，并停在 `approval_required`。`review` 只持久化真实用户的 TestPlan 审批，不启动 Run。`test` 自动选择首次 Explore 或兼容 Replay。成功探索后 Runtime 自动生成 `candidate`，独立审批后进入 `approved_unverified`，结构化 Replay 契约完整执行后才成为 `validated`；业务 FAIL 仍保留为 Run 结果。`archive` 是严格的可回归门禁：它会检查背景、计划、每个 Scenario 的已实测有效 OperationPlan、RegressionSuite、Runtime 报告和实际存在的 Markdown 图片证据；失败时不会改变 Task 状态。
+`start` 创建或复用 Module/Task 骨架并停在 `approval_required`。审批前，宿主 Agent 会先阅读项目，再通过 `qa-agent plan apply` 提交结构化的 `qa-agent/plan-draft/v1`，由 Runtime 正式生成多 Scenario、断言、Cleanup 和需求覆盖；Agent 不直接修改 Task 或 Scenario JSON。`review` 只持久化真实用户的 TestPlan 审批，不启动 Run。`test` 自动选择首次 Explore 或兼容 Replay。成功探索后 Runtime 自动生成 `candidate`，独立审批后进入 `approved_unverified`，结构化 Replay 契约完整执行后才成为 `validated`；业务 FAIL 仍保留为 Run 结果。`archive` 是严格的可回归门禁：它会检查背景、计划、每个 Scenario 的已实测有效 OperationPlan、RegressionSuite、Runtime 报告和实际存在的 Markdown 图片证据；失败时不会改变 Task 状态。
 
 `init` 只初始化被测项目的 `.qa-agent/` 运行边界，不注入宿主 Skill。`configure` 负责“一站式”项目初始化和宿主提示词/Skill 注入；已经初始化的 `.qa-agent` 数据不会被覆盖。宿主 Skill 负责对话确认、TodoList 镜像和实际 UI 工具调用，CLI Runtime 负责状态、证据、报告和归档。
 
@@ -772,10 +772,10 @@ qa-agent run report <run-id>
 qa-agent memory list
 ```
 
-查看完整命令：
+查看常用命令使用 `qa-agent help`；查看完整命令使用：
 
 ```bash
-qa-agent help
+qa-agent help --advanced
 ```
 
 ## 开发与验证

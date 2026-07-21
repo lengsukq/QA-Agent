@@ -7,6 +7,7 @@ Use CLI commands for all project mutations. The Agent must not create Task JSON,
 | `qa-agent init --codex --cursor` | Initialize `.qa-agent/` and inject selected project hosts. | No |
 | `qa-agent update [--force] [--migrate]` | Sync prompts, Skills, host templates, schemas, and migrate legacy lifecycle assets. | No |
 | `qa-agent start --request TEXT --module MODULE --task TASK` | Create or resume the complete Task package and stop at TestPlan approval. | No |
+| `qa-agent plan apply --file PLAN_DRAFT.json` | Validate and atomically materialize a complete multi-Scenario TestPlan draft without direct JSON edits. | No |
 | `qa-agent review --module MODULE --task TASK --approve --confirmed-by HUMAN` | Persist explicit TestPlan approval only. | No |
 | `qa-agent test --module MODULE --task TASK [--scenario SCENARIO]` | Start Explore or compatible OperationPlan Replay. | Yes when Runtime allows it |
 | `qa-agent task operation list/show/review ...` | Inspect and promote Runtime-generated OperationPlan candidates. | No |

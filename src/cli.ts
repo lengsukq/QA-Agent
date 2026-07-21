@@ -24,12 +24,14 @@ import { migrateProjectArtifacts } from './migration.ts';
 import { inspectTaskArchive } from './archive.ts';
 import { appendTaskEvent } from './events.ts';
 import { normalizeTaskState, transitionTaskState } from './workflow-model.ts';
+import { applyPlanDraft } from './plan-draft.ts';
+import type { PlanDraft } from './types.ts';
 
 const args = process.argv.slice(2);
 const packageMetadata = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
 const hostFlags = supportedHosts.map(host => `--${HOST_PLATFORMS[host].cliFlag}`).join(' ');
 const hostNames = supportedHosts.join('|');
-const usage = `qa-agent — local-first QA Agent MVP
+const advancedUsage = `qa-agent — local-first QA Agent MVP
 
 Commands:
   --help, -h, help | --version, -v, version
@@ -39,6 +41,7 @@ Commands:
   install-host <${hostNames}> [--scope project|user] [--project PROJECT_DIRECTORY] [--path SKILLS_DIRECTORY] [--force]
   doctor | validate | migrate | index rebuild | prompts sync
   update [--force] [--migrate]
+  plan apply --file PLAN_DRAFT.json | --stdin
   start --request TEXT --module ID --task ID [--module-name NAME] [--task-name NAME] [--platforms web,android,ios] [--risk low|medium|high|critical]
   review --module MODULE --task TASK --approve --confirmed-by USER [--confirmation-source current-chat-explicit-approval]
   test --module MODULE --task TASK [--scenario SCENARIO] [execution context flags]
@@ -64,6 +67,20 @@ Commands:
   run observe RUN --scenario ID --assertion ID --expected TEXT --actual TEXT --status passed|failed|paused|blocked [--screenshot PATH]
   run complete RUN | run show RUN | run report RUN
   skill list | skill validate
+`;
+
+const usage = `QA Agent — AI-guided business validation and regression testing
+
+Common commands:
+  init [host flags]                         Initialize the current project
+  start --request TEXT --module ID --task ID
+  plan apply --file PLAN_DRAFT.json         Materialize the AI-reviewed Scenario matrix
+  review --module MODULE --task TASK --approve --confirmed-by USER
+  test --module MODULE --task TASK
+  archive --module MODULE --task TASK
+  doctor                                    Check project and test-tool readiness
+
+Run qa-agent help --advanced for the complete CLI reference.
 `;
 
 function flag(name: string): string | undefined { const position = args.indexOf(name); return position === -1 ? undefined : args[position + 1]; }
@@ -286,7 +303,7 @@ function reviewTask(projectRoot: string, moduleId: string, taskId: string): Test
 
 async function main(): Promise<void> {
   const [group, action, subject] = args;
-  if (!group || group === '--help' || group === '-h' || group === 'help') return output(usage);
+  if (!group || group === '--help' || group === '-h' || group === 'help') return output(args.includes('--advanced') ? advancedUsage : usage);
   if (group === '--version' || group === '-v' || group === 'version') return output(packageMetadata.version);
   if (group === 'init') {
     const projectRoot = process.cwd(); const projectFile = join(projectRoot, '.qa-agent', 'project.json');
@@ -338,6 +355,17 @@ async function main(): Promise<void> {
     writeJsonAtomic(qaPath(projectRoot, '.version'), { version: packageMetadata.version, updatedAt: now() });
     output({ projectRoot, prompts: promptPaths, migration, hostUpdate, migrated: args.includes('--migrate'), next: hostUpdate.conflicts.length ? 'Review conflicts or rerun qa-agent update --force.' : 'Project templates are current.' }); return;
   }
+  if (group === 'plan') {
+    if (action !== 'apply') throw new Error(`Plan command must be apply.\n\n${advancedUsage}`);
+    const file = flag('--file');
+    if (Boolean(file) === args.includes('--stdin')) throw new Error('Specify exactly one of --file PLAN_DRAFT.json or --stdin.');
+    const raw = args.includes('--stdin') ? readFileSync(0, 'utf8') : readFileSync(resolve(file!), 'utf8');
+    let draft: PlanDraft;
+    try { draft = JSON.parse(raw) as PlanDraft; }
+    catch (error) { throw new Error(`PlanDraft is not valid JSON: ${(error as Error).message}`); }
+    output(applyPlanDraft(root(), draft));
+    return;
+  }
   if (group === 'start') { bootstrapFromFlags(root()); return; }
   if (group === 'review') { const projectRoot = root(); const moduleId = requiredFlag('--module'); const taskId = requiredFlag('--task'); const task = reviewTask(projectRoot, moduleId, taskId); output({ task, workflow: workflowStatus(projectRoot, moduleId, taskId) }); return; }
   if (group === 'test') {
@@ -365,7 +393,7 @@ async function main(): Promise<void> {
     if (action === 'status') { output(workflowStatus(projectRoot, moduleId, taskId)); return; }
     throw new Error(`Unsupported command.
 
-${usage}`);
+${advancedUsage}`);
   }
   if (group === 'host') {
     const projectRoot = root(); const path = qaPath(projectRoot, 'mcp.json');
@@ -410,7 +438,7 @@ ${usage}`);
     if (action === 'generate') {
       generateOperationPlan(root(), requiredFlag('--module'), requiredFlag('--task')); return;
     }
-    if (action !== 'replay') throw new Error(`Unsupported command.\n\n${usage}`);
+    if (action !== 'replay') throw new Error(`Unsupported command.\n\n${advancedUsage}`);
     const projectRoot = root();
     if (!subject || subject.startsWith('--')) throw new Error('OperationPlan id or Task-relative JSON ref is required.');
     const moduleId = requiredFlag('--module');
@@ -425,7 +453,7 @@ ${usage}`);
   if (group === 'impact') {
     if (action !== 'analyze') throw new Error(`Unsupported command.
 
-${usage}`);
+${advancedUsage}`);
     const analysis = analyzeProjectImpact(root(), { base: flag('--base'), head: flag('--head'), changedFiles: listFlag('--changed-files') });
     output(analysis); return;
   }
@@ -472,7 +500,7 @@ ${usage}`);
     }
     throw new Error(`Unsupported command.
 
-${usage}`);
+${advancedUsage}`);
   }
   if (group === 'validate') {
     const result = validateProject(root()); output(result); if (!result.valid) process.exitCode = 1; return;
@@ -625,7 +653,7 @@ ${usage}`);
     }
   }
   if (group === 'run') {
-    if (!['show', 'report', 'step', 'evidence', 'cleanup', 'recover', 'observe', 'complete'].includes(action ?? '')) throw new Error(`Unsupported command.\n\n${usage}`);
+    if (!['show', 'report', 'step', 'evidence', 'cleanup', 'recover', 'observe', 'complete'].includes(action ?? '')) throw new Error(`Unsupported command.\n\n${advancedUsage}`);
     const projectRoot = root();
     if (!subject) throw new Error('run id is required. Start a Task with task run TASK --module MODULE.');
     const run = readRunById(projectRoot, subject);
@@ -662,7 +690,7 @@ ${usage}`);
     const projectRoot = root();
     const regressionAction = subject;
     const moduleId = args[3];
-    if (!['show', 'run', 'complete'].includes(regressionAction ?? '')) throw new Error(`Unsupported command.\n\n${usage}`);
+    if (!['show', 'run', 'complete'].includes(regressionAction ?? '')) throw new Error(`Unsupported command.\n\n${advancedUsage}`);
     if (!moduleId || moduleId.startsWith('--')) throw new Error('module id is required.');
     if (regressionAction === 'show') return output(buildModuleRegressionSuite(projectRoot, moduleId, priorityValue() ?? 'p3'));
     if (regressionAction === 'run') {
@@ -679,7 +707,7 @@ ${usage}`);
     if (action === 'list') return output(projectRoot ? readIndex(projectRoot, 'skills') : [{ name: 'qa-agent', path: skillRoot }]);
     if (action === 'validate') { const result = validateSkill(skillRoot); output(result); if (!result.valid) process.exitCode = 1; return; }
   }
-  throw new Error(`Unsupported command.\n\n${usage}`);
+  throw new Error(`Unsupported command.\n\n${advancedUsage}`);
 }
 
 main().catch(error => { console.error(`qa-agent: ${(error as Error).message}`); process.exitCode = 1; });

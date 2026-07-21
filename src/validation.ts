@@ -218,5 +218,16 @@ export function validateSkill(skillRoot: string): ValidationResult {
   const errors: string[] = [];
   if (!/^---\nname: [a-z0-9-]+\ndescription: .+\n---\n/s.test(text)) errors.push('SKILL.md: invalid or incomplete YAML frontmatter.');
   if (text.includes('[TODO:')) errors.push('SKILL.md: contains template TODO text.');
-  return { valid: errors.length === 0, errors, checked: 1 };
+  if (/skills\/start\/SKILL\.md/.test(text)) errors.push('SKILL.md: phase routing still references the removed nested subskill layout.');
+
+  const subskills = ['start', 'review', 'test', 'result', 'operation', 'regression', 'recovery', 'archive'];
+  const routed = new Set(['start', 'review', 'test', 'result', 'regression', 'recovery', 'archive']);
+  for (const phase of subskills) {
+    const phasePath = join(skillRoot, 'skills', phase, 'SKILL.md');
+    if (!existsSync(phasePath)) { errors.push(`${phasePath}: not found`); continue; }
+    const phaseText = readFileSync(phasePath, 'utf8');
+    if (!new RegExp(`^---\\nname: qa-agent-${phase}\\ndescription: .+\\n---\\n`, 's').test(phaseText)) errors.push(`${phasePath}: expected frontmatter name qa-agent-${phase}.`);
+    if (routed.has(phase) && !text.includes(`qa-agent-${phase}`)) errors.push(`SKILL.md: phase route qa-agent-${phase} is missing.`);
+  }
+  return { valid: errors.length === 0, errors, checked: 1 + subskills.length };
 }

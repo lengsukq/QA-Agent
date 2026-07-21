@@ -7,6 +7,6 @@ description: Discover project context and create or resume a QA Task without exe
 
 1. Read the active project, Module, existing Task, reviewed memory, relevant source/tests/configuration, historical Runs, and OperationPlans before asking the user.
 2. Run `qa-agent start --request "..." --module <module> --task <task>` to create or resume the complete Task package.
-3. Record confirmed facts, assumptions, risks, scope, roles, environments, test data, cleanup, Scenario coverage, and source references in Runtime-owned assets.
+3. Build a `qa-agent/plan-draft/v1` document and apply it with `qa-agent plan apply --file <plan-draft.json>`. Use this Runtime API for confirmed facts, risks, scope, roles, environments, test data, cleanup, Scenario coverage, assertions, and source references; never edit Task or Scenario JSON directly.
 4. Ask at most one user-owned decision per turn. Include why it matters, the recommended answer, and the effect of alternatives.
 5. Stop before UI execution. Continue to Review when the Runtime returns an approval gate.

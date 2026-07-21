@@ -138,7 +138,7 @@ qa-agent validate
 qa-agent doctor
 ```
 
-`qa-agent update` synchronizes the five current prompts, the main Skill, the `test/regression/archive` subskills, and platform Rule/Command/Agent/Prompt files. It updates `.qa-agent/.version` and `.template-hashes.json`. It does not recreate the Project, Modules, or Tasks, and does not delete Tasks, Runs, screenshots, reports, OperationPlans, RegressionSuites, or Memory.
+`qa-agent update` synchronizes the eight phase prompts, the main Skill, all installed phase subskills, and platform Rule/Command/Agent/Prompt files. It updates `.qa-agent/.version` and `.template-hashes.json`. It does not recreate the Project, Modules, or Tasks, and does not delete Tasks, Runs, screenshots, reports, OperationPlans, RegressionSuites, or Memory.
 
 For projects using legacy directories or report formats, run the explicit migration:
 
@@ -234,7 +234,7 @@ qa-agent test --module checkout --task checkout-basic-flow
 qa-agent archive --module checkout --task checkout-basic-flow
 ```
 
-`start` creates or reuses the Module/Task, generates the complete Task package, event baseline, and TodoList, and stops at `approval_required`. `review` persists explicit TestPlan approval without starting a Run. `test` automatically selects first-run Explore or compatible Replay. Runtime creates a `candidate`; separate promotion changes it to `approved_unverified`, and a completely executed structured replay contract changes it to `validated`; a business FAIL remains a Run result. `archive` is a strict regression-readiness gate: it checks background, a validated current-hash OperationPlan for every Scenario, RegressionSuite coverage, Runtime-owned reports, existing screenshots, Markdown image evidence, and project validation. Failed checks do not change Task state.
+`start` creates or reuses the Module/Task skeleton and stops at `approval_required`. Before approval, the host Agent inspects the project and applies a structured `qa-agent/plan-draft/v1` document through `qa-agent plan apply`; it never edits Runtime-owned Task or Scenario JSON directly. `review` persists explicit TestPlan approval without starting a Run. `test` automatically selects first-run Explore or compatible Replay. Runtime creates a `candidate`; separate promotion changes it to `approved_unverified`, and a completely executed structured replay contract changes it to `validated`; a business FAIL remains a Run result. `archive` is a strict regression-readiness gate: it checks background, a validated current-hash OperationPlan for every Scenario, RegressionSuite coverage, Runtime-owned reports, existing screenshots, Markdown image evidence, and project validation. Failed checks do not change Task state.
 
 `init` only initializes the tested project's `.qa-agent/` runtime boundary and does not inject a host Skill. `configure` performs project initialization plus host Skill/prompt injection and never overwrites an existing `.qa-agent` data set. The host Skill owns conversation approval, TodoList mirroring, and UI tools; the CLI Runtime owns state, evidence, reports, and archiving.
 
@@ -737,6 +737,7 @@ qa-agent run show <run-id>
 qa-agent run report <run-id>
 qa-agent memory list
 qa-agent help
+qa-agent help --advanced
 ```
 
 ## Development and verification

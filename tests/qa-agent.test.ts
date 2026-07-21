@@ -135,7 +135,11 @@ test('exposes CLI help and version flags', () => {
   }
   const help = spawnSync(process.execPath, [installedCli, '--help'], { cwd: repository, encoding: 'utf8' });
   assert.equal(help.status, 0, help.stderr || help.stdout);
-  assert.match(help.stdout, /workflow bootstrap/);
+  assert.match(help.stdout, /Common commands/);
+  assert.doesNotMatch(help.stdout, /workflow bootstrap/);
+  const advancedHelp = spawnSync(process.execPath, [installedCli, 'help', '--advanced'], { cwd: repository, encoding: 'utf8' });
+  assert.equal(advancedHelp.status, 0, advancedHelp.stderr || advancedHelp.stdout);
+  assert.match(advancedHelp.stdout, /workflow bootstrap/);
 });
 
 test('installs native host integrations without changing the host-neutral runtime', () => {
@@ -148,6 +152,12 @@ test('installs native host integrations without changing the host-neutral runtim
   assert.ok(existsSync(join(target, '.cursor', 'rules', 'qa-agent.mdc')));
   assert.ok(existsSync(join(target, '.cursor', 'commands', 'qa-agent-cli.md')));
   assert.ok(existsSync(join(target, '.cursor', 'skills', 'qa-agent', 'SKILL.md')));
+  const installedMainSkill = readFileSync(join(target, '.cursor', 'skills', 'qa-agent', 'SKILL.md'), 'utf8');
+  assert.doesNotMatch(installedMainSkill, /skills\/start\/SKILL\.md/);
+  for (const phase of ['start', 'review', 'test', 'result', 'regression', 'recovery', 'archive']) {
+    assert.match(installedMainSkill, new RegExp(`qa-agent-${phase}`));
+    assert.ok(existsSync(join(target, '.cursor', 'skills', `qa-agent-${phase}`, 'SKILL.md')), `missing routed Skill qa-agent-${phase}`);
+  }
   assert.ok(existsSync(join(target, '.cursor', 'skills', 'qa-agent-test', 'SKILL.md')));
   assert.ok(existsSync(join(target, '.cursor', 'skills', 'qa-agent-operation', 'SKILL.md')));
   assert.equal(existsSync(join(target, '.cursor', 'skills', 'qa-agent', 'skills')), false);
@@ -243,6 +253,60 @@ test('configures a project and injects the selected host integration in one CLI 
   assert.ok(existsSync(join(target, '.qa-agent', 'project.json')));
   assert.ok(existsSync(join(target, '.cursor', 'rules', 'qa-agent.mdc')));
   assert.ok(existsSync(join(target, '.cursor', 'commands', 'qa-agent-cli.md')));
+});
+
+test('applies a structured multi-Scenario PlanDraft through the Runtime', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-plan-draft-'));
+  run(root, 'init', '--id', 'plan-draft');
+  run(root, 'start', '--request', '验证用户登录', '--module', 'auth', '--task', 'login-flow');
+  const draftPath = join(root, 'login-plan.json');
+  const draft = {
+    apiVersion: 'qa-agent/plan-draft/v1',
+    moduleId: 'auth',
+    taskId: 'login-flow',
+    taskName: '用户登录',
+    description: '验证登录成功、密码错误和账号锁定。',
+    objectives: ['验证合法用户可以登录', '验证非法登录被明确拒绝'],
+    scope: { platforms: ['web'], environments: ['local'], roles: ['buyer'], excluded: ['第三方登录'] },
+    sourceRefs: ['src/auth'],
+    testDataRefs: ['fixture:buyer-account'],
+    scenarios: [
+      { title: '登录成功', intent: '正确账号进入首页', expected: '进入首页并显示当前用户', risk: 'high', requirementRefs: ['login-success'], visualAssertions: [{ expected: '首页显示当前用户', importance: 'high' }] },
+      { title: '密码错误', intent: '错误密码不能登录', expected: '页面显示密码错误提示', risk: 'medium', requirementRefs: ['invalid-password'], visualAssertions: [{ expected: '错误提示清晰可见', importance: 'medium' }] },
+      { title: '账号锁定', intent: '锁定账号不能登录', expected: '页面显示账号已锁定', cleanup: ['恢复测试账号状态'], risk: 'critical', requirementRefs: ['locked-account'], visualAssertions: [{ expected: '账号锁定提示清晰可见', importance: 'critical' }] },
+    ],
+  };
+  writeFileSync(draftPath, `${JSON.stringify(draft, null, 2)}\n`, 'utf8');
+  const applied = JSON.parse(run(root, 'plan', 'apply', '--file', draftPath));
+  assert.equal(applied.changed, true);
+  assert.deepEqual(applied.scenarioIds, ['scenario-1', 'scenario-2', 'scenario-3']);
+  const task = readTask(root, 'auth', 'login-flow');
+  assert.equal(task.metadata.status, 'awaiting_approval');
+  assert.equal(task.metadata.approval, undefined);
+  assert.equal(task.scenarios.length, 3);
+  assert.equal(task.requirements?.requirementTrace?.length, 3);
+  assert.deepEqual(task.testPlan?.scenarioRefs, ['scenarios/scenario-1.json', 'scenarios/scenario-2.json', 'scenarios/scenario-3.json']);
+  assert.equal(task.testPlan?.planHash, testPlanHash(task));
+  assert.equal(task.testPlan?.status, 'awaiting_confirmation');
+  assert.equal(existsSync(join(taskDirectory(root, 'auth', 'login-flow'), 'scenarios', 'happy-path.json')), false);
+  assert.equal(JSON.parse(run(root, 'validate')).valid, true);
+
+  const repeated = JSON.parse(run(root, 'plan', 'apply', '--file', draftPath));
+  assert.equal(repeated.changed, false);
+  run(root, 'review', '--module', 'auth', '--task', 'login-flow', '--approve', '--confirmed-by', 'auth-owner');
+  draft.scenarios[1].expected = '页面显示明确的凭证错误提示';
+  writeFileSync(draftPath, `${JSON.stringify(draft, null, 2)}\n`, 'utf8');
+  const changed = JSON.parse(run(root, 'plan', 'apply', '--file', draftPath));
+  assert.equal(changed.changed, true);
+  assert.equal(readTask(root, 'auth', 'login-flow').metadata.approval, undefined);
+  assert.equal(readTask(root, 'auth', 'login-flow').metadata.status, 'awaiting_approval');
+  const unsafeDraftPath = join(root, 'unsafe-login-plan.json');
+  const unsafeDraft = structuredClone(draft);
+  unsafeDraft.scenarios[0].input = { password: 'plain-text-secret' };
+  writeFileSync(unsafeDraftPath, `${JSON.stringify(unsafeDraft, null, 2)}\n`, 'utf8');
+  const unsafe = spawnSync(process.execPath, ['--experimental-strip-types', cli, 'plan', 'apply', '--file', unsafeDraftPath], { cwd: root, encoding: 'utf8' });
+  assert.notEqual(unsafe.status, 0);
+  assert.match(unsafe.stderr, /potential secret/i);
 });
 
 test('requires confirmation when the reviewed business contract changes', () => {
