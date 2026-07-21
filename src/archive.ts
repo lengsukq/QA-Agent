@@ -39,9 +39,9 @@ export function inspectTaskArchive(root: string, task: TestTask): ArchiveInspect
 
   let operations: OperationPlan[] = [];
   try { operations = listOperations(root, task); } catch (error) { errors.push(`OperationPlan read failed: ${(error as Error).message}`); }
-  const activeByScenario = new Map(task.scenarios.map(scenario => [scenario.id, operations.find(plan => plan.status === 'active' && plan.scenarioId === scenario.id && plan.planHash === testPlanHash(task) && plan.steps.length > 0)]));
+  const activeByScenario = new Map(task.scenarios.map(scenario => [scenario.id, operations.find(plan => plan.status === 'active' && plan.validationStatus === 'passed' && plan.scenarioId === scenario.id && plan.planHash === testPlanHash(task) && plan.steps.length > 0)]));
   const operationsOk = task.scenarios.length > 0 && task.scenarios.every(scenario => Boolean(activeByScenario.get(scenario.id)));
-  check(checks, 'operation-plans', 'Active OperationPlan per Scenario', operationsOk, operationsOk ? [`${task.scenarios.length} active OperationPlan(s)`] : task.scenarios.filter(s => !activeByScenario.get(s.id)).map(s => `Scenario ${s.id} needs an active OperationPlan with the current planHash`));
+  check(checks, 'operation-plans', 'Validated active OperationPlan per Scenario', operationsOk, operationsOk ? [`${task.scenarios.length} active OperationPlan(s) passed a real replay Run`] : task.scenarios.filter(s => !activeByScenario.get(s.id)).map(s => `Scenario ${s.id} needs an active OperationPlan with the current planHash and validationStatus=passed from a successful replay Run`));
 
   let suite: RegressionSuite | undefined;
   if (existsSync(taskRegressionSuitePath(root, task.metadata.moduleId, task.metadata.id))) {
@@ -59,6 +59,14 @@ export function inspectTaskArchive(root: string, task: TestTask): ArchiveInspect
     return hasRuntimeReportMarker(report, run.id) && /!\[[^\]]*\]\([^\)]+\)/.test(report) && run.screenshots.length > 0 && run.screenshots.every(screenshot => existsSync(join(directory, 'runs', run.id, screenshot.path)));
   });
   check(checks, 'successful-run', 'Successful Runtime Run with report and screenshots', runEvidenceOk, runEvidenceOk ? [`${successful.length} successful Run(s) with Runtime report and image evidence`] : ['At least one passed/adapted Runtime Run must include run.json, Runtime-owned report.md, existing screenshots, and Markdown image evidence']);
+  const regressionSuccessful = successful.filter(run => ['replayed', 'adapted'].includes(run.replayStatus));
+  const regressionEvidenceOk = regressionSuccessful.some(run => {
+    const reportPath = taskRunReportPath(root, task.metadata.moduleId, task.metadata.id, run.id);
+    if (!existsSync(reportPath)) return false;
+    const report = readFileSync(reportPath, 'utf8');
+    return hasRuntimeReportMarker(report, run.id) && /!\[[^\]]*\]\([^\)]+\)/.test(report) && run.screenshots.length > 0 && run.screenshots.every(screenshot => existsSync(join(directory, 'runs', run.id, screenshot.path)));
+  });
+  check(checks, 'successful-regression-run', 'Successful OperationPlan regression Run with report and screenshots', regressionEvidenceOk, regressionEvidenceOk ? [`${regressionSuccessful.length} successful regression Run(s) with Runtime report and image evidence`] : ['Run the approved OperationPlan through qa-agent test and complete a successful replay/adapted Run before archiving']);
 
   const validation = validateProject(root);
   if (!validation.valid) errors.push(...validation.errors);

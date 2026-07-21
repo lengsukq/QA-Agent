@@ -58,9 +58,9 @@ Use the CLI as the only project mutation and Runtime entry point.
 2. Present the returned plan, taskDirectory, planHash, and TodoList. Wait for human approval; approval must not start a Run.
 3. Persist approval only with qa-agent task review <task> --module <module> --approve --confirmed-by <human>.
 4. Only after review succeeds run qa-agent test --module <module> --task <task>; this is the command that starts execution.
-5. After the Run report, inspect operationCandidates. Tell the user when an OperationPlan candidate was generated and ask for approval before replay or regression.
-6. Use qa-agent task operation review <task> --module <module> --operation <operation-id> --approve, then qa-agent task regression sync <task> --module <module> and qa-agent task regression run <task> --module <module> for approved replay assets.
-7. Use qa-agent archive only after the complete report, screenshot, OperationPlan, and RegressionSuite gate passes.
+5. After a successful exploratory Run report, actively call qa-agent operation generate --module <module> --task <task> --run <run-id> [--scenario <scenario>] to persist the quick-regression OperationPlan candidate. Tell the user its ID, Scenario, source Run, plan hash, and issues, then ask for approval.
+6. Use qa-agent task operation review <task> --module <module> --operation <operation-id> --approve, then run qa-agent test again so the approved OperationPlan is really replayed and reported.
+7. Use qa-agent archive only after the successful replay/adapted regression Run and the complete screenshot, OperationPlan, and RegressionSuite gates pass.
 8. Never use UI tools unless the Runtime response has uiExecutionAllowed=true, mustStop=false, and runId. Never write a manual report or claim PASS.
 `;
 

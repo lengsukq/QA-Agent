@@ -184,7 +184,7 @@ qa-agent test --module checkout --task checkout-basic-flow
 qa-agent archive --module checkout --task checkout-basic-flow
 ```
 
-`start` creates or reuses the Module/Task, generates the complete Task package and TodoList, and stops at `approval_required`; it never starts a browser, simulator, device, or UI action. `test` executes only an approved Task and automatically selects first-run `explore` or compatible `replay`. `archive` is a strict regression-readiness gate: it checks background, plan, an active current-hash OperationPlan for every Scenario, RegressionSuite coverage, a Runtime-owned report, existing screenshots, Markdown image evidence, and project validation. Failed checks do not change Task state.
+`start` creates or reuses the Module/Task, generates the complete Task package and TodoList, and stops at `approval_required`; it never starts a browser, simulator, device, or UI action. `test` executes only an approved Task and automatically selects first-run `explore` or compatible `replay`. `operation generate` only writes the quick-regression script; it becomes valid only after approval and a successful real replay through `test`. `archive` is a strict regression-readiness gate: it checks background, a validated current-hash OperationPlan for every Scenario, RegressionSuite coverage, Runtime-owned reports, existing screenshots, Markdown image evidence, and project validation. Failed checks do not change Task state.
 
 `init` only initializes the tested project's `.qa-agent/` runtime boundary and does not inject a host Skill. `configure` performs project initialization plus host Skill/prompt injection and never overwrites an existing `.qa-agent` data set. The host Skill owns conversation approval, TodoList mirroring, and UI tools; the CLI Runtime owns state, evidence, reports, and archiving.
 
@@ -565,7 +565,16 @@ qa-agent operation replay OPERATION_ID \
 The response contains the complete `operationPlan`, `nextOperationStep`, `remainingOperationSteps`, and `checkpoints`. The host follows the order strictly. Every Replay still creates a new Run, report, and checkpoint screenshots.
 
 
-After a successful run, the Agent creates a candidate OperationPlan under `.qa-agent/modules/<module>/tasks/<task>/operation-plans/<scenario>/`. Review it before reuse:
+After a successful run, the Agent should explicitly call the command below to write a quick-regression OperationPlan candidate. This command only writes the plan; it does not approve, execute, or archive it:
+
+```bash
+qa-agent operation generate \
+  --module checkout \
+  --task checkout-basic-flow \
+  --run RUN_ID
+```
+
+The candidate is stored under `.qa-agent/modules/<module>/tasks/<task>/operation-plans/<scenario>/` with `validationStatus: unverified`. After approval and a successful real replay, the Runtime sets `validationStatus: passed`; only then can the Task be archived:
 
 ```bash
 qa-agent task operation list checkout-basic-flow --module checkout
@@ -575,11 +584,13 @@ qa-agent run recover <run-id> --reason "Element was not ready" --action wait --d
 qa-agent task regression sync checkout-basic-flow --module checkout
 qa-agent task regression run checkout-basic-flow --module checkout
 qa-agent module regression run checkout
+qa-agent archive --module checkout --task checkout-basic-flow
 ```
 
 Replay is permitted only when the Task plan hash and user approval, an active OperationPlan, platform/device/app or Web version, environment/role, test data, required MCPs, and verified macOS permissions are compatible. It skips rediscovery, not business assertions. Outcomes are `PASS`, `FAIL`, `ADAPTED`, `BLOCKED`, or `NEEDS_CONFIRMATION`. Recovery is limited to `wait`, `refresh`, `back`, `restart-app`, `reset-sandbox-data`, `reconnect-mcp`, `fallback-locator`, and `resume-checkpoint`; never modify source code, bypass permissions, or fabricate results.
 
 OperationPlans are Scenario-specific. Each step stores an operation action, primary and fallback locators, redacted input references, preconditions, expected state, assertion references, screenshot and visual-inspection policies, safety action, and checkpoint. During replay every `run step` must reference the next `operationStepId`; steps cannot be skipped or duplicated.
+`candidate`/`active` describe generation and approval only. An OperationPlan becomes valid for archiving only after a successful replay/adapted Run writes `validationStatus: passed`.
 
 A Task-level RegressionSuite organizes all active OperationPlans for one Task. Module replay dynamically aggregates active OperationPlans across Tasks at start, instead of persisting a second Module Suite. It runs independent flows serially, continues after an isolated business failure, and produces an aggregate report. `run.json` is a result record; OperationPlan is the executable operation definition.
 

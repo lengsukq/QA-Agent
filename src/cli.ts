@@ -5,7 +5,7 @@ import { availableCapabilities, capabilityAdvice } from './capabilities.ts';
 import { beginAgentGuidedRun, beginRegressionRun, buildExecutionSnapshot, completeAgentGuidedRun, completeRegressionRun, recordAgentStep, recordCleanupFinding, recordHostEvidence, recordRecoveryAttempt, recordVisualFinding } from './engine.ts';
 import { readIndex, rebuildIndexes } from './indexer.ts';
 import { createTaskSkeleton, planModule, taskPlan } from './planning.ts';
-import { createModule, findProjectRoot, initializeProject, modulePath, qaPath, readModule, readProjectPromptBundle, readRunById, readTask, requireProjectRoot, saveTask, syncProjectPrompts, taskRunReportPath } from './project.ts';
+import { createModule, findProjectRoot, initializeProject, modulePath, qaPath, readModule, readProjectPromptBundle, readRunById, readTask, requireProjectRoot, saveRun, saveTask, syncProjectPrompts, taskDirectory, taskRunReportPath } from './project.ts';
 import { readProject } from './project.ts';
 import { assertSafeId, listFiles, now, readJson, writeJsonAtomic } from './store.ts';
 import type { ExecutionSnapshot, Locator, PermissionStatus, ProjectMemory, RegressionProfile, RegressionRun, ReleaseCheck, RunStatus, StepExecutionMode, TestPriority, TestRun, TestTask } from './types.ts';
@@ -15,7 +15,7 @@ import { configuredHostRecords, installHostIntegration, recordHostInstall, suppo
 import { detectConfiguredHosts, hostsFromFlags, HOST_PLATFORMS } from './host-configurators/registry.ts';
 import { assertHumanApprover, testPlanHash } from './approval.ts';
 import { hostCapabilityDiagnosis } from './capabilities.ts';
-import { operationSummary, readOperation, reviewOperation } from './operations.ts';
+import { createOperationCandidates, listOperations, operationSummary, readOperation, reviewOperation } from './operations.ts';
 import { buildModuleRegressionSuite, buildReleaseRegressionSuite, readTaskRegressionSuite, syncTaskRegressionSuite } from './regression.ts';
 import { analyzeProjectImpact } from './impact-analysis.ts';
 import { attachRegressionRun, createReleaseCheck, finalizeReleaseCheck, readReleaseCheck, saveReleaseCheck, writeReleaseReport } from './release.ts';
@@ -42,6 +42,7 @@ Commands:
   archive --module MODULE --task TASK
   workflow bootstrap --request TEXT --module ID --task ID [--module-name NAME] [--task-name NAME] [--platforms web,android,ios] [--risk low|medium|high|critical]
   workflow status --module ID --task ID
+  operation generate --module MODULE --task TASK [--run RUN_ID] [--scenario SCENARIO]
   operation replay OPERATION_ID --module MODULE --task TASK [execution context flags]
   impact analyze [--base REF] [--head REF] [--changed-files FILE1,FILE2]
   release check [--profile fast|normal|full] [--base REF] [--head REF] [--changed-files FILE1,FILE2] [--plan-only] [execution context flags]
@@ -49,7 +50,7 @@ Commands:
   host list | host attest --id ID --capabilities CAP1,CAP2 --permission-status verified|missing|unknown [--host HOST] [--version VERSION] | host import --file HOST_CAPABILITIES.json | host doctor [--platform android|ios]
   context module MODULE
   module list | module create ID --name NAME [--description TEXT] [--platforms web,android,ios] [--source-hints PATHS] [--entry-points PATHS] [--dependencies MODULES] | module update ID [--name NAME] [--description TEXT] [--risk LEVEL] [same mapping flags] | module archive ID | module plan ID | module coverage ID
-  task list | task create ID --module MODULE [--name NAME] [--priority p0|p1|p2|p3] [--frequency every-change|every-release|scheduled|manual] [--release-gate true|false] [--estimated-minutes N] [--tags TAGS] [--triggers PATHS] [--golden-path] | task update ID --module MODULE [same metadata flags] | task plan ID --module MODULE | task explore ID --module MODULE [execution context flags] | task run ID --module MODULE [--operation OPERATION_ID] [--scenario SCENARIO] [--environment ENV] [--platform PLATFORM] [--role ROLE] [--device DEVICE] [--device-model MODEL] [--os-version VERSION] [--app-version VERSION] [--web-build BUILD] [--test-data-fingerprint FINGERPRINT] | task operation list|show|review ID --module MODULE [--approve|--reject] | task regression sync|show|run|complete ID --module MODULE | task review ID --module MODULE --approve --confirmed-by USER [--confirmation-source current-chat-explicit-approval|external-review-record] | task archive ID --module MODULE
+  task list | task create ID --module MODULE [--name NAME] [--priority p0|p1|p2|p3] [--frequency every-change|every-release|scheduled|manual] [--release-gate true|false] [--estimated-minutes N] [--tags TAGS] [--triggers PATHS] [--golden-path] | task update ID --module MODULE [same metadata flags] | task plan ID --module MODULE | task explore ID --module MODULE [execution context flags] | task run ID --module MODULE [--operation OPERATION_ID] [--scenario SCENARIO] [--environment ENV] [--platform PLATFORM] [--role ROLE] [--device DEVICE] [--device-model MODEL] [--os-version VERSION] [--app-version VERSION] [--web-build BUILD] [--test-data-fingerprint FINGERPRINT] | task operation generate|list|show|review ID --module MODULE [--run RUN_ID] [--approve|--reject] | task regression sync|show|run|complete ID --module MODULE | task review ID --module MODULE --approve --confirmed-by USER [--confirmation-source current-chat-explicit-approval] | task archive ID --module MODULE
   module regression show|run|complete MODULE [--priority p0|p1|p2|p3]
   memory list | memory search TEXT | memory add ID --module MODULE [--task TASK] --title TEXT --content TEXT | memory review ID --module MODULE [--task TASK] --approve|--reject
   run step RUN --action TEXT --detail TEXT --screenshot PATH [--operation-action launch|navigate|click|input|fill|swipe|back|wait|assert|screenshot|reset|restart-app] [--safety-action ACTION] [--scenario SCENARIO] [--status passed|failed|paused|blocked|adapted] [--visual-inspection performed|not-required|skipped] [--execution-mode host-automated|user-assisted|system-component-blocked|preseeded-test-data] [--operation-step STEP] [--locator-strategy STRATEGY] [--locator-value VALUE] [--actual-locator-strategy STRATEGY] [--actual-locator-value VALUE] [--input-refs key=ref,key=ref] [--expected-state TEXT] [--actual-state TEXT] [--adaptation TEXT]
@@ -225,6 +226,37 @@ function archiveTask(projectRoot: string, moduleId: string, taskId: string): voi
   output({ ...task, archive: completeness });
 }
 
+function generateOperationPlan(projectRoot: string, moduleId: string, taskId: string): void {
+  const task = readTask(projectRoot, moduleId, taskId);
+  const requestedRunId = flag('--run');
+  const requestedScenario = flag('--scenario');
+  let run: TestRun;
+  if (requestedRunId) {
+    run = readRunById(projectRoot, requestedRunId);
+  } else {
+    const runPaths = listFiles(join(taskDirectory(projectRoot, moduleId, taskId), 'runs'), path => path.endsWith('/run.json'));
+    const runs = runPaths.map(path => readJson<TestRun>(path)).filter(item => item.moduleId === moduleId && item.taskId === taskId);
+    run = runs.sort((left, right) => (right.completedAt ?? right.startedAt).localeCompare(left.completedAt ?? left.startedAt))[0]!;
+  }
+  if (!run) throw new Error('No Run was found for this Task. Complete a successful exploratory Run before generating an OperationPlan.');
+  if (run.moduleId !== moduleId || run.taskId !== taskId) throw new Error(`Run ${run.id} does not belong to ${moduleId}/${taskId}.`);
+  if (!['passed', 'adapted'].includes(run.status) || !run.completedAt) throw new Error(`Run ${run.id} is not a completed successful Run; OperationPlan generation requires status passed or adapted.`);
+  if (run.replayStatus === 'replayed') throw new Error(`Run ${run.id} is already a replay Run; generate the OperationPlan from the original successful exploratory Run.`);
+  if (requestedScenario && !task.scenarios.some(scenario => scenario.id === requestedScenario)) throw new Error(`Scenario ${requestedScenario} was not found in Task ${taskId}.`);
+
+  const existing = listOperations(projectRoot, task).filter(plan => plan.sourceRunId === run.id && (!requestedScenario || plan.scenarioId === requestedScenario));
+  if (existing.length) {
+    output({ command: 'operation generate', generated: false, approvalRequired: true, runId: run.id, operationCandidates: existing.map(plan => plan.id), operationCandidateIssues: run.operationCandidateIssues ?? [], next: 'Present these OperationPlan candidates to the user. After approval, run qa-agent test for a real regression check, then qa-agent archive.' });
+    return;
+  }
+
+  const result = createOperationCandidates(projectRoot, task, run, { scenarioId: requestedScenario });
+  run.operationCandidates = [...new Set([...(run.operationCandidates ?? []), ...result.candidates])];
+  run.operationCandidateIssues = result.issues.length ? result.issues : undefined;
+  saveRun(projectRoot, run); task.updatedAt = now(); saveTask(projectRoot, task); rebuildIndexes(projectRoot);
+  output({ command: 'operation generate', generated: result.candidates.length > 0, approvalRequired: result.candidates.length > 0, runId: run.id, operationCandidates: result.candidates, operationCandidateIssues: result.issues, next: result.candidates.length ? 'Present the candidates and request explicit approval. After approval, run qa-agent test for a real regression check, then qa-agent archive.' : 'Fix the listed replay contract issues, complete a valid successful Run, and run operation generate again.' });
+}
+
 async function main(): Promise<void> {
   const [group, action, subject] = args;
   if (!group || group === '--help' || group === '-h' || group === 'help') return output(usage);
@@ -346,6 +378,9 @@ ${usage}`);
     writeJsonAtomic(path, config); output(config); return;
   }
   if (group === 'operation') {
+    if (action === 'generate') {
+      generateOperationPlan(root(), requiredFlag('--module'), requiredFlag('--task')); return;
+    }
     if (action !== 'replay') throw new Error(`Unsupported command.\n\n${usage}`);
     const projectRoot = root();
     if (!subject || subject.startsWith('--')) throw new Error('OperationPlan id or Task-relative JSON ref is required.');
@@ -483,7 +518,8 @@ ${usage}`);
     const task = readTask(projectRoot, moduleId, taskId);
     if (action === 'plan') return output(taskPlan(task));
     if (action === 'operation') {
-      const operationAction = ['list', 'show', 'review'].includes(subject ?? '') ? subject : args[3];
+      const operationAction = ['generate', 'list', 'show', 'review'].includes(subject ?? '') ? subject : args[3];
+      if (operationAction === 'generate') { generateOperationPlan(projectRoot, moduleId, taskId); return; }
       if (operationAction === 'list') return output(operationSummary(projectRoot, task));
       if (operationAction === 'show') return output(readOperation(projectRoot, task, requiredFlag('--operation')));
       if (operationAction === 'review') {

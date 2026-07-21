@@ -186,7 +186,7 @@ qa-agent test --module checkout --task checkout-basic-flow
 qa-agent archive --module checkout --task checkout-basic-flow
 ```
 
-`start` 只负责创建或复用 Module/Task、生成 Task 目录、Test Plan、Scenario 和 TodoList，并停在 `approval_required`；它不会启动浏览器、模拟器或设备。`test` 只执行已确认的 Task，并自动在首次 `explore` 与兼容的 `replay` 之间选择。`archive` 是严格的可回归门禁：它会检查背景、计划、每个 Scenario 的 active OperationPlan、RegressionSuite、Runtime 报告和实际存在的 Markdown 图片证据；失败时不会改变 Task 状态。
+`start` 只负责创建或复用 Module/Task、生成 Task 目录、Test Plan、Scenario 和 TodoList，并停在 `approval_required`；它不会启动浏览器、模拟器或设备。`test` 只执行已确认的 Task，并自动在首次 `explore` 与兼容的 `replay` 之间选择。`operation generate` 只负责写入快速回归脚本，脚本必须经过审批并由 `test` 实测通过后才算有效。`archive` 是严格的可回归门禁：它会检查背景、计划、每个 Scenario 的已实测有效 OperationPlan、RegressionSuite、Runtime 报告和实际存在的 Markdown 图片证据；失败时不会改变 Task 状态。
 
 `init` 只初始化被测项目的 `.qa-agent/` 运行边界，不注入宿主 Skill。`configure` 负责“一站式”项目初始化和宿主提示词/Skill 注入；已经初始化的 `.qa-agent` 数据不会被覆盖。宿主 Skill 负责对话确认、TodoList 镜像和实际 UI 工具调用，CLI Runtime 负责状态、证据、报告和归档。
 
@@ -594,7 +594,16 @@ qa-agent operation replay OPERATION_ID \
 返回结果包含完整 `operationPlan`、`nextOperationStep`、`remainingOperationSteps` 和 `checkpoints`。宿主严格按顺序执行；每次 Replay 都创建新的 Run、报告和关键节点截图。
 
 
-首次成功运行后，Agent 会在任务目录生成候选 OperationPlan：`.qa-agent/modules/<module>/tasks/<task>/operation-plans/<scenario>/`。审核后可快速回放同一业务流程：
+首次成功运行后，Agent 应显式调用下面的命令写入快速回归 OperationPlan 候选。这个命令只写脚本，不审批、不执行、不归档：
+
+```bash
+qa-agent operation generate \
+  --module checkout \
+  --task checkout-basic-flow \
+  --run RUN_ID
+```
+
+候选会保存到 `.qa-agent/modules/<module>/tasks/<task>/operation-plans/<scenario>/`，初始为 `validationStatus: unverified`。审批并实测通过后，Runtime 才会把它标记为 `validationStatus: passed`，之后才能归档：
 
 ```bash
 qa-agent task operation list checkout-basic-flow --module checkout
@@ -604,11 +613,12 @@ qa-agent run recover <run-id> --reason "元素尚未出现" --action wait --deta
 qa-agent task regression sync checkout-basic-flow --module checkout
 qa-agent task regression run checkout-basic-flow --module checkout
 qa-agent module regression run checkout
+qa-agent archive --module checkout --task checkout-basic-flow
 ```
 
 只有 Task 计划哈希、用户确认、active OperationPlan、平台/设备/App 或 Web 版本、环境/角色、测试数据、所需 MCP 和 macOS 权限都兼容时才会回放；否则回到计划确认或能力接入。回放不跳过业务断言，只跳过重复探索。结果为 `PASS`、`FAIL`、`ADAPTED`、`BLOCKED` 或 `NEEDS_CONFIRMATION`。安全恢复只能使用 `wait`、`refresh`、`back`、`restart-app`、`reset-sandbox-data`、`reconnect-mcp`、`fallback-locator` 或 `resume-checkpoint`，不能改代码、绕过权限或伪造结果。
 
-OperationPlan 按 Scenario 独立保存，步骤包含操作类型、主/备用定位器、输入引用、前置条件、预期状态、断言引用、截图策略、视觉识别策略、风险动作和 checkpoint。回放时每个 `run step` 必须引用下一个 `operationStepId`，不能跳步或重复提交。
+OperationPlan 按 Scenario 独立保存，步骤包含操作类型、主/备用定位器、输入引用、前置条件、预期状态、断言引用、截图策略、视觉识别策略、风险动作和 checkpoint。回放时每个 `run step` 必须引用下一个 `operationStepId`，不能跳步或重复提交。`candidate`/`active` 只表示生成和审批状态；只有成功的 replay/adapted Run 才会写入 `validationStatus: passed`，未实测通过的 OperationPlan 不满足归档门禁。
 
 Task 级 RegressionSuite 组织一个 Task 的所有 active OperationPlan；Module 回归在启动时从各 Task 的 active OperationPlan 动态聚合，不再保存第二份 Module Suite。模块回归会串行自动执行所有独立流程，单个业务失败后继续其他流程，最后生成模块汇总报告。`run.json` 是结果记录，OperationPlan 才是可执行操作定义。
 

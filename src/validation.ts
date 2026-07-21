@@ -55,7 +55,7 @@ function validateDomainObject(path: string): string[] {
   }
   if (/\/operation-plans\/[^/]+\/v\d+\.json$/.test(path)) {
     if (value.apiVersion !== 'qa-agent/v2') errors.push(`${path}: OperationPlan must use qa-agent/v2.`);
-    if (!isSafeId(value.id) || value.kind !== 'OperationPlan' || !['candidate', 'active', 'superseded', 'deprecated'].includes(value.status)) errors.push(`${path}: invalid OperationPlan identity or status.`);
+    if (!isSafeId(value.id) || value.kind !== 'OperationPlan' || !['candidate', 'active', 'superseded', 'deprecated'].includes(value.status) || (value.validationStatus && !['unverified', 'passed', 'failed'].includes(value.validationStatus))) errors.push(`${path}: invalid OperationPlan identity, status, or validationStatus.`);
     if (!Array.isArray(value.steps)) errors.push(`${path}: OperationPlan steps must be an array.`);
     for (const [index, step] of (value.steps ?? []).entries()) {
       if (!step || typeof step !== 'object') { errors.push(`${path}: step ${index + 1} must be an object.`); continue; }

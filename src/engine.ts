@@ -9,7 +9,7 @@ import { writeReport } from './report.ts';
 import { curateFailedRun, curateObservedBusinessRules } from './memory.ts';
 import type { ExecutionSnapshot, Locator, OperationAction, OperationStep, RegressionRun, RegressionSuite, RunStatus, StepExecutionMode, TestRun, TestTask, VisualInspectionStatus } from './types.ts';
 import { approvalIsCurrent } from './approval.ts';
-import { approvedOperationForReplay, createOperationCandidates, readOperation } from './operations.ts';
+import { approvedOperationForReplay, createOperationCandidates, readOperation, recordOperationValidation } from './operations.ts';
 import { assertRecoveryAction, assertSafeAction, type RecoveryAction } from './safety.ts';
 import { newRegressionRun, saveRegressionRun, suitePreflight, writeRegressionReport } from './regression.ts';
 
@@ -89,6 +89,7 @@ function finish(root: string, task: TestTask, run: TestRun): TestRun {
       run.conclusion = `${run.conclusion ?? 'Business verification completed.'} No OperationPlan candidate was generated because the replay contract is incomplete. ${summary}`;
     }
   }
+  recordOperationValidation(root, task, run);
   run.reportPath = `runs/${run.id}/report.md`;
   run.reportGeneratedBy = 'qa-agent-runtime';
   run.reportGeneratedAt = now();

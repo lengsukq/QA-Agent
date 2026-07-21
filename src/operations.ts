@@ -34,6 +34,17 @@ export function saveOperation(root: string, plan: OperationPlan): void {
   if (plan.status === 'active') writeJsonAtomic(join(operationsPath(root, plan.moduleId, plan.taskId), plan.scenarioId, 'current.json'), { operationPlanId: plan.id, version: plan.version, ref: operationRef(root, plan), updatedAt: plan.updatedAt });
 }
 
+export function recordOperationValidation(root: string, task: TestTask, run: TestRun): OperationPlan | undefined {
+  if (!run.operationPlanId || run.replayStatus === 'not_replay') return undefined;
+  const plan = readOperation(root, task, run.operationPlanId);
+  plan.validationStatus = ['passed', 'adapted'].includes(run.status) ? 'passed' : 'failed';
+  plan.validatedByRunId = run.id;
+  plan.validatedAt = now();
+  plan.updatedAt = now();
+  saveOperation(root, plan);
+  return plan;
+}
+
 export function reviewOperation(root: string, task: TestTask, id: string, decision: 'approve' | 'reject'): OperationPlan {
   const plan = readOperation(root, task, id);
   if (decision === 'approve') {
@@ -86,11 +97,12 @@ function operationCandidateQualityIssues(scenario: TestScenario, run: TestRun, s
   return [...new Set(reasons)];
 }
 
-export function createOperationCandidates(root: string, task: TestTask, run: TestRun): { candidates: string[]; issues: Array<{ scenarioId: string; reasons: string[] }> } {
+export function createOperationCandidates(root: string, task: TestTask, run: TestRun, options: { scenarioId?: string } = {}): { candidates: string[]; issues: Array<{ scenarioId: string; reasons: string[] }> } {
   if (run.replayStatus === 'replayed') return { candidates: [], issues: [] };
   const candidates: string[] = [];
   const issues: Array<{ scenarioId: string; reasons: string[] }> = [];
   for (const scenario of task.scenarios) {
+    if (options.scenarioId && scenario.id !== options.scenarioId) continue;
     const status = scenarioRunStatus(run, scenario.id);
     const scenarioSteps = run.steps.filter(step => step.scenarioId === scenario.id && (step.source === 'ui' || step.source === 'operation-replay'));
     if (!['passed', 'adapted'].includes(status ?? '')) continue;
@@ -104,6 +116,7 @@ export function createOperationCandidates(root: string, task: TestTask, run: Tes
     const steps = scenarioSteps.map((step, index) => buildStep(task, scenario, run, step, index, previous?.steps.find(item => item.id === step.operationStepId)));
     const plan: OperationPlan = {
       $schema: '../../../../schemas/operation.schema.json', apiVersion: 'qa-agent/v2', kind: 'OperationPlan', id, version, status: 'candidate',
+      validationStatus: 'unverified',
       taskId: task.metadata.id, moduleId: task.metadata.moduleId, scenarioId: scenario.id, executionSnapshot: run.context,
       planHash: testPlanHash(task), steps, preconditions: [...task.preconditions, ...scenario.preconditions], cleanup: scenario.cleanup, capabilities: task.capabilities.required,
       sourceRunId: run.id, successfulRuns: 1, supersedes: run.replayStatus === 'adapted' && previous?.status === 'active' ? previous.id : undefined,
@@ -137,5 +150,5 @@ export function approvedOperationForReplay(root: string, task: TestTask, id: str
 }
 
 export function operationSummary(root: string, task: TestTask): unknown[] {
-  return listOperations(root, task).map(plan => ({ id: plan.id, version: plan.version, status: plan.status, scenarioId: plan.scenarioId, platform: plan.executionSnapshot.platform, planHash: plan.planHash, path: operationRef(root, plan) }));
+  return listOperations(root, task).map(plan => ({ id: plan.id, version: plan.version, status: plan.status, validationStatus: plan.validationStatus ?? 'unverified', validatedByRunId: plan.validatedByRunId, scenarioId: plan.scenarioId, platform: plan.executionSnapshot.platform, planHash: plan.planHash, path: operationRef(root, plan) }));
 }

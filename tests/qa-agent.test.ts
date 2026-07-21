@@ -322,6 +322,11 @@ test('creates, approves, and replays a project-local Operation JSON with adaptiv
   assert.equal(candidates[0]!.steps[0]!.action, 'click');
   assert.equal(candidates[0]!.steps[0]!.locator?.strategy, 'accessibility');
   assert.ok(candidates[0]!.steps[0]!.assertionRefs?.includes('business-outcome'));
+  assert.equal(candidates[0]!.validationStatus, 'unverified');
+  const generated = JSON.parse(run(root, 'operation', 'generate', '--module', 'checkout', '--task', 'checkout-replay-flow', '--run', first.id));
+  assert.equal(generated.generated, false);
+  assert.equal(generated.approvalRequired, true);
+  assert.deepEqual(generated.operationCandidates, [candidates[0]!.id]);
   reviewOperation(root, task, candidates[0]!.id, 'approve');
   const replayViaOperationCommand = JSON.parse(run(root, 'operation', 'replay', candidates[0]!.id, '--module', 'checkout', '--task', 'checkout-replay-flow'));
   assert.equal(replayViaOperationCommand.status, 'running');
@@ -352,6 +357,9 @@ test('creates, approves, and replays a project-local Operation JSON with adaptiv
   const replayViaCliCompleted = JSON.parse(run(root, 'run', 'complete', replayViaOperationCommand.runId));
   assert.equal(replayViaCliCompleted.status, 'passed');
   assert.equal(replayViaCliCompleted.executionMode, 'replay');
+  const validatedOperation = listOperations(root, readTask(root, 'checkout', 'checkout-replay-flow')).find(item => item.id === candidates[0]!.id)!;
+  assert.equal(validatedOperation.validationStatus, 'passed');
+  assert.equal(validatedOperation.validatedByRunId, replayViaOperationCommand.runId);
   const replayCliReport = readFileSync(taskRunReportPath(root, 'checkout', 'checkout-replay-flow', replayViaOperationCommand.runId), 'utf8');
   assert.match(replayCliReport, /Execution mode: replay/);
   assert.match(replayCliReport, /## Critical Checkpoints/);

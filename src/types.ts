@@ -173,6 +173,9 @@ export interface OperationPlan {
   id: string;
   version: number;
   status: 'candidate' | 'active' | 'superseded' | 'deprecated';
+  validationStatus?: 'unverified' | 'passed' | 'failed';
+  validatedByRunId?: string;
+  validatedAt?: string;
   taskId: string;
   moduleId: string;
   scenarioId: string;
