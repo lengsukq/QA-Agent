@@ -122,6 +122,55 @@ qa-agent update
 
 `update` 只更新 QA Agent 自己管理且未被修改的文件；发现用户改过的宿主文件时会报告冲突，不会静默覆盖。确认要替换时使用 `qa-agent update --force`；旧版本路径迁移使用 `qa-agent update --migrate`。Task、Run、截图、报告、OperationPlan、RegressionSuite 和 Memory 不会被更新过程删除。
 
+### 已有项目的项目级升级
+
+QA Agent 升级分成两层：全局 npm CLI 升级，以及每个被测项目自己的 `.qa-agent/` 模板和宿主注入文件升级。只升级 npm 不会自动修改任何项目；只需要对实际要升级的项目运行一次 `qa-agent update`。
+
+```bash
+# 1. 升级全局 CLI
+npm install --global qa-agent-skill@latest
+qa-agent --version
+
+# 2. 升级一个已有项目的 QA Agent 模板
+cd /path/to/your-app
+qa-agent update
+
+# 3. 检查项目数据、报告、OperationPlan 和宿主模板
+qa-agent validate
+qa-agent doctor
+```
+
+`qa-agent update` 会同步当前版本的五个 Prompt、总入口 Skill、`test/regression/archive` 子 Skill、平台 Rule/Command/Agent/Prompt，并更新 `.qa-agent/.version`、`.template-hashes.json`。它不会重新创建 Project、Module、Task，也不会删除 Task、Run、截图、报告、OperationPlan、RegressionSuite 或 Memory。
+
+如果项目使用了较早版本的旧目录或旧报告格式，执行结构迁移：
+
+```bash
+cd /path/to/your-app
+qa-agent update --migrate
+qa-agent validate
+```
+
+如果宿主文件被你手工修改过，普通升级会输出冲突并保留你的文件。确认要用当前 QA Agent 模板覆盖时才使用：
+
+```bash
+qa-agent update --force
+```
+
+如果已有项目要增加一个新宿主，直接执行对应平台初始化即可；已配置的平台会自动跳过：
+
+```bash
+cd /path/to/your-app
+qa-agent init --gemini
+```
+
+没有全局安装权限时，可以使用项目级 npm 安装，不同项目分别执行更新：
+
+```bash
+cd /path/to/your-app
+npm install --save-dev qa-agent-skill@latest
+npx qa-agent update
+```
+
 ### 手动分步初始化
 
 如果不希望同时注入宿主，可以先只初始化项目运行边界：

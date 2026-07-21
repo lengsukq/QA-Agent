@@ -120,6 +120,55 @@ qa-agent update
 
 `update` changes only QA-Agent-managed files that users have not modified. It reports conflicts instead of silently overwriting custom host files. Use `qa-agent update --force` to replace them, or `qa-agent update --migrate` for legacy path migration. Tasks, Runs, screenshots, reports, OperationPlans, RegressionSuites, and Memory are preserved.
 
+### Upgrade an existing project
+
+QA Agent upgrades have two layers: upgrade the global npm CLI, then upgrade the `.qa-agent/` templates and host injection files in each tested project. Upgrading npm alone does not modify any project; run `qa-agent update` only in the projects you want to upgrade.
+
+```bash
+# 1. Upgrade the global CLI
+npm install --global qa-agent-skill@latest
+qa-agent --version
+
+# 2. Upgrade one existing project's QA Agent templates
+cd /path/to/your-app
+qa-agent update
+
+# 3. Validate project data, reports, OperationPlans, and host templates
+qa-agent validate
+qa-agent doctor
+```
+
+`qa-agent update` synchronizes the five current prompts, the main Skill, the `test/regression/archive` subskills, and platform Rule/Command/Agent/Prompt files. It updates `.qa-agent/.version` and `.template-hashes.json`. It does not recreate the Project, Modules, or Tasks, and does not delete Tasks, Runs, screenshots, reports, OperationPlans, RegressionSuites, or Memory.
+
+For projects using legacy directories or report formats, run the explicit migration:
+
+```bash
+cd /path/to/your-app
+qa-agent update --migrate
+qa-agent validate
+```
+
+If you manually edited a host file, a normal update reports a conflict and preserves your file. Use `--force` only when you explicitly want to replace host templates:
+
+```bash
+qa-agent update --force
+```
+
+To add a new host to an existing project, run the corresponding platform initialization. Already configured hosts are skipped automatically:
+
+```bash
+cd /path/to/your-app
+qa-agent init --gemini
+```
+
+Without global install permissions, install the CLI in the project and update that project locally:
+
+```bash
+cd /path/to/your-app
+npm install --save-dev qa-agent-skill@latest
+npx qa-agent update
+```
+
 ### Initialize in separate steps
 
 To initialize the project runtime without injecting a host integration:
