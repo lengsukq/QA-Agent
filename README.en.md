@@ -54,7 +54,7 @@ qa-agent configure \
 This does two things:
 
 - Creates the target project's `.qa-agent/` runtime directory, Prompt Bundle, built-in Runtime Skills, and indexes.
-- Writes `.cursor/rules/qa-agent.mdc` and `.cursor/commands/qa-agent.md` into the target project.
+- Writes `.cursor/rules/qa-agent.mdc`, the main Skill, and the `/qa-agent-cli` Command into the target project.
 
 For Codex, install the user-level Skill while initializing the target project:
 
@@ -103,7 +103,7 @@ Project-level injection paths are:
 | Host | Project files |
 | --- | --- |
 | Codex | `.codex/skills/qa-agent/` and shared `.agents/skills/qa-agent/` |
-| Cursor | `.cursor/rules/qa-agent.mdc`, `.cursor/commands/qa-agent.md`, `.cursor/skills/qa-agent/` |
+| Cursor | `.cursor/rules/qa-agent.mdc`, `.cursor/commands/qa-agent-cli.md`, `.cursor/skills/qa-agent-*` |
 | Claude Code | `.claude/skills/qa-agent/`, `.claude/commands/qa-agent.md` |
 | OpenCode | `.opencode/skills/qa-agent/`, `.opencode/commands/qa-agent.md` |
 | Gemini CLI | `.gemini/commands/qa-agent.toml` and shared `.agents/skills/qa-agent/` |
@@ -218,7 +218,7 @@ qa-agent configure \
   --name "My App"
 ```
 
-`configure` only initializes the project and injects the host integration. Use `qa-agent start`, `qa-agent test`, `qa-agent task regression`, and `qa-agent archive` for the QA lifecycle afterward.
+`configure` only initializes the project and injects the host integration. Use `qa-agent start`, `qa-agent test`, `qa-agent operation generate`, `qa-agent task regression`, and `qa-agent archive` for the QA lifecycle afterward. In Cursor, `/qa-agent` is the main Skill and `/qa-agent-cli` is the explicit Command; they no longer share the same name.
 
 The CLI is the execution entry point. Host Skills tell Codex, Cursor, and other Agents when to call the CLI and how to use approved browser, simulator, and diagnostic tools. Project data, Tasks, Runs, screenshots, and reports always remain inside the tested project's `.qa-agent/` boundary.
 
@@ -245,6 +245,7 @@ All hosts share the same business state machine, while the host renderer changes
 
 - `qa-agent`: the main entry point for `start → review → test → archive` and safety gates.
 - `qa-agent-test`: executes approved Tasks, selects explore or compatible replay, and surfaces OperationPlan candidates after reporting.
+- `qa-agent-operation`: writes quick-regression OperationPlan candidates from successful exploratory Runs and requires replay validation after approval.
 - `qa-agent-regression`: runs only approved, context-compatible OperationPlans and RegressionSuites.
 - `qa-agent-archive`: checks Task background, plans, reports, screenshots, suites, and OperationPlans before archiving.
 
@@ -425,7 +426,7 @@ Open `/path/to/your-app` in Cursor and verify these files were created:
 
 ```text
 /path/to/your-app/.cursor/rules/qa-agent.mdc
-/path/to/your-app/.cursor/commands/qa-agent.md
+/path/to/your-app/.cursor/commands/qa-agent-cli.md
 ```
 
 Run `/qa-agent` in Cursor to start the QA workflow. The tested project must still be initialized once:

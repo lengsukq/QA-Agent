@@ -144,7 +144,9 @@ test('installs native host integrations without changing the host-neutral runtim
   }
   assert.ok(existsSync(join(target, '.claude', 'skills', 'qa-agent', 'SKILL.md')));
   assert.ok(existsSync(join(target, '.cursor', 'rules', 'qa-agent.mdc')));
-  assert.ok(existsSync(join(target, '.cursor', 'commands', 'qa-agent.md')));
+  assert.ok(existsSync(join(target, '.cursor', 'commands', 'qa-agent-cli.md')));
+  assert.ok(existsSync(join(target, '.cursor', 'skills', 'qa-agent-test', 'SKILL.md')));
+  assert.ok(existsSync(join(target, '.cursor', 'skills', 'qa-agent-operation', 'SKILL.md')));
   assert.ok(existsSync(join(target, '.opencode', 'skills', 'qa-agent', 'SKILL.md')));
   assert.ok(existsSync(join(target, '.github', 'skills', 'qa-agent', 'SKILL.md')));
   assert.ok(existsSync(join(target, '.github', 'agents', 'qa-agent.agent.md')));
@@ -166,6 +168,8 @@ test('initializes multiple registered hosts, shared skills, metadata, and idempo
   assert.ok(existsSync(join(target, '.cursor', 'rules', 'qa-agent.mdc')));
   assert.ok(existsSync(join(target, '.cursor', 'skills', 'qa-agent', 'skills', 'regression', 'SKILL.md')));
   assert.ok(existsSync(join(target, '.claude', 'commands', 'qa-agent.md')));
+  assert.ok(existsSync(join(target, '.claude', 'skills', 'qa-agent-archive', 'SKILL.md')));
+  assert.ok(existsSync(join(target, '.claude', 'skills', 'qa-agent-operation', 'SKILL.md')));
 
   const repeated = JSON.parse(run(target, 'init', '--cursor'));
   assert.deepEqual(repeated.hosts, []);
@@ -203,6 +207,10 @@ test('update protects user-modified host templates and force refreshes only mana
   const forced = JSON.parse(run(target, 'update', '--force'));
   assert.deepEqual(forced.hostUpdate.updated, ['cursor']);
   assert.doesNotMatch(readFileSync(rule, 'utf8'), /user customization/);
+  const legacyCommand = join(target, '.cursor', 'commands', 'qa-agent.md');
+  writeFileSync(legacyCommand, readFileSync(join(target, '.cursor', 'commands', 'qa-agent-cli.md'), 'utf8'), 'utf8');
+  JSON.parse(run(target, 'update', '--force'));
+  assert.equal(existsSync(legacyCommand), false);
   const hashes = JSON.parse(readFileSync(join(target, '.qa-agent', '.template-hashes.json'), 'utf8'));
   assert.ok(Object.keys(hashes.hashes).length > 0);
 });
@@ -228,7 +236,7 @@ test('configures a project and injects the selected host integration in one CLI 
   assert.equal(configured.project.id, 'configured-app');
   assert.ok(existsSync(join(target, '.qa-agent', 'project.json')));
   assert.ok(existsSync(join(target, '.cursor', 'rules', 'qa-agent.mdc')));
-  assert.ok(existsSync(join(target, '.cursor', 'commands', 'qa-agent.md')));
+  assert.ok(existsSync(join(target, '.cursor', 'commands', 'qa-agent-cli.md')));
 });
 
 test('requires confirmation when the reviewed business contract changes', () => {

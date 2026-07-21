@@ -116,7 +116,7 @@ When the user asks whether a build can be released, use the release workflow rat
 
 Install this Skill once through the matching host integration, then initialize each tested project separately with `qa-agent init`. Use `qa-agent install-host codex`, `claude`, `cursor`, `opencode`, `copilot`, `gemini`, or `agents`; `qa-agent install-skill` remains the Codex-compatible alias.
 
-The platform registry is the source of truth for host flags, paths, and render context. The shared `.agents/skills/qa-agent/` package is the portable Agent Skills layer; platform-specific Rule, Command, Agent, and Prompt files only adapt how the same CLI lifecycle is invoked. The bundled `skills/test`, `skills/regression`, and `skills/archive` subskills divide execution responsibilities without creating separate runtime state machines.
+The platform registry is the source of truth for host flags, paths, and render context. The shared `.agents/skills/qa-agent/` package is the portable Agent Skills layer; platform-specific Rule, Command, Agent, and Prompt files only adapt how the same CLI lifecycle is invoked. The bundled `skills/test`, `skills/operation`, `skills/regression`, and `skills/archive` subskills divide execution responsibilities without creating separate runtime state machines.
 
 An IDE/user-level installation contains only reusable instructions. Never put business rules, credentials or their references, Tasks, Runs, screenshots, evidence, reports, or reviewed Memory in a global host directory. Keep every project fact and artifact inside the active project's `.qa-agent/` boundary.
 

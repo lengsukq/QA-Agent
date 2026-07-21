@@ -29,6 +29,20 @@ export function copySkill(destination: string, force: boolean): void {
   cpSync(skillSource(), destination, { recursive: true, force, errorOnExist: !force });
 }
 
+export const QA_SUBSKILLS = ['test', 'operation', 'regression', 'archive'] as const;
+
+export function copySubSkills(parent: string, force: boolean): string[] {
+  const sourceRoot = skillSource();
+  return QA_SUBSKILLS.map(name => {
+    const destination = join(parent, `qa-agent-${name}`);
+    const source = join(sourceRoot, 'skills', name);
+    if (existsSync(destination) && !force && contentHash(destination) === contentHash(source)) return destination;
+    if (existsSync(destination) && !force) throw new Error(`Host subskill already exists at ${destination}. Use --force only if replacing it is intended.`);
+    cpSync(source, destination, { recursive: true, force, errorOnExist: !force });
+    return destination;
+  });
+}
+
 export function assertWritableTargets(paths: string[], force: boolean): void {
   const existing = paths.filter(existsSync);
   if (existing.length && !force) throw new Error(`Host integration already exists at ${existing.join(', ')}. Use --force only if replacing it is intended.`);

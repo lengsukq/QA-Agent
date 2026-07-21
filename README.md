@@ -56,7 +56,7 @@ qa-agent configure \
 这会完成两件事：
 
 - 创建目标项目的 `.qa-agent/` 运行目录、Prompt Bundle、内置 Runtime Skill 和项目索引。
-- 写入目标项目的 `.cursor/rules/qa-agent.mdc` 与 `.cursor/commands/qa-agent.md`。
+- 写入目标项目的 `.cursor/rules/qa-agent.mdc`、主 Skill 和 `/qa-agent-cli` Command。
 
 Codex 使用用户级 Skill 注入：
 
@@ -105,7 +105,7 @@ qa-agent init \
 | 平台 | 项目级文件 |
 | --- | --- |
 | Codex | `.codex/skills/qa-agent/`、共享 `.agents/skills/qa-agent/` |
-| Cursor | `.cursor/rules/qa-agent.mdc`、`.cursor/commands/qa-agent.md`、`.cursor/skills/qa-agent/` |
+| Cursor | `.cursor/rules/qa-agent.mdc`、`.cursor/commands/qa-agent-cli.md`、`.cursor/skills/qa-agent-*` |
 | Claude Code | `.claude/skills/qa-agent/`、`.claude/commands/qa-agent.md` |
 | OpenCode | `.opencode/skills/qa-agent/`、`.opencode/commands/qa-agent.md` |
 | Gemini CLI | `.gemini/commands/qa-agent.toml`、共享 `.agents/skills/qa-agent/` |
@@ -220,7 +220,7 @@ qa-agent configure \
   --name "My App"
 ```
 
-`configure` 只负责项目初始化和宿主注入；后续通过 `qa-agent start`、`qa-agent test`、`qa-agent task regression`、`qa-agent archive` 等命令执行 QA 工作流。
+`configure` 只负责项目初始化和宿主注入；后续通过 `qa-agent start`、`qa-agent test`、`qa-agent operation generate`、`qa-agent task regression`、`qa-agent archive` 等命令执行 QA 工作流。Cursor 中 `/qa-agent` 是主 Skill，`/qa-agent-cli` 是显式 Command；两者不会再使用同一个名称。
 
 CLI 是执行入口；宿主 Skill 只负责让 Codex、Cursor 等 Agent 知道何时调用哪些 CLI 命令，以及如何使用浏览器、模拟器和其他已批准工具。项目数据、Task、Run、截图和报告始终保存在被测项目的 `.qa-agent/` 内。
 
@@ -247,6 +247,7 @@ qa-agent archive --module checkout --task checkout-basic-flow
 
 - `qa-agent`：总入口，负责 `start → review → test → archive` 的对话引导和安全门禁。
 - `qa-agent-test`：执行已审批 Task，自动选择首次探索或兼容回归，并在报告后主动提示 OperationPlan 候选。
+- `qa-agent-operation`：从成功的探索 Run 写入快速回归 OperationPlan 候选；审批后要求通过 replay 实测。
 - `qa-agent-regression`：只运行已审批、上下文兼容的 OperationPlan 和 RegressionSuite。
 - `qa-agent-archive`：检查背景、计划、报告、截图、回归套件和 OperationPlan 完整性后归档。
 
@@ -430,7 +431,7 @@ node bin/qa-agent.mjs install-host cursor \
 
 ```text
 /path/to/your-app/.cursor/rules/qa-agent.mdc
-/path/to/your-app/.cursor/commands/qa-agent.md
+/path/to/your-app/.cursor/commands/qa-agent-cli.md
 ```
 
 在 Cursor 中执行 `/qa-agent` 开始 QA 工作流。首次使用仍需在被测项目中初始化：
