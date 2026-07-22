@@ -34,7 +34,7 @@ Quick Check is the default. Do not force strict planning onto a one-off test.
 9. Complete only through `qa-agent run complete`. Runtime owns the report and Quick Task PRD.
 10. Present the result: outcome, passed checks, failures or blockers, screenshots, and cleanup.
 11. If Runtime reports `pythonRegressionEligibility.eligible=true`, ask once whether the user wants a Python regression script generated from that exact completed Run.
-12. Generation consent authorizes a draft only. Read `references/python-regression.md`, generate the Python file from the recorded Run steps, save it with `qa-agent regression draft`, and show the complete script or complete diff.
+12. Generation consent authorizes a draft only. Read `references/python-regression.md` and `references/recommended-regression-stack.md`, prefer the recommended platform adapter when the project has no established framework, generate the Python file from the recorded Run steps, save it with `qa-agent regression draft`, and show the complete script or complete diff.
 13. Publish with `qa-agent regression publish` only after a separate explicit user approval of the reviewed script.
 14. For later reruns, load `qa-agent-regression-test`; it runs the formal script and reviews the Runtime-generated report without editing or replanning the flow.
 15. On explicit session closure call `qa-agent finish`. Session finish is not Task archive.

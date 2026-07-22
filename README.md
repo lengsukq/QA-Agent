@@ -98,6 +98,66 @@ qa-agent configure \
 
 普通用户不需要手动修改其中的 JSON 文件。
 
+## 推荐回归技术栈
+
+这是 QA Agent 的默认推荐方案，不是强制依赖。项目已有自动化框架时，只要能够直接命令行执行、输出 QA Agent `result.json` 并保留必要证据，就可以继续使用现有方案。
+
+### Web 外部端
+
+```text
+Python 3.12+
++ pytest
++ pytest-playwright
++ Playwright
+```
+
+推荐用于浏览器操作、DOM 定位、截图、视频、网络与控制台证据以及 Playwright Trace。
+
+### iOS 模拟器端
+
+```text
+Python 3.12+
++ pytest
++ xcrun simctl
++ fb-idb CLI
++ idb_companion
+```
+
+建议由 `simctl` 管理模拟器、应用、权限、截图和视频，由 `fb-idb` 与 `idb_companion` 提供 UI 查询和自动化能力，由 pytest 管理 Fixture、断言、参数化、Cleanup 和报告。
+
+### Agent 辅助探索
+
+```text
+ios-simulator-mcp
+```
+
+它用于首次 Agent 探索、截图和 UI 层级检查，不作为正式 Python 回归脚本的唯一运行依赖。
+
+### 统一输出
+
+```text
+截图
++ DOM / Accessibility UI Tree
++ Playwright Trace 或 iOS 执行日志
++ QA Agent result.json
++ JUnit XML
++ Allure Results（可选）
+```
+
+执行：
+
+```bash
+qa-agent doctor
+```
+
+可以查看当前项目平台对应的推荐环境、已安装工具和缺失项。推荐工具缺失不会自动阻止 QA Agent；已有 Host Bridge 满足结果与证据协议时仍可继续使用。
+
+完整说明见：
+
+```text
+skill/qa-agent/references/recommended-regression-stack.md
+```
+
 ## 最简单的使用方式
 
 在 Agent 对话中直接说：

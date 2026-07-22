@@ -11,6 +11,8 @@
 | `qa-agent doctor` | Inspect project and host-tool readiness. |
 | `qa-agent update --migrate` | Update managed host files and migrate legacy assets. |
 
+`qa-agent doctor` also reports the advisory Web and iOS regression stack from `references/recommended-regression-stack.md`, including Python, pytest, Playwright, simctl, fb-idb, idb_companion, optional ios-simulator-mcp, and optional Allure availability. Missing recommended tools do not block QA Agent when another approved adapter satisfies the result contract.
+
 ## Planning and execution
 
 | Command | Purpose |

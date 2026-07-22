@@ -97,7 +97,7 @@ Load the installed qa-agent Skill and references/workflow.md before acting.
 - Runtime is the only state, evidence, report, approval, script-publication, and regression-result owner. Never edit Runtime JSON or write a competing report.
 - On later turns call qa-agent continue. Use UI tools only when uiExecutionAllowed=true, mustStop=false, and runId exists. Pass --session or QA_AGENT_SESSION_KEY when available.
 - After an eligible real report, offer Python from the exact executed flow. The first confirmation permits a draft only.
-- Generate the draft as the Agent, save it with qa-agent regression draft, show the complete script or diff, and publish only after a second explicit approval. Runtime never authors Python.
+- Generate the draft as the Agent, read references/recommended-regression-stack.md when the project has no established adapter, save it with qa-agent regression draft, show the complete script or diff, and publish only after a second explicit approval. Runtime never authors Python.
 - For an already published Python script, load qa-agent-regression-test. It runs the existing script and reviews the Runtime report without generating, editing, approving, or publishing code.
 - Use qa-agent-plan only for strict pre-execution planning. Task, Module, and Release regression select validated Python scripts directly.
 - Ask at most one question per turn, infer internal IDs, and use the user's language.

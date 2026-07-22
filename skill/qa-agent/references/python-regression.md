@@ -7,6 +7,27 @@ Skill ownership:
 - main `qa-agent`: asks whether to generate, writes the draft, presents it for review, and publishes after separate approval;
 - `qa-agent-regression-test`: runs an already published script and reviews the Runtime-generated report.
 
+## Recommended platform stack
+
+Before generating a draft, read `references/recommended-regression-stack.md`.
+
+Default recommendation when the project has no established regression framework:
+
+```text
+Web
+→ Python 3.12+ + pytest + pytest-playwright + Playwright
+
+iOS Simulator
+→ Python 3.12+ + pytest + xcrun simctl + fb-idb + idb_companion
+
+Agent-assisted iOS exploration
+→ ios-simulator-mcp
+```
+
+This recommendation is not a mandatory Runtime dependency. Reuse an existing project framework when it already supports direct command-line execution, the QA Agent result contract, screenshots, UI state evidence, logs or Trace, JUnit XML, and Cleanup.
+
+Allure output is optional. `result.json`, screenshots, and the Runtime-generated report remain authoritative.
+
 ## Approval boundaries
 
 Generation approval and publication approval are separate decisions.

@@ -102,6 +102,11 @@ test('initializes v0.3.0 without replay directories and exposes simplified help'
   const help = run(root, 'help');
   for (const commandName of ['init', 'check', 'continue', 'finish', 'doctor', 'update']) assert.match(help, new RegExp(commandName));
   assert.doesNotMatch(help, /operation plan|operation replay/i);
+  const doctor = json(root, 'doctor');
+  assert.equal(doctor.recommendedRegressionStack.policy, 'recommended-not-required');
+  assert.equal(doctor.recommendedRegressionStack.platforms[0]?.platform, 'web');
+  assert.equal(doctor.recommendedRegressionStack.platforms[0]?.mandatory, false);
+  assert.ok(doctor.recommendedRegressionStack.unifiedOutput.includes('result.json'));
   const module = createModule(root, { id: 'auth', name: 'Auth', description: 'Auth', platforms: ['web'] });
   const task = createTaskSkeleton(module, 'login'); saveTask(root, task);
   const taskRoot = taskDirectory(root, 'auth', 'login');
@@ -274,6 +279,7 @@ test('host force-update removes stale replay references and the old mixed regres
   run(root, 'install-host', 'cursor', '--project', root, '--force');
   assert.equal(existsSync(legacyReference), false);
   assert.equal(existsSync(legacySkill), false);
+  assert.ok(existsSync(join(main, 'references', 'recommended-regression-stack.md')));
   assert.ok(existsSync(join(root, '.cursor', 'skills', 'qa-agent-regression-test', 'SKILL.md')));
 });
 

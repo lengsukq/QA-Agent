@@ -141,10 +141,12 @@ export function validateSkill(skillRoot: string): ValidationResult {
   const text = readFileSync(path, 'utf8'); const errors: string[] = [];
   if (!/^---\nname: [a-z0-9-]+\ndescription: .+\n---\n/s.test(text)) errors.push('SKILL.md: invalid frontmatter.');
   if (text.includes('[TODO:')) errors.push('SKILL.md: contains TODO text.');
-  const workflowPath = join(skillRoot, 'references', 'workflow.md'); const pythonPath = join(skillRoot, 'references', 'python-regression.md');
-  for (const file of [workflowPath, pythonPath]) if (!existsSync(file)) errors.push(`${file}: not found`);
+  const workflowPath = join(skillRoot, 'references', 'workflow.md'); const pythonPath = join(skillRoot, 'references', 'python-regression.md'); const recommendedStackPath = join(skillRoot, 'references', 'recommended-regression-stack.md');
+  for (const file of [workflowPath, pythonPath, recommendedStackPath]) if (!existsSync(file)) errors.push(`${file}: not found`);
   for (const phase of ['plan', 'regression-test']) { const phasePath = join(skillRoot, 'skills', phase, 'SKILL.md'); if (!existsSync(phasePath)) { errors.push(`${phasePath}: not found`); continue; } const phaseText = readFileSync(phasePath, 'utf8'); if (!new RegExp(`^---\\nname: qa-agent-${phase}\\ndescription: .+\\n---\\n`, 's').test(phaseText)) errors.push(`${phasePath}: invalid frontmatter.`); if (!text.includes(`qa-agent-${phase}`)) errors.push(`SKILL.md: route qa-agent-${phase} is missing.`); if (phase === 'regression-test' && (!phaseText.includes('qa-agent regression run') || /qa-agent regression (?:draft|publish)/.test(phaseText))) errors.push(`${phasePath}: regression-test must only run formal Python scripts.`); }
-  const allSkillText = [text, existsSync(workflowPath) ? readFileSync(workflowPath, 'utf8') : '', existsSync(pythonPath) ? readFileSync(pythonPath, 'utf8') : '', ...['plan', 'regression-test'].map(name => { const p = join(skillRoot, 'skills', name, 'SKILL.md'); return existsSync(p) ? readFileSync(p, 'utf8') : ''; })].join('\n');
+  const recommendedStackText = existsSync(recommendedStackPath) ? readFileSync(recommendedStackPath, 'utf8') : '';
+  if (recommendedStackText && (!/Python 3\.12/.test(recommendedStackText) || !/pytest-playwright/.test(recommendedStackText) || !/xcrun simctl/.test(recommendedStackText) || !/fb-idb/.test(recommendedStackText) || !/idb_companion/.test(recommendedStackText) || !/ios-simulator-mcp/.test(recommendedStackText) || !/result\.json/.test(recommendedStackText) || !/junit\.xml/.test(recommendedStackText))) errors.push(`${recommendedStackPath}: recommended stack contract is incomplete.`);
+  const allSkillText = [text, existsSync(workflowPath) ? readFileSync(workflowPath, 'utf8') : '', existsSync(pythonPath) ? readFileSync(pythonPath, 'utf8') : '', recommendedStackText, ...['plan', 'regression-test'].map(name => { const p = join(skillRoot, 'skills', name, 'SKILL.md'); return existsSync(p) ? readFileSync(p, 'utf8') : ''; })].join('\n');
   if (/OperationPlan|operation-plans|RegressionSuite|regression-suite|sourceOperationPlanIds/.test(allSkillText)) errors.push('Skill package still references removed OperationPlan or RegressionSuite assets.');
-  return { valid: errors.length === 0, errors, checked: 5 };
+  return { valid: errors.length === 0, errors, checked: 6 };
 }

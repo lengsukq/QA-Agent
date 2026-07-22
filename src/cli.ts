@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { availableCapabilities, capabilityAdvice } from './capabilities.ts';
+import { availableCapabilities, capabilityAdvice, platformCapabilities } from './capabilities.ts';
 import { beginAgentGuidedRun, completeAgentGuidedRun, recordAgentStep, recordCleanupFinding, recordHostEvidence, recordRecoveryAttempt, recordVisualFinding } from './engine.ts';
 import { readIndex, rebuildIndexes } from './indexer.ts';
 import { createTaskSkeleton, planModule, taskPlan } from './planning.ts';
@@ -40,6 +40,7 @@ import {
   runPythonRegression,
   markPythonRegressionsStaleForPlanHash,
 } from './python-regression.ts';
+import { recommendedRegressionStackDiagnosis } from './recommended-stack.ts';
 
 const args = process.argv.slice(2);
 const packageMetadata = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
@@ -53,7 +54,7 @@ Commands:
   configure --project PROJECT_DIRECTORY --host <${hostNames}> [--scope project|user] [init options] [--force]
   install-skill [--path SKILLS_DIRECTORY] [--force]   (Codex compatibility alias)
   install-host <${hostNames}> [--scope project|user] [--project PROJECT_DIRECTORY] [--path SKILLS_DIRECTORY] [--force]
-  doctor | validate | migrate | index rebuild
+  doctor [--platforms web,ios] | validate | migrate | index rebuild
   update [--force] [--migrate]
   check --request TEXT [--module ID] [--task ID] [--session SESSION_KEY] [--platforms web,android,ios] [--risk low|medium|high|critical] [execution context flags]
   continue [--session SESSION_KEY]
@@ -297,7 +298,17 @@ async function main(): Promise<void> {
     const projectRoot = findProjectRoot();
     if (!projectRoot) return output({ ok: false, message: 'No QA project found. Run qa-agent init.' });
     const available = availableCapabilities(projectRoot);
-    output({ ok: true, projectRoot, availableCapabilities: available, notes: available.includes('browser.interact') ? [] : capabilityAdvice(['browser.interact']) }); return;
+    const projectPlatforms = listFlag('--platforms') ?? readProject(projectRoot).platforms;
+    const requiredCapabilities = [...new Set(projectPlatforms.flatMap(platformCapabilities))];
+    const missingCapabilities = requiredCapabilities.filter(capability => !available.includes(capability));
+    output({
+      ok: true,
+      projectRoot,
+      configuredPlatforms: projectPlatforms,
+      availableCapabilities: available,
+      notes: capabilityAdvice(missingCapabilities),
+      recommendedRegressionStack: recommendedRegressionStackDiagnosis(projectRoot, projectPlatforms),
+    }); return;
   }
   if (group === 'update') {
     const projectRoot = root();
@@ -398,7 +409,13 @@ ${advancedUsage}`);
     const config = readJson<{ version: number; connections: Array<{ id: string; capabilities: string[]; status: 'available' | 'unavailable'; permissionStatus?: PermissionStatus; version?: string; host?: string; attestedAt?: string }> }>(path);
     if (action === 'list') { output(config.connections); return; }
     if (action === 'doctor') {
-      if (flag('--platform')) { output(hostCapabilityDiagnosis(projectRoot, requiredFlag('--platform'))); return; }
+      if (flag('--platform')) {
+        const platform = requiredFlag('--platform');
+        output({
+          ...hostCapabilityDiagnosis(projectRoot, platform),
+          recommendedRegressionStack: recommendedRegressionStackDiagnosis(projectRoot, [platform]),
+        }); return;
+      }
       const checks = config.connections.map(connection => ({ id: connection.id, status: connection.status, permissionStatus: connection.permissionStatus ?? 'unknown', attestedAt: connection.attestedAt, healthy: connection.status === 'available' && connection.capabilities.length > 0 && connection.permissionStatus === 'verified', issue: connection.status !== 'available' ? 'host did not attest this tool as available' : !connection.capabilities.length ? 'no capabilities declared by host' : connection.permissionStatus !== 'verified' ? 'host did not attest required permissions as verified' : undefined }));
       output({ healthy: checks.length > 0 && checks.every(check => check.healthy), connections: checks }); return;
     }

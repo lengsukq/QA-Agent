@@ -98,6 +98,66 @@ Runtime data is stored under:
 
 Users should not edit Runtime-owned JSON manually.
 
+## Recommended regression stack
+
+This is QA Agent's default recommendation, not a mandatory dependency. An existing automation framework may remain in use when it supports direct command-line execution, the QA Agent `result.json` contract, and the required evidence.
+
+### Web external testing
+
+```text
+Python 3.12+
++ pytest
++ pytest-playwright
++ Playwright
+```
+
+Recommended for browser automation, DOM locators, screenshots, video, console and network evidence, and Playwright Trace.
+
+### iOS Simulator testing
+
+```text
+Python 3.12+
++ pytest
++ xcrun simctl
++ fb-idb CLI
++ idb_companion
+```
+
+Use `simctl` for simulator, app, permission, screenshot, and video management; use `fb-idb` with `idb_companion` for UI queries and automation; use pytest for fixtures, assertions, parameterization, cleanup, and reports.
+
+### Agent-assisted exploration
+
+```text
+ios-simulator-mcp
+```
+
+Use it for the first Agent-guided exploration, screenshots, and UI hierarchy inspection. It should not be the only execution dependency of a formal Python regression script.
+
+### Unified output
+
+```text
+screenshots
++ DOM / Accessibility UI Tree
++ Playwright Trace or iOS execution logs
++ QA Agent result.json
++ JUnit XML
++ Allure Results (optional)
+```
+
+Run:
+
+```bash
+qa-agent doctor
+```
+
+to inspect the recommended environment, detected tools, and missing items for the project's configured platforms. Missing recommended tools do not automatically block QA Agent when another Host Bridge satisfies the result and evidence contracts.
+
+Full reference:
+
+```text
+skill/qa-agent/references/recommended-regression-stack.md
+```
+
 ## Simplest interaction
 
 In the Agent conversation, say:

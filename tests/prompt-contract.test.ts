@@ -19,6 +19,7 @@ function skillText(): string {
     join(skillRoot, 'SKILL.md'),
     join(skillRoot, 'references', 'workflow.md'),
     join(skillRoot, 'references', 'python-regression.md'),
+    join(skillRoot, 'references', 'recommended-regression-stack.md'),
     join(skillRoot, 'references', 'cli-command-reference.md'),
     join(skillRoot, 'skills', 'plan', 'SKILL.md'),
     join(skillRoot, 'skills', 'regression-test', 'SKILL.md'),
@@ -27,7 +28,7 @@ function skillText(): string {
 }
 
 test('uses installed workflow references without a project Prompt Bundle', () => {
-  for (const file of ['workflow.md', 'python-regression.md', 'cli-command-reference.md']) assert.ok(existsSync(join(skillRoot, 'references', file)));
+  for (const file of ['workflow.md', 'python-regression.md', 'recommended-regression-stack.md', 'cli-command-reference.md']) assert.ok(existsSync(join(skillRoot, 'references', file)));
   const workflow = readFileSync(join(skillRoot, 'references', 'workflow.md'), 'utf8');
   for (const heading of ['## Request classification', '## Session continuity', '## Daily Quick workflow', '## Strict workflow', '## Session finish', '## User-visible language', '## Safety boundaries']) assert.match(workflow, new RegExp(heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-no-prompt-bundle-'));
@@ -35,6 +36,15 @@ test('uses installed workflow references without a project Prompt Bundle', () =>
   assert.equal(existsSync(join(root, '.qa-agent', 'prompts')), false);
   assert.equal(existsSync(join(repository, 'src', 'prompts.ts')), false);
   assert.equal(existsSync(join(repository, 'src', 'workflow-guidance.ts')), false);
+});
+
+test('documents one advisory recommended regression stack for Web and iOS', () => {
+  const stack = readFileSync(join(skillRoot, 'references', 'recommended-regression-stack.md'), 'utf8');
+  for (const phrase of ['recommended, not mandatory', 'Python 3.12', 'pytest-playwright', 'Playwright Trace', 'xcrun simctl', 'fb-idb', 'idb_companion', 'ios-simulator-mcp', 'result.json', 'junit.xml', 'allure-results']) assert.match(stack, new RegExp(phrase, 'i'));
+  const main = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
+  const python = readFileSync(join(skillRoot, 'references', 'python-regression.md'), 'utf8');
+  assert.match(main, /recommended-regression-stack\.md/);
+  assert.match(python, /recommended-regression-stack\.md/);
 });
 
 test('keeps one compact ordinary QA Skill with Python draft and publication ownership', () => {

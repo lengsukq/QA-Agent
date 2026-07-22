@@ -7,7 +7,7 @@ description: Run previously approved Python regression scripts and present the R
 
 Use this Skill only when the Task already contains an approved Python script.
 
-Do not create, edit, approve, or publish scripts. Do not rediscover the business flow or change step order.
+Do not create, edit, approve, or publish scripts. Do not rediscover the business flow, change step order, or replace the formal script's declared adapter with another recommended stack during execution.
 
 ## Run
 
