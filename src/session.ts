@@ -16,7 +16,7 @@ interface IndexedTask {
   mode?: QaMode;
   updatedAt: string;
   currentRunId?: string;
-  latestRunId?: string;
+  sourceRunId?: string;
 }
 
 export interface SessionIdentity {
@@ -243,7 +243,7 @@ export function resolveActiveTaskSession(root: string, explicitSessionKey?: stri
         host: existing.host,
         moduleId: existing.moduleId,
         taskId: existing.taskId,
-        runId: indexed?.currentRunId ?? indexed?.latestRunId ?? existing.runId,
+        runId: indexed?.currentRunId ?? indexed?.sourceRunId ?? existing.runId,
       });
       return { status: 'resolved', binding, task, autoBound: false };
     }
@@ -264,7 +264,7 @@ export function resolveActiveTaskSession(root: string, explicitSessionKey?: stri
     sessionKey: explicitSessionKey,
     moduleId: selected.moduleId,
     taskId: selected.id,
-    runId: selected.currentRunId ?? selected.latestRunId,
+    runId: selected.currentRunId ?? selected.sourceRunId,
   });
   return { status: 'resolved', binding, task: candidateFromIndex(selected), autoBound: true };
 }

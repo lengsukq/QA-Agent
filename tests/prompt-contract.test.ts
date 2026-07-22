@@ -60,7 +60,7 @@ test('guides first-time users to run Doctor after initialization', () => {
 test('keeps one compact ordinary QA Skill with Python draft and publication ownership', () => {
   const main = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
   assert.ok(words(main) < 600, `main Skill is too large: ${words(main)} words`);
-  for (const phrase of ['Quick Check', 'qa-agent check', 'qa-agent continue', 'qa-agent finish', 'qa-agent-plan', 'qa-agent-regression-test', 'user-owned question', 'business test flow', 'pythonRegressionEligibility', 'qa-agent regression draft', 'qa-agent regression publish']) assert.match(main, new RegExp(phrase, 'i'));
+  for (const phrase of ['Quick Check', 'qa-agent check', 'qa-agent continue', 'qa-agent finish', 'qa-agent-plan', 'qa-agent-regression-test', 'user-owned question', 'Task PRD', '确认开始测试', 'pythonRegressionEligibility', 'qa-agent regression draft', 'qa-agent regression publish']) assert.match(main, new RegExp(phrase, 'i'));
   assert.doesNotMatch(main, /qa-agent-(quick|start|review|test|result|finish|operation|recovery|archive)/);
 });
 
@@ -73,18 +73,55 @@ test('installs only plan and regression-test advanced Skills', () => {
 
 test('keeps host guidance thin and routes published scripts to regression-test', () => {
   assert.ok(words(sharedGuidance) < 240, `shared host guidance is too large: ${words(sharedGuidance)} words`);
-  for (const phrase of ['references/workflow.md', 'qa-agent continue', 'QA_AGENT_SESSION_KEY', 'qa-agent-plan', 'qa-agent-regression-test', 'validated Python scripts']) assert.match(sharedGuidance, new RegExp(phrase, 'i'));
+  for (const phrase of ['references/workflow.md', 'qa-agent continue', 'QA_AGENT_SESSION_KEY', 'Task prd.md', '确认开始测试', 'qa-agent-plan', 'qa-agent-regression-test', 'validated Python scripts']) assert.match(sharedGuidance, new RegExp(phrase, 'i'));
   assert.doesNotMatch(sharedGuidance, /approved_unverified|planHash|resumeToken|contextHash/);
 });
 
 test('keeps Quick completion and Session finish assets minimal', () => {
   const text = sourceText();
   assert.doesNotMatch(text, /summaryRef|taskSummaryPath|observedScenarioRefs|SessionJournal/);
+  assert.doesNotMatch(text, /taskRunDirectory|taskRunIndexPath|taskRunLatestPath|reportIndexRef:|runRefs:/);
   assert.match(readFileSync(join(repository, 'src', 'task-finalizer.ts'), 'utf8'), /prd\.md/);
   assert.match(readFileSync(join(repository, 'src', 'engine.ts'), 'utf8'), /finalizeTask\(root/);
   assert.match(readFileSync(join(skillRoot, 'SKILL.md'), 'utf8'), /Session finish is not Task archive/i);
   assert.match(readFileSync(join(skillRoot, 'references', 'workflow.md'), 'utf8'), /Session finish and Task archive are different/i);
   assert.equal(existsSync(join(repository, 'src', 'session-journal.ts')), false);
+});
+
+test('keeps one Source Run per Task and routes later execution to regression-runs', () => {
+  const project = readFileSync(join(repository, 'src', 'project.ts'), 'utf8');
+  const types = readFileSync(join(repository, 'src', 'types.ts'), 'utf8');
+  const engine = readFileSync(join(repository, 'src', 'engine.ts'), 'utf8');
+  const workflow = readFileSync(join(skillRoot, 'references', 'workflow.md'), 'utf8');
+  const cliReference = readFileSync(join(skillRoot, 'references', 'cli-command-reference.md'), 'utf8');
+  const readme = readFileSync(join(repository, 'README.md'), 'utf8');
+  for (const text of [project, types, workflow, readme]) assert.match(text, /source-run/i);
+  assert.match(workflow, /Publication.*Source Run is frozen|Source Run is frozen/i);
+  assert.match(workflow, /regression-runs\//i);
+  assert.match(engine, /source_run_restarted/);
+  assert.match(engine, /Source Run .* frozen|formal Python regression script/);
+  assert.match(cliReference, /There is no exploratory `runs\/<run-id>\/` history/i);
+  assert.doesNotMatch(project, /taskRunDirectory|taskRunIndexPath|taskRunLatestPath/);
+  assert.doesNotMatch(project, /runs\.jsonl/);
+  assert.doesNotMatch(types, /reportIndexRef|runRefs:/);
+  assert.doesNotMatch(readme, /└── runs\/\s*\n\s*└── <run-id>/);
+});
+
+test('requires Task PRD review and exact start confirmation before UI execution', () => {
+  const main = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
+  const workflow = readFileSync(join(skillRoot, 'references', 'workflow.md'), 'utf8');
+  const plan = readFileSync(join(skillRoot, 'skills', 'plan', 'SKILL.md'), 'utf8');
+  const cliReference = readFileSync(join(skillRoot, 'references', 'cli-command-reference.md'), 'utf8');
+  for (const text of [main, workflow, plan, cliReference]) {
+    assert.match(text, /确认开始测试/);
+    assert.match(text, /Task (?:`?prd\.md`?|PRD)/i);
+  }
+  assert.match(main, /must not start a Run/i);
+  assert.match(main, /Every Scenario must contain ordered `steps`/i);
+  assert.match(workflow, /No Run or UI action is allowed/i);
+  assert.match(cliReference, /fails without creating a Run/i);
+  assert.match(readFileSync(join(repository, 'src', 'engine.ts'), 'utf8'), /before creating a Run/);
+  assert.match(readFileSync(join(repository, 'src', 'task-prd.ts'), 'utf8'), /\| 步骤 \| 操作 \| 预期结果 \|/);
 });
 
 test('requires separate generation and publication approval with Run-level flow traceability', () => {
@@ -94,8 +131,8 @@ test('requires separate generation and publication approval with Run-level flow 
   const regressionSkill = readFileSync(join(skillRoot, 'skills', 'regression-test', 'SKILL.md'), 'utf8');
   for (const phrase of ['Generation approval', 'publication approval', 'Runtime never authors Python', 'sourceFlowHash', 'QA_AGENT_REGRESSION:', 'QA_AGENT_RESULT_PATH', 'qa-agent/python-regression-result/v1']) assert.match(contract, new RegExp(phrase, 'i'));
   assert.match(main, /Generation consent authorizes a draft only/i);
-  assert.match(workflow, /first confirmation permits only draft generation/i);
-  assert.match(workflow, /second explicit approval/i);
+  assert.match(workflow, /confirmation permits only draft generation/i);
+  assert.match(workflow, /separate script-publication approval/i);
   assert.match(regressionSkill, /previously approved Python regression scripts/i);
   assert.match(regressionSkill, /Runtime-generated regression report/i);
   assert.doesNotMatch(regressionSkill, /qa-agent regression draft|qa-agent regression publish/);
@@ -111,9 +148,9 @@ test('removes the OperationPlan and RegressionSuite product model completely', (
   assert.doesNotMatch(production, /OperationPlan|operation-plans|RegressionSuite|regression-suite|sourceOperationPlanIds|replayStatus|replayStage|replayCursor/);
 });
 
-test('publishes v0.3.2 without source and lockfile implementation payloads', () => {
+test('publishes v0.3.3 without source and lockfile implementation payloads', () => {
   const pkg = JSON.parse(readFileSync(join(repository, 'package.json'), 'utf8')) as { version: string; files: string[] };
-  assert.equal(pkg.version, '0.3.2');
+  assert.equal(pkg.version, '0.3.3');
   assert.equal(pkg.files.includes('src/'), false);
   assert.equal(pkg.files.includes('package-lock.json'), false);
 });

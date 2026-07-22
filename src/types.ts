@@ -16,7 +16,7 @@ export type TestPriority = 'p0' | 'p1' | 'p2' | 'p3';
 export type RegressionFrequency = 'every-change' | 'every-release' | 'scheduled' | 'manual';
 export type RegressionProfile = 'fast' | 'normal' | 'full';
 export type QaMode = 'quick' | 'regression';
-export type ApprovalPolicy = 'side-effect-only' | 'test-plan-and-side-effects';
+export type ApprovalPolicy = 'test-plan-and-side-effects';
 export type RegressionSelectionScope = 'task' | 'module' | 'release';
 export type RegressionSelectionPolicy = 'all-validated-python-regressions' | 'priority-filtered' | 'release-gate-plus-impact';
 export type PythonRegressionStatus = 'approved_unverified' | 'validated' | 'stale' | 'deprecated';
@@ -25,7 +25,7 @@ export type PythonRegressionContractStatus = 'completed' | 'blocked' | 'invalid_
 export type WorkflowStatus = 'setup_required' | 'approval_required' | 'ready_to_run' | 'running' | 'result_ready' | 'completed' | 'blocked';
 export type WorkflowPhase = 'intake' | 'discovery' | 'planning' | 'approval' | 'preflight' | 'execution' | 'assertion' | 'result_review' | 'regression' | 'recovery' | 'archive';
 export type WorkflowGateStatus = 'satisfied' | 'blocking' | 'not_required';
-export interface WorkflowGate { id: string; status: WorkflowGateStatus; reasonCode?: string; requiredActor?: 'human' | 'runtime' | 'host'; artifactHash?: string; }
+export interface WorkflowGate { id: string; status: WorkflowGateStatus; reasonCode?: string; requiredActor?: 'agent' | 'human' | 'runtime' | 'host'; artifactHash?: string; }
 export interface NextAction { id: string; description: string; command?: string; requiresHuman: boolean; requiredActor?: 'agent' | 'human' | 'runtime' | 'host'; blockingGate?: string; deprecatedAlias?: boolean; canonicalCommand?: string; }
 export type WorkflowTodoStatus = 'pending' | 'in_progress' | 'blocked' | 'completed';
 
@@ -346,6 +346,12 @@ export interface VisualAssertion {
   importance: RiskLevel;
 }
 
+export interface PlannedTestStep {
+  id: string;
+  action: string;
+  expected: string;
+}
+
 export interface EvidencePolicy {
   capture: 'every-action' | 'action-and-key-state';
   visual: 'adaptive' | 'strict' | 'minimal';
@@ -361,7 +367,7 @@ export interface ProjectConfig {
   roles?: string[];
   defaultContext: { environment: string; platform: string; role: string };
   source: { mode: 'host-provided'; root: string };
-  storage: { format: 'json'; runIndexFormat: 'jsonl' };
+  storage: { format: 'json' };
   createdAt: string;
   updatedAt: string;
 }
@@ -406,6 +412,7 @@ export interface TestScenario {
   requirementRefs?: string[];
   sourceRefs?: string[];
   deferredReason?: string;
+  plannedSteps: PlannedTestStep[];
   visualAssertions?: VisualAssertion[];
 }
 
@@ -414,6 +421,12 @@ export interface PlanDraftAssertion {
   expected: string;
   importance?: RiskLevel;
   businessRuleRef?: string;
+}
+
+export interface PlanDraftStep {
+  id?: string;
+  action: string;
+  expected: string;
 }
 
 export interface PlanDraftScenario {
@@ -430,6 +443,7 @@ export interface PlanDraftScenario {
   priority?: TestPriority;
   requirementRefs?: string[];
   sourceRefs?: string[];
+  steps: PlanDraftStep[];
   visualAssertions?: PlanDraftAssertion[];
 }
 
@@ -475,8 +489,8 @@ export interface TestTask {
   prdRef?: 'prd.md';
   finalization?: TaskFinalizationState;
   pythonRegressionRefs?: string[];
-  reportIndexRef: string;
-  runRefs: string[];
+  sourceRunRef?: 'source-run/run.json';
+  sourceReportRef?: 'source-run/report.md';
   moduleSnapshot?: ModuleSnapshot;
   requirements?: TestRequirements;
   testPlan?: TestPlan;

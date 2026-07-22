@@ -21,8 +21,8 @@ test('continue auto-binds the only unfinished Task when the session has no point
   run(root, 'session', 'clear', '--session', 'temporary-window');
 
   const continued = JSON.parse(run(root, 'continue', '--session', 'new-window'));
-  assert.equal(continued.status, 'human_decision_required');
+  assert.equal(continued.status, 'action_ready');
   assert.equal(continued.task.taskId, 'login-flow');
   assert.equal(continued.session.sessionKey, 'new-window');
-  assert.equal(continued.nextAction.id, 'request_test_plan_approval');
+  assert.equal(continued.nextAction.id, 'generate_detailed_plan');
 });

@@ -1,15 +1,16 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import { qaPath, readTask } from './project.ts';
+import { qaPath, readTask, taskPrdPath, taskSourceRunPath, taskSourceRunReportPath } from './project.ts';
 import { hasSecrets, isSafeId, listFiles, readJson } from './store.ts';
-import { isHumanApprover, testPlanHash } from './approval.ts';
+import { isExplicitStartConfirmation, isHumanApprover, testPlanHash } from './approval.ts';
 import { hasRuntimeReportMarker, RUNTIME_REPORT_GENERATOR } from './report-contract.ts';
 import type { RegressionRun, TaskLifecycleState, TestRun } from './types.ts';
 import { readTaskEvents } from './events.ts';
 import { normalizeTaskState } from './workflow-model.ts';
 import { inspectPythonRegressionEligibility } from './python-regression.ts';
 import { inspectManagedRuntimeAssets } from './managed-assets.ts';
+import { planningPrdIsCurrent } from './task-prd.ts';
 
 export interface ValidationResult { valid: boolean; errors: string[]; checked: number }
 function textHash(value: string): string { return createHash('sha256').update(value).digest('hex'); }
@@ -23,30 +24,33 @@ function validateDomainObject(path: string): string[] {
     if (value.apiVersion !== 'qa-agent/v2' || !value.metadata || !isSafeId(value.metadata.id) || !isSafeId(value.metadata.moduleId)) errors.push(`${path}: invalid Task contract.`);
     const statuses = ['draft', 'planning', 'awaiting_approval', 'ready', 'running', 'reviewing_result', 'completed', 'archived', 'needs_input', 'blocked', 'paused', 'deprecated', 'superseded', 'active', 'needs_review', 'finalizing', 'regression_ready'];
     if (!statuses.includes(value.metadata?.status)) errors.push(`${path}: invalid Task lifecycle state ${value.metadata?.status}.`);
-    const quick = value.metadata?.mode === 'quick' && value.metadata?.approvalPolicy === 'side-effect-only';
     if (value.metadata?.mode && !['quick', 'regression'].includes(value.metadata.mode)) errors.push(`${path}: invalid QA mode ${value.metadata.mode}.`);
-    if (value.metadata?.mode === 'quick' && value.metadata?.approvalPolicy !== 'side-effect-only') errors.push(`${path}: Quick Tasks must use approvalPolicy=side-effect-only.`);
-    if (['ready', 'running', 'reviewing_result', 'completed', 'archived', 'active'].includes(value.metadata?.status) && !quick && (!isHumanApprover(value.metadata.approval?.confirmedBy) || !value.metadata.approval?.confirmedAt || !value.metadata.approval?.confirmationSource || !value.metadata.approval?.planHash)) errors.push(`${path}: executable or completed strict Task requires explicit human approval.`);
+    if (value.metadata?.approvalPolicy !== 'test-plan-and-side-effects') errors.push(`${path}: every Task must require reviewed TestPlan and explicit start confirmation.`);
+    if (['ready', 'running', 'reviewing_result', 'completed', 'archived', 'active'].includes(value.metadata?.status) && (!isHumanApprover(value.metadata.approval?.confirmedBy) || !value.metadata.approval?.confirmedAt || !value.metadata.approval?.confirmationSource || !value.metadata.approval?.planHash || !isExplicitStartConfirmation(value.metadata.approval?.statement))) errors.push(`${path}: executable or completed Task requires the exact human start confirmation.`);
     if (!Array.isArray(value.scenarioRefs) || !value.scenarioRefs.length || value.scenarioRefs.some((ref: unknown) => typeof ref !== 'string' || !/^scenarios\/[a-z0-9][a-z0-9-]{0,62}\.json$/.test(ref))) errors.push(`${path}: invalid scenarioRefs.`);
     if (value.pythonRegressionRefs !== undefined && (!Array.isArray(value.pythonRegressionRefs) || value.pythonRegressionRefs.some((ref: unknown) => typeof ref !== 'string' || !/^regression\/[a-z0-9][a-z0-9-]{0,62}\.json$/.test(ref)))) errors.push(`${path}: invalid pythonRegressionRefs.`);
     if (value.operationPlanRefs !== undefined || value.regressionSuiteRef !== undefined) errors.push(`${path}: legacy OperationPlan or RegressionSuite references remain; run qa-agent migrate.`);
+    if (value.reportIndexRef !== undefined || value.runRefs !== undefined) errors.push(`${path}: legacy multi-Run references remain; run qa-agent update --migrate.`);
+    if (value.sourceRunRef !== undefined && value.sourceRunRef !== 'source-run/run.json') errors.push(`${path}: sourceRunRef must be source-run/run.json.`);
+    if (value.sourceReportRef !== undefined && value.sourceReportRef !== 'source-run/report.md') errors.push(`${path}: sourceReportRef must be source-run/report.md.`);
     if (value.metadata?.mode === 'quick' && value.metadata?.status === 'completed' && (value.prdRef !== 'prd.md' || value.finalization?.status !== 'completed' || !value.finalization?.sourceRunId || !value.finalization?.artifactHash)) errors.push(`${path}: completed Quick Task requires finalized prd.md metadata.`);
-    if (value.reportIndexRef !== 'runs/index.json') errors.push(`${path}: reportIndexRef must be runs/index.json.`);
   }
   if (/\/scenarios\/[^/]+\.json$/.test(path)) {
     if (!isSafeId(value.id) || typeof value.title !== 'string' || typeof value.intent !== 'string' || !value.expected || !Array.isArray(value.preconditions) || !Array.isArray(value.evidence) || !Array.isArray(value.cleanup) || !['low', 'medium', 'high', 'critical'].includes(value.risk)) errors.push(`${path}: invalid Scenario contract.`);
+    if (!Array.isArray(value.plannedSteps) || !value.plannedSteps.length) errors.push(`${path}: plannedSteps must contain detailed reviewable steps.`);
+    for (const [index, step] of (value.plannedSteps ?? []).entries()) if (!step || !isSafeId(step.id) || typeof step.action !== 'string' || !step.action.trim() || typeof step.expected !== 'string' || !step.expected.trim()) errors.push(`${path}: invalid planned step ${index + 1}.`);
     if (!Array.isArray(value.visualAssertions) || !value.visualAssertions.length) errors.push(`${path}: visualAssertions must be non-empty.`);
     for (const [index, assertion] of (value.visualAssertions ?? []).entries()) if (!assertion || !isSafeId(assertion.id) || typeof assertion.expected !== 'string' || !['low', 'medium', 'high', 'critical'].includes(assertion.importance)) errors.push(`${path}: invalid visual assertion ${index + 1}.`);
   }
   if (path.endsWith('/module-snapshot.json') && (value.apiVersion !== 'qa-agent/v2' || value.kind !== 'ModuleSnapshot' || !isSafeId(value.moduleId) || typeof value.snapshotHash !== 'string')) errors.push(`${path}: invalid module snapshot.`);
   if (path.endsWith('/requirements.json') && (value.apiVersion !== 'qa-agent/v2' || value.kind !== 'TestRequirements' || !isSafeId(value.taskId) || !isSafeId(value.moduleId))) errors.push(`${path}: invalid requirements.`);
   if (/\/memory\/[^/]+\.json$/.test(path) || /\/shared-memory\/entries\/[^/]+\.json$/.test(path)) { if (!isSafeId(value.id) || !['candidate', 'active', 'superseded', 'deprecated'].includes(value.status)) errors.push(`${path}: invalid memory.`); if (hasSecrets({ content: value.content, structuredRule: value.structuredRule })) errors.push(`${path}: contains a potential secret.`); }
-  if (/\/tasks\/[^/]+\/runs\/[^/]+\/run\.json$/.test(path)) {
-    if (!['pending', 'running', 'passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable', 'needs_confirmation', 'adapted'].includes(value.status)) errors.push(`${path}: invalid Run status.`);
+  if (/\/tasks\/[^/]+\/source-run\/run\.json$/.test(path)) {
+    if (!['pending', 'running', 'passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable', 'needs_confirmation', 'adapted'].includes(value.status)) errors.push(`${path}: invalid Source Run status.`);
     if (value.operationPlanId !== undefined || value.replayStatus !== undefined || value.replayStage !== undefined || value.replayCursor !== undefined || value.operationCandidates !== undefined || (value.steps ?? []).some((step: Record<string, unknown>) => step.operationAction !== undefined)) errors.push(`${path}: legacy replay or action fields remain; run qa-agent migrate.`);
     if (value.completedAt) {
       if (!value.planHash) errors.push(`${path}: completed Run requires planHash.`);
-      const expected = `runs/${value.id}/report.md`; if (value.reportPath !== expected) errors.push(`${path}: reportPath must be ${expected}.`);
+      const expected = 'source-run/report.md'; if (value.reportPath !== expected) errors.push(`${path}: reportPath must be ${expected}.`);
       if (value.reportGeneratedBy !== RUNTIME_REPORT_GENERATOR || !value.reportGeneratedAt) errors.push(`${path}: completed Run must be Runtime-owned.`);
       const reportPath = join(dirname(path), 'report.md'); if (!existsSync(reportPath) || !hasRuntimeReportMarker(readFileSync(reportPath, 'utf8'), value.id)) errors.push(`${path}: Runtime report is missing or invalid.`);
     }
@@ -87,12 +91,12 @@ export function validateProject(root: string): ValidationResult {
   const files: Array<[string, string[]]> = [[qaPath(root, 'project.json'), ['version', 'project', 'platforms', 'defaultContext', 'source', 'storage']], [qaPath(root, 'policies.json'), ['safeMode', 'prohibitedActions', 'stopBefore']], [qaPath(root, 'mcp.json'), ['version', 'connections']]];
   const add = (paths: string[], fields: string[]): void => { for (const path of paths) files.push([path, fields]); };
   add(listFiles(qaPath(root, 'modules'), path => basename(path) === 'module.json'), ['id', 'name', 'status', 'riskLevel', 'platforms', 'roles']);
-  add(listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/task\.json$/.test(path)), ['apiVersion', 'kind', 'metadata', 'moduleSnapshotRef', 'requirementsRef', 'testPlanRef', 'scenarioRefs', 'capabilities', 'safety', 'evidence']);
+  add(listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/task\.json$/.test(path)), ['apiVersion', 'kind', 'metadata', 'moduleSnapshotRef', 'requirementsRef', 'testPlanRef', 'scenarioRefs', 'prdRef', 'capabilities', 'safety', 'evidence']);
   add(listFiles(qaPath(root, 'modules'), path => path.endsWith('/module-snapshot.json')), ['apiVersion', 'kind', 'moduleId', 'snapshotHash']);
   add(listFiles(qaPath(root, 'modules'), path => path.endsWith('/requirements.json')), ['apiVersion', 'kind', 'taskId', 'moduleId', 'businessGoals']);
   add(listFiles(qaPath(root, 'modules'), path => path.endsWith('/test-plan.json')), ['apiVersion', 'kind', 'taskId', 'moduleId', 'planHash', 'scenarioRefs']);
   add(listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/scenarios\/[^/]+\.json$/.test(path)), ['id', 'title', 'intent', 'expected', 'evidence', 'cleanup', 'visualAssertions']);
-  add(listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/runs\/[^/]+\/run\.json$/.test(path)), ['id', 'taskId', 'moduleId', 'context', 'status', 'steps', 'startedAt']);
+  add(listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/source-run\/run\.json$/.test(path)), ['id', 'taskId', 'moduleId', 'context', 'status', 'steps', 'startedAt']);
   add(listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/regression\/[^/]+\.json$/.test(path)), ['apiVersion', 'kind', 'id', 'moduleId', 'taskId', 'scriptRef', 'sourceRunId', 'sourcePlanHash', 'sourceStepIds', 'scenarioIds', 'sourceFlowHash', 'scriptHash', 'status', 'approvedBy']);
   add(listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/regression-runs\/[^/]+\/run\.json$/.test(path)), ['apiVersion', 'kind', 'id', 'regressionId', 'status', 'contractStatus', 'reportRef', 'stdoutRef', 'stderrRef']);
   add(listFiles(qaPath(root, 'regression-runs'), path => path.endsWith('.json')), ['apiVersion', 'kind', 'id', 'selectionId', 'selectionScope', 'selectionHash', 'status', 'childRuns']);
@@ -109,20 +113,33 @@ export function validateProject(root: string): ValidationResult {
   errors.push(...inspectManagedRuntimeAssets(qaPath(root)));
   for (const legacy of listFiles(qaPath(root, 'modules'), path => path.includes('/operation-plans/') || path.endsWith('/regression-suite.json'))) errors.push(`${legacy}: legacy OperationPlan asset remains; run qa-agent migrate.`);
   for (const name of ['archive', 'cache', 'evidence', 'runs']) if (existsSync(qaPath(root, name))) errors.push(`${qaPath(root, name)}: legacy project-level Runtime directory remains; run qa-agent update --migrate.`);
+  try { const project = readJson<Record<string, any>>(qaPath(root, 'project.json')); if (project.storage?.runIndexFormat !== undefined) errors.push(`${qaPath(root, 'project.json')}: legacy runIndexFormat remains; run qa-agent update --migrate.`); } catch { /* reported above */ }
+  if (existsSync(qaPath(root, 'index', 'runs.jsonl'))) errors.push(`${qaPath(root, 'index', 'runs.jsonl')}: legacy exploratory Run index remains; run qa-agent update --migrate.`);
 
   const validStates = new Set<TaskLifecycleState>(['draft', 'planning', 'awaiting_approval', 'ready', 'running', 'reviewing_result', 'completed', 'archived', 'needs_input', 'blocked', 'paused', 'deprecated', 'superseded']);
   for (const manifestPath of listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/task\.json$/.test(path))) {
     const manifest = readJson<Record<string, any>>(manifestPath); const moduleId = manifest.metadata?.moduleId; const taskId = manifest.metadata?.id; if (!moduleId || !taskId) continue;
     const taskDir = dirname(manifestPath); const task = readTask(root, moduleId, taskId);
+    if (!planningPrdIsCurrent(taskPrdPath(root, moduleId, taskId), task)) errors.push(`${manifestPath}: Task prd.md is missing or stale for the current detailed TestPlan.`);
     if (existsSync(join(taskDir, 'reports'))) errors.push(`${join(taskDir, 'reports')}: legacy Task reports directory remains; run qa-agent update --migrate.`);
+    if (existsSync(join(taskDir, 'runs'))) errors.push(`${join(taskDir, 'runs')}: legacy multi-Run directory remains; run qa-agent update --migrate.`);
     try { const events = readTaskEvents(root, moduleId, taskId); const ids = new Set<string>(); const keys = new Set<string>(); for (const [index, event] of events.entries()) { if (event.seq !== index + 1) errors.push(`${manifestPath}: invalid event sequence.`); if (!event.id || ids.has(event.id)) errors.push(`${manifestPath}: duplicate event id.`); else ids.add(event.id); if (!event.idempotencyKey || keys.has(event.idempotencyKey)) errors.push(`${manifestPath}: duplicate event idempotencyKey.`); else keys.add(event.idempotencyKey); if (event.fromState && !validStates.has(normalizeTaskState(event.fromState))) errors.push(`${manifestPath}: invalid event fromState.`); if (event.toState && !validStates.has(normalizeTaskState(event.toState))) errors.push(`${manifestPath}: invalid event toState.`); } } catch (error) { errors.push((error as Error).message); }
-    const taskRuns = listFiles(join(taskDir, 'runs'), path => path.endsWith('/run.json')).map(path => readJson<TestRun>(path));
-    if (taskRuns.filter(run => run.status === 'running').length > 1) errors.push(`${manifestPath}: multiple active Runs.`);
+    const sourcePath = taskSourceRunPath(root, moduleId, taskId);
+    const sourceRun = existsSync(sourcePath) ? readJson<TestRun>(sourcePath) : undefined;
+    if (sourceRun && (sourceRun.moduleId !== moduleId || sourceRun.taskId !== taskId)) errors.push(`${sourcePath}: Source Run identity does not match its Task.`);
+    if (sourceRun && manifest.sourceRunRef !== 'source-run/run.json') errors.push(`${manifestPath}: Source Run exists but sourceRunRef is missing.`);
+    if (!sourceRun && manifest.sourceRunRef !== undefined) errors.push(`${manifestPath}: sourceRunRef exists without source-run/run.json.`);
+    if (sourceRun?.completedAt) {
+      if (manifest.sourceReportRef !== 'source-run/report.md') errors.push(`${manifestPath}: completed Source Run requires sourceReportRef=source-run/report.md.`);
+      const sourceReport = taskSourceRunReportPath(root, moduleId, taskId);
+      if (!existsSync(sourceReport) || !hasRuntimeReportMarker(readFileSync(sourceReport, 'utf8'), sourceRun.id)) errors.push(`${manifestPath}: completed Source Run report is missing or invalid.`);
+      for (const screenshot of sourceRun.screenshots ?? []) if (!existsSync(join(taskDir, 'source-run', screenshot.path))) errors.push(`${manifestPath}: Source Run screenshot is missing: ${screenshot.path}.`);
+    } else if (manifest.sourceReportRef !== undefined) errors.push(`${manifestPath}: sourceReportRef exists before the Source Run is completed.`);
     const planHash = testPlanHash(task); const regressions = listFiles(join(taskDir, 'regression'), path => path.endsWith('.json')).map(path => readJson<Record<string, any>>(path)); const regressionRuns = listFiles(join(taskDir, 'regression-runs'), path => path.endsWith('/run.json')).map(path => readJson<Record<string, any>>(path)); const declared = new Set<string>(manifest.pythonRegressionRefs ?? []);
     for (const regression of regressions) {
       if (!declared.has(`regression/${regression.id}.json`)) errors.push(`${manifestPath}: script ${regression.id} is missing from pythonRegressionRefs.`);
-      const source = taskRuns.find(run => run.id === regression.sourceRunId); if (!source) { if (regression.status !== 'stale') errors.push(`${manifestPath}: script ${regression.id} source Run is missing.`); continue; }
-      const eligibility = inspectPythonRegressionEligibility(task, source); if (eligibility.flowHash !== regression.sourceFlowHash && regression.status !== 'stale') errors.push(`${manifestPath}: script ${regression.id} should be stale because sourceFlowHash changed.`);
+      if (!sourceRun || sourceRun.id !== regression.sourceRunId) { if (regression.status !== 'stale') errors.push(`${manifestPath}: script ${regression.id} Source Run is missing or no longer current.`); continue; }
+      const eligibility = inspectPythonRegressionEligibility(task, sourceRun); if (eligibility.flowHash !== regression.sourceFlowHash && regression.status !== 'stale') errors.push(`${manifestPath}: script ${regression.id} should be stale because sourceFlowHash changed.`);
       if (['approved_unverified', 'validated'].includes(regression.status) && regression.sourcePlanHash !== planHash) errors.push(`${manifestPath}: script ${regression.id} should be stale because planHash changed.`);
       if (regression.status === 'validated' && !regressionRuns.some(run => run.id === regression.validatedByRunId && run.regressionId === regression.id && run.contractStatus === 'completed')) errors.push(`${manifestPath}: validated script ${regression.id} lacks a completed regression Run.`);
     }
@@ -131,7 +148,7 @@ export function validateProject(root: string): ValidationResult {
     if (normalizeTaskState(manifest.metadata?.status) === 'archived') {
       const covered = new Set(regressions.filter(item => item.status === 'validated' && item.sourcePlanHash === planHash).flatMap(item => item.scenarioIds ?? []));
       for (const scenario of task.scenarios) if (!covered.has(scenario.id)) errors.push(`${manifestPath}: archived Scenario ${scenario.id} lacks a validated Python regression.`);
-      const latest = taskRuns.filter(run => Boolean(run.completedAt)).sort((a, b) => (b.completedAt ?? b.startedAt).localeCompare(a.completedAt ?? a.startedAt))[0]; if (!latest || !['passed', 'adapted'].includes(latest.status)) errors.push(`${manifestPath}: archived Task requires latest exploratory Run passed or adapted.`);
+      if (!sourceRun?.completedAt || !['passed', 'adapted'].includes(sourceRun.status)) errors.push(`${manifestPath}: archived Task requires the Source Run passed or adapted.`);
     }
   }
 

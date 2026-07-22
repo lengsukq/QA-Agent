@@ -1,6 +1,6 @@
 # Python Regression Contract
 
-Use this contract only after a real Runtime Run has completed and `pythonRegressionEligibility.eligible=true`.
+Use this contract only after the Task's real Source Run has completed and `pythonRegressionEligibility.eligible=true`.
 
 Skill ownership:
 
@@ -24,7 +24,7 @@ Agent-assisted iOS exploration
 → ios-simulator-mcp
 ```
 
-This recommendation is not a mandatory Runtime dependency. Reuse an existing project framework when it already supports direct command-line execution, the QA Agent result contract, screenshots, Cleanup, and Runtime reporting. Formal outputs must remain inside the Runtime-provided Task Run directories.
+This recommendation is not a mandatory Runtime dependency. Reuse an existing project framework when it already supports direct command-line execution, the QA Agent result contract, screenshots, Cleanup, and Runtime reporting. Initial evidence stays under `source-run/`; formal rerun outputs stay under `regression-runs/`.
 
 ## Approval boundaries
 
@@ -75,7 +75,7 @@ Show the complete script or complete diff. After explicit review approval, publi
 qa-agent regression publish --module MODULE --task TASK --draft SCRIPT_ID --confirmed-by HUMAN
 ```
 
-A draft is not a formal Task asset. Publication places the `.py` file and its manifest under `regression/`.
+A draft is not a formal Task asset. Publication places the `.py` file and its manifest under `regression/` and freezes the current Source Run. Later execution must use the published script; do not start another initial Source Run unless the TestPlan changes and the old script becomes `stale`.
 
 ## Execution
 

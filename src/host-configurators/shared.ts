@@ -91,18 +91,16 @@ export function detected(config: HostPlatformConfig, projectRoot: string): boole
 
 export const sharedGuidance = `# QA Agent
 
-Load the installed qa-agent Skill and references/workflow.md before acting.
+Load the installed qa-agent Skill and references/workflow.md.
 
-- Answer informational questions directly. Before a new ordinary test, inspect, present a concise business flow, and wait for user approval.
-- Runtime is the only state, evidence, report, approval, script-publication, and regression-result owner. Never edit Runtime JSON or write a competing report.
-- On later turns call qa-agent continue. Use UI tools only when uiExecutionAllowed=true, mustStop=false, and runId exists. Pass --session or QA_AGENT_SESSION_KEY when available.
-- After an eligible real report, offer Python from the exact executed flow. The first confirmation permits a draft only.
-- Generate the draft as the Agent, read references/recommended-regression-stack.md when the project has no established adapter, save it with qa-agent regression draft, show the complete script or diff, and publish only after a second explicit approval. Runtime never authors Python.
-- For an already published Python script, load qa-agent-regression-test. It runs the existing script and reviews the Runtime report without generating, editing, approving, or publishing code.
-- Use qa-agent-plan only for strict pre-execution planning. Task, Module, and Release regression select validated Python scripts directly.
-- Ask at most one question per turn, infer internal IDs, and use the user's language.
-- Call qa-agent finish only on explicit session closure. Hide protocol unless troubleshooting.
-- Never bypass safety or approval checks, and never fabricate evidence or results.
+- For testing, check/start creates the Task only. Inspect the project, apply ordered Scenario steps, and present Task prd.md.
+- Require “确认开始测试”; then call review and test to create the Task's single Source Run. Vague approval never authorizes UI.
+- Runtime owns state, evidence, reports, approvals, publication, and results. Never edit Runtime JSON or write competing reports.
+- Later call qa-agent continue. Use UI tools only with uiExecutionAllowed=true, mustStop=false, and runId. Pass --session or QA_AGENT_SESSION_KEY when available.
+- After an eligible report, offer Python from the executed flow. Consent creates a draft only. Show the full script or diff and publish only after separate approval; publication freezes the Source Run. Runtime never authors Python.
+- Load qa-agent-regression-test for later regression-runs. Use qa-agent-plan only for strict planning. Task, Module, and Release regression select validated Python scripts.
+- Ask at most one question, infer internal IDs, use the user's language, and call qa-agent finish only on explicit closure.
+- Never bypass safety or approval checks or fabricate evidence or results.
 `;
 
 export function renderGuidance(config: HostPlatformConfig): string {

@@ -1,12 +1,12 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { invalidateApproval, testPlanHash } from './approval.ts';
+import { invalidateApproval, START_TEST_CONFIRMATION_ZH, testPlanHash } from './approval.ts';
 import { appendTaskEvent } from './events.ts';
 import { rebuildIndexes } from './indexer.ts';
 import { markPythonRegressionsStaleForPlanHash } from './python-regression.ts';
-import { readModule, readTask, saveTask, taskDirectory } from './project.ts';
+import { readModule, readTask, saveTask, taskDirectory, taskPrdPath } from './project.ts';
 import { assertSafeId, hasSecrets, isSafeId, now } from './store.ts';
-import type { PlanDraft, PlanDraftScenario, RequirementTrace, RiskLevel, TestScenario, TestTask, VisualAssertion } from './types.ts';
+import type { PlannedTestStep, PlanDraft, PlanDraftScenario, RequirementTrace, RiskLevel, TestScenario, TestTask, VisualAssertion } from './types.ts';
 import { normalizeTaskState, transitionTaskState } from './workflow-model.ts';
 
 export interface PlanDraftApplyResult {
@@ -16,6 +16,8 @@ export interface PlanDraftApplyResult {
   planHash: string;
   previousPlanHash: string;
   approvalRequired: boolean;
+  requiredConfirmation: string;
+  prdPath: string;
   scenarioIds: string[];
   task: TestTask;
 }
@@ -71,6 +73,16 @@ function assertionsFor(input: PlanDraftScenario, scenarioId: string, risk: RiskL
   });
 }
 
+function plannedStepsFor(input: PlanDraftScenario, scenarioId: string): PlannedTestStep[] {
+  if (!Array.isArray(input.steps) || !input.steps.length) throw new Error(`Scenario ${scenarioId} requires explicit detailed steps before review.`);
+  const used = new Set<string>();
+  return input.steps.map((step, index) => ({
+    id: uniqueId(step.id ? requiredText(step.id, `Scenario ${scenarioId} step id`) : safeSlug(step.action, `step-${index + 1}`), used, `step-${index + 1}`),
+    action: requiredText(step.action, `Scenario ${scenarioId} step ${index + 1} action`),
+    expected: requiredText(step.expected, `Scenario ${scenarioId} step ${index + 1} expected`),
+  }));
+}
+
 function materializeScenarios(draft: PlanDraft, task: TestTask, moduleRisk: RiskLevel): TestScenario[] {
   if (!Array.isArray(draft.scenarios) || !draft.scenarios.length) throw new Error('PlanDraft requires at least one Scenario.');
   const used = new Set<string>();
@@ -100,6 +112,7 @@ function materializeScenarios(draft: PlanDraft, task: TestTask, moduleRisk: Risk
       priority,
       requirementRefs: stringArray(input.requirementRefs, `Scenario ${scenarioId} requirementRefs`, [`requirement-${index + 1}`]),
       sourceRefs: stringArray(input.sourceRefs, `Scenario ${scenarioId} sourceRefs`, draft.sourceRefs ?? []),
+      plannedSteps: plannedStepsFor(input, scenarioId),
       visualAssertions,
     };
   });
@@ -165,7 +178,7 @@ export function applyPlanDraft(root: string, draft: PlanDraft): PlanDraftApplyRe
   task.requirements.requirementTrace = requirementTrace(task.scenarios);
 
   let planHash = testPlanHash(task);
-  if (planHash === previousPlanHash) return { changed: false, moduleId: draft.moduleId, taskId: draft.taskId, planHash, previousPlanHash, approvalRequired: !task.metadata.approval, scenarioIds: task.scenarios.map(scenario => scenario.id), task };
+  if (planHash === previousPlanHash) return { changed: false, moduleId: draft.moduleId, taskId: draft.taskId, planHash, previousPlanHash, approvalRequired: true, requiredConfirmation: START_TEST_CONFIRMATION_ZH, prdPath: taskPrdPath(root, draft.moduleId, draft.taskId), scenarioIds: task.scenarios.map(scenario => scenario.id), task };
   task.requirements.updatedAt = now();
   planHash = testPlanHash(task);
 
@@ -180,5 +193,5 @@ export function applyPlanDraft(root: string, draft: PlanDraft): PlanDraftApplyRe
   saveTask(root, task);
   markPythonRegressionsStaleForPlanHash(root, task, planHash);
   rebuildIndexes(root);
-  return { changed: true, moduleId: draft.moduleId, taskId: draft.taskId, planHash, previousPlanHash, approvalRequired: true, scenarioIds: task.scenarios.map(scenario => scenario.id), task: readTask(root, draft.moduleId, draft.taskId) };
+  return { changed: true, moduleId: draft.moduleId, taskId: draft.taskId, planHash, previousPlanHash, approvalRequired: true, requiredConfirmation: START_TEST_CONFIRMATION_ZH, prdPath: taskPrdPath(root, draft.moduleId, draft.taskId), scenarioIds: task.scenarios.map(scenario => scenario.id), task: readTask(root, draft.moduleId, draft.taskId) };
 }

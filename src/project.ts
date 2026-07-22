@@ -2,10 +2,11 @@ import { existsSync, unlinkSync } from 'node:fs';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendJsonl, assertSafeId, ensureDir, listFiles, now, readJson, withFileLock, writeJsonAtomic } from './store.ts';
+import { assertSafeId, ensureDir, listFiles, now, readJson, withFileLock, writeJsonAtomic } from './store.ts';
 import type { ModuleSnapshot, ProjectConfig, QaModule, TestPlan, TestRequirements, TestRun, TestTask } from './types.ts';
 import { approvalIsCurrent, requiresTestPlanApproval, testPlanHash } from './approval.ts';
 import { syncManagedRuntimeAssets } from './managed-assets.ts';
+import { writeTaskPlanningPrd } from './task-prd.ts';
 
 export const QA_DIRECTORY = '.qa-agent';
 
@@ -38,7 +39,7 @@ export function initializeProject(root: string, options: { id?: string; name?: s
     $schema: './schemas/project.schema.json', version: 1,
     project: { id, name: options.name ?? basename(resolve(root)), description: options.description ?? '', businessGoals: [], crossModuleFlows: [] },
     platforms: options.platforms?.length ? options.platforms : ['web'], environments: ['local'], roles: ['default'], defaultContext: { environment: 'local', platform: options.platforms?.[0] ?? 'web', role: 'default' },
-    source: { mode: 'host-provided', root: '' }, storage: { format: 'json', runIndexFormat: 'jsonl' }, createdAt: timestamp, updatedAt: timestamp,
+    source: { mode: 'host-provided', root: '' }, storage: { format: 'json' }, createdAt: timestamp, updatedAt: timestamp,
   };
   writeJsonAtomic(existing, project);
   writeJsonAtomic(qaPath(root, '.template-hashes.json'), { version: 1, hashes: {} });
@@ -71,14 +72,11 @@ export function taskPlanPath(root: string, moduleId: string, taskId: string): st
 export function taskModuleSnapshotPath(root: string, moduleId: string, taskId: string): string { return join(taskDirectory(root, moduleId, taskId), 'module-snapshot.json'); }
 export function taskScenarioPath(root: string, moduleId: string, taskId: string, scenarioId: string): string { assertSafeId(scenarioId, 'scenario id'); return join(taskDirectory(root, moduleId, taskId), 'scenarios', `${scenarioId}.json`); }
 export function taskPrdPath(root: string, moduleId: string, taskId: string): string { return join(taskDirectory(root, moduleId, taskId), 'prd.md'); }
-export function taskRunDirectory(root: string, moduleId: string, taskId: string, runId: string): string { assertSafeId(runId, 'run id'); return join(taskDirectory(root, moduleId, taskId), 'runs', runId); }
-export function taskRunPath(root: string, moduleId: string, taskId: string, runId: string): string { return join(taskRunDirectory(root, moduleId, taskId, runId), 'run.json'); }
-/** Compatibility paths for the self-contained Runtime Run package contract. */
-export function taskRunReportPath(root: string, moduleId: string, taskId: string, runId: string): string { return join(taskRunDirectory(root, moduleId, taskId, runId), 'report.md'); }
-export function taskRunIndexPath(root: string, moduleId: string, taskId: string): string { return join(taskDirectory(root, moduleId, taskId), 'runs', 'index.json'); }
-export function taskRunLatestPath(root: string, moduleId: string, taskId: string): string { return join(taskDirectory(root, moduleId, taskId), 'runs', 'latest.json'); }
+export function taskSourceRunDirectory(root: string, moduleId: string, taskId: string): string { return join(taskDirectory(root, moduleId, taskId), 'source-run'); }
+export function taskSourceRunPath(root: string, moduleId: string, taskId: string): string { return join(taskSourceRunDirectory(root, moduleId, taskId), 'run.json'); }
+export function taskSourceRunReportPath(root: string, moduleId: string, taskId: string): string { return join(taskSourceRunDirectory(root, moduleId, taskId), 'report.md'); }
 export function moduleReportDirectory(root: string, moduleId: string): string { return join(modulePath(root, moduleId), 'reports'); }
-export function taskEvidenceDirectory(root: string, moduleId: string, taskId: string, runId: string): string { return join(taskRunDirectory(root, moduleId, taskId, runId), 'evidence'); }
+export function taskSourceEvidenceDirectory(root: string, moduleId: string, taskId: string): string { return join(taskSourceRunDirectory(root, moduleId, taskId), 'evidence'); }
 
 export function createModule(root: string, input: Pick<QaModule, 'id' | 'name' | 'description'> & Partial<Pick<QaModule, 'riskLevel' | 'platforms' | 'roles' | 'dependencies' | 'businessGoals' | 'sourceHints' | 'entryPoints' | 'coreFlows' | 'businessRules' | 'keyStates' | 'regressionFocus'>>): QaModule {
   return withFileLock(qaPath(root, '.locks', 'modules.lock'), () => {
@@ -128,7 +126,8 @@ export function saveTask(root: string, task: TestTask): void {
   withFileLock(qaPath(root, '.locks', 'tasks.lock'), () => {
     const module = readModule(root, task.metadata.moduleId);
     const directory = taskDirectory(root, task.metadata.moduleId, task.metadata.id);
-    for (const child of ['scenarios', 'runs', 'memory']) ensureDir(join(directory, child));
+    for (const child of ['scenarios', 'memory']) ensureDir(join(directory, child));
+    task.prdRef = 'prd.md';
     task.moduleSnapshot ??= buildModuleSnapshot(module); task.requirements ??= buildRequirements(task, module);
     task.scenarioRefs = task.scenarios.map(scenario => `scenarios/${scenario.id}.json`);
     const approvalCurrent = approvalIsCurrent(task);
@@ -154,22 +153,25 @@ export function saveTask(root: string, task: TestTask): void {
     for (const path of listFiles(join(directory, 'scenarios'), item => item.endsWith('.json'))) if (!expectedScenarioPaths.has(path)) unlinkSync(path);
     const { scenarios: _scenarios, moduleSnapshot: _snapshot, requirements: _requirements, testPlan: _testPlan, ...manifest } = task;
     writeJsonAtomic(taskPath(root, task.metadata.moduleId, task.metadata.id), manifest);
+    writeTaskPlanningPrd(taskPrdPath(root, task.metadata.moduleId, task.metadata.id), task);
   });
 }
 export function checkpointRun(root: string, run: TestRun): void {
-  withFileLock(qaPath(root, '.locks', 'runs.lock'), () => writeJsonAtomic(taskRunPath(root, run.moduleId, run.taskId, run.id), run));
+  withFileLock(qaPath(root, '.locks', 'source-runs.lock'), () => writeJsonAtomic(taskSourceRunPath(root, run.moduleId, run.taskId), run));
 }
 export function saveRun(root: string, run: TestRun): void {
-  withFileLock(qaPath(root, '.locks', 'runs.lock'), () => {
-    writeJsonAtomic(taskRunPath(root, run.moduleId, run.taskId, run.id), run);
-    appendJsonl(qaPath(root, 'index', 'runs.jsonl'), { runId: run.id, taskId: run.taskId, moduleId: run.moduleId, status: run.status, startedAt: run.startedAt, completedAt: run.completedAt, reportPath: run.reportPath });
-  });
+  withFileLock(qaPath(root, '.locks', 'source-runs.lock'), () => writeJsonAtomic(taskSourceRunPath(root, run.moduleId, run.taskId), run));
 }
 function normalizeRun(run: TestRun): TestRun { run.cleanupFindings ??= []; return run; }
-export function readRun(root: string, moduleId: string, taskId: string, runId: string): TestRun { return normalizeRun(readJson<TestRun>(taskRunPath(root, moduleId, taskId, runId))); }
+export function readRun(root: string, moduleId: string, taskId: string, runId: string): TestRun {
+  const run = normalizeRun(readJson<TestRun>(taskSourceRunPath(root, moduleId, taskId)));
+  if (run.id !== runId) throw new Error(`Source Run ${runId} is not current for Task ${moduleId}/${taskId}.`);
+  return run;
+}
 export function readRunById(root: string, runId: string): TestRun {
-  const path = listFiles(qaPath(root, 'modules'), candidate => candidate.endsWith(`/runs/${runId}/run.json`))[0];
-  if (!path) throw new Error(`Run ${runId} was not found in a Task folder.`);
+  const path = listFiles(qaPath(root, 'modules'), candidate => candidate.endsWith('/source-run/run.json'))
+    .find(candidate => { try { return readJson<TestRun>(candidate).id === runId; } catch { return false; } });
+  if (!path) throw new Error(`Source Run ${runId} was not found in a Task folder.`);
   return normalizeRun(readJson<TestRun>(path));
 }
 

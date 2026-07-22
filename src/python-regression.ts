@@ -10,7 +10,7 @@ import {
   readTask,
   saveTask,
   taskDirectory,
-  taskRunReportPath,
+  taskSourceRunReportPath,
 } from './project.ts';
 import { hasRuntimeReportMarker } from './report-contract.ts';
 import { resolveSessionIdentity } from './session.ts';
@@ -264,7 +264,7 @@ function validateSourceRun(root: string, task: TestTask, runId: string): { run: 
   const run = readRun(root, task.metadata.moduleId, task.metadata.id, runId);
   if (run.moduleId !== task.metadata.moduleId || run.taskId !== task.metadata.id) throw new Error(`Run ${runId} does not belong to this Task.`);
   if (run.reportGeneratedBy !== 'qa-agent-runtime' || !run.reportPath) throw new Error('Source Run must have a Runtime-owned report.');
-  const reportPath = taskRunReportPath(root, task.metadata.moduleId, task.metadata.id, run.id);
+  const reportPath = taskSourceRunReportPath(root, task.metadata.moduleId, task.metadata.id);
   if (!existsSync(reportPath) || !hasRuntimeReportMarker(readFileSync(reportPath, 'utf8'), run.id)) throw new Error('Source Run report is missing or is not Runtime-owned.');
   const eligibility = inspectPythonRegressionEligibility(task, run);
   if (!eligibility.eligible || !eligibility.flowHash) {

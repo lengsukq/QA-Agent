@@ -38,20 +38,22 @@ function rebuildIndexesUnlocked(root: string): { modules: number; tasks: number;
     const value = readJson<ProjectMemory | ProjectMemory[]>(path);
     return (Array.isArray(value) ? value : [value]).map(item => ({ id: item.id, moduleId: item.moduleId, type: item.type, title: item.title, summary: item.content.slice(0, 180), knowledgeLevel: item.knowledgeLevel, importance: item.importance, status: item.status, path: relative(qaPath(root), path), updatedAt: item.updatedAt }));
   });
-  const runs = listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/runs\/[^/]+\/run\.json$/.test(path)).map(path => readJson<TestRun>(path));
+  const runs = listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/source-run\/run\.json$/.test(path)).map(path => readJson<TestRun>(path));
   const batchRuns = listFiles(qaPath(root, 'regression-runs'), path => path.endsWith('.json')).map(path => readJson<RegressionRun>(path));
   const pythonRunPaths = listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/regression-runs\/[^/]+\/run\.json$/.test(path));
   const skills = listFiles(qaPath(root, 'skills'), path => path.endsWith('.json')).map(path => { const item = readJson<QaSkillManifest>(path); return { name: item.metadata.name, version: item.metadata.version, description: item.metadata.description, lifecycle: item.metadata.lifecycle, path: relative(qaPath(root), path), capabilities: item.requirements.capabilities }; });
-  const lastByTask = new Map<string, TestRun>();
-  for (const run of runs) { const key = `${run.moduleId}/${run.taskId}`; if (!lastByTask.has(key) || (lastByTask.get(key)?.startedAt ?? '') < run.startedAt) lastByTask.set(key, run); }
+  const sourceByTask = new Map(runs.map(run => [`${run.moduleId}/${run.taskId}`, run] as const));
   for (const task of tasks) {
-    const related = runs.filter(run => run.taskId === task.id && run.moduleId === task.moduleId).sort((a, b) => b.startedAt.localeCompare(a.startedAt));
-    const latest = related[0]; const successful = related.find(item => ['passed', 'adapted'].includes(item.status) && Boolean(item.completedAt)); const current = related.find(item => item.status === 'running');
-    if (latest) { task.executionStatus = latest.status; Object.assign(task, { latestRunId: latest.id, lastRunId: latest.id, lastRunAt: latest.startedAt, pythonRegressionEligible: latest.pythonRegressionEligibility?.eligible ?? false }); }
-    if (successful) Object.assign(task, { lastSuccessfulRunId: successful.id });
-    if (current) { const progress = [current.steps.length, current.visualFindings.length, current.cleanupFindings?.length ?? 0, current.evidence.length, current.recoveryAttempts?.length ?? 0, current.screenshots?.length ?? 0].join('-'); Object.assign(task, { currentRunId: current.id, workflowPhase: 'execution', resumeToken: resumeToken(task.moduleId, task.id, current.id, task.lastEventSeq, progress), contextHash: workflowContextHash({ taskState: task.taskState, workflowPhase: 'execution', currentRunId: current.id, progress }), nextActionIds: ['execute_scenario'] }); }
+    const source = sourceByTask.get(`${task.moduleId}/${task.id}`);
+    if (!source) continue;
+    task.executionStatus = source.status;
+    Object.assign(task, { sourceRunId: source.id, sourceRunStatus: source.status, sourceRunAt: source.startedAt, pythonRegressionEligible: source.pythonRegressionEligibility?.eligible ?? false });
+    if (source.status === 'running') {
+      const progress = [source.steps.length, source.visualFindings.length, source.cleanupFindings?.length ?? 0, source.evidence.length, source.recoveryAttempts?.length ?? 0, source.screenshots?.length ?? 0].join('-');
+      Object.assign(task, { currentRunId: source.id, workflowPhase: 'execution', resumeToken: resumeToken(task.moduleId, task.id, source.id, task.lastEventSeq, progress), contextHash: workflowContextHash({ taskState: task.taskState, workflowPhase: 'execution', currentRunId: source.id, progress }), nextActionIds: ['execute_scenario'] });
+    }
   }
-  for (const module of modules) { const related = tasks.filter(task => task.moduleId === module.id); module.activeTaskCount = related.filter(task => !['archived', 'deprecated', 'superseded'].includes(task.taskState)).length; const latest = related.map(task => lastByTask.get(`${task.moduleId}/${task.id}`)).filter((run): run is TestRun => Boolean(run)).sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0]; if (latest) Object.assign(module, { lastRunStatus: latest.status, lastRunAt: latest.startedAt }); }
+  for (const module of modules) { const related = tasks.filter(task => task.moduleId === module.id); module.activeTaskCount = related.filter(task => !['archived', 'deprecated', 'superseded'].includes(task.taskState)).length; const latest = related.map(task => sourceByTask.get(`${task.moduleId}/${task.id}`)).filter((run): run is TestRun => Boolean(run)).sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0]; if (latest) Object.assign(module, { lastRunStatus: latest.status, lastRunAt: latest.startedAt }); }
   for (const [name, entries] of Object.entries({ modules, tasks, memories, skills })) writeJsonAtomic(qaPath(root, 'index', `${name}.json`), { version: 1, updatedAt: timestamp, [name]: entries });
   return { modules: modules.length, tasks: tasks.length, memories: memories.length, skills: skills.length, runs: runs.length + batchRuns.length + pythonRunPaths.length };
 }

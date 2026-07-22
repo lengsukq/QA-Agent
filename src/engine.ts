@@ -1,16 +1,16 @@
 import { randomUUID } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { capabilityAdvice, capabilitySnapshot, checkCapabilities, platformCapabilities } from './capabilities.ts';
-import { checkpointRun, gitMetadata, qaPath, readRunById, readTask, saveRun, saveTask, taskEvidenceDirectory, taskRunDirectory, taskRunIndexPath, taskRunLatestPath } from './project.ts';
+import { checkpointRun, gitMetadata, qaPath, readRunById, readTask, saveRun, saveTask, taskSourceEvidenceDirectory, taskSourceRunDirectory, taskSourceRunPath } from './project.ts';
 import { rebuildIndexes } from './indexer.ts';
 import { appendTaskEvent } from './events.ts';
 import { normalizeTaskState, transitionTaskState } from './workflow-model.ts';
-import { hasSecrets, listFiles, now, readJson, withFileLock, writeJsonAtomic } from './store.ts';
+import { hasSecrets, now, readJson, withFileLock } from './store.ts';
 import { writeReport } from './report.ts';
-import { finalizeTask } from './task-finalizer.ts';
+import { clearTaskResultSection, finalizeTask } from './task-finalizer.ts';
 import { curateFailedRun, curateObservedBusinessRules } from './memory.ts';
-import { inspectPythonRegressionEligibility } from './python-regression.ts';
+import { inspectPythonRegressionEligibility, listPythonRegressions } from './python-regression.ts';
 import type { ExecutionSnapshot, Locator, UiAction, RunStatus, StepExecutionMode, TestRun, TestTask, VisualInspectionStatus } from './types.ts';
 import { executionContractIsCurrent, requiresTestPlanApproval, testPlanHash } from './approval.ts';
 import { assertRecoveryAction, assertSafeAction } from './safety.ts';
@@ -70,21 +70,15 @@ function finish(root: string, task: TestTask, run: TestRun): TestRun {
   } else {
     transitionTaskState(root, task, targetTaskState, 'run_completed', `run_${run.status}`, { artifactHash: run.planHash, idempotencyKey: `run-completed:${run.id}`, metadata: { runId: run.id, status: run.status, mode: run.mode, pythonRegressionEligible: run.pythonRegressionEligibility.eligible } });
   }
-  run.reportPath = `runs/${run.id}/report.md`;
+  run.reportPath = 'source-run/report.md';
   run.reportGeneratedBy = 'qa-agent-runtime';
   run.reportGeneratedAt = now();
-  task.runRefs ??= [];
-  const runRef = `runs/${run.id}/run.json`;
-  if (!task.runRefs.includes(runRef)) task.runRefs.push(runRef);
+  task.sourceRunRef = 'source-run/run.json';
+  task.sourceReportRef = 'source-run/report.md';
   task.updatedAt = now();
   writeReport(root, task, run);
   saveRun(root, run);
   saveTask(root, task);
-  const reportIndexPath = taskRunIndexPath(root, task.metadata.moduleId, task.metadata.id);
-  const reportIndex = existsSync(reportIndexPath) ? readJson<{ runs: Array<Record<string, unknown>> }>(reportIndexPath) : { runs: [] };
-  reportIndex.runs = [{ runId: run.id, status: run.status, reportPath: run.reportPath, completedAt: run.completedAt }, ...reportIndex.runs.filter(item => item.runId !== run.id)];
-  writeJsonAtomic(reportIndexPath, { version: 1, updatedAt: now(), runs: reportIndex.runs });
-  writeJsonAtomic(taskRunLatestPath(root, task.metadata.moduleId, task.metadata.id), { runId: run.id, reportPath: run.reportPath, status: run.status, updatedAt: now() });
   if (task.metadata.mode === 'quick' && targetTaskState === 'reviewing_result') finalizeTask(root, task.metadata.moduleId, task.metadata.id, run.id);
   else rebuildIndexes(root);
   return run;
@@ -105,33 +99,62 @@ function block(root: string, task: TestTask, run: TestRun, detail: string, statu
   return finish(root, task, run);
 }
 
-function activeTaskRun(root: string, task: TestTask): TestRun | undefined {
-  return listFiles(qaPath(root, 'modules', task.metadata.moduleId, 'tasks', task.metadata.id, 'runs'), path => path.endsWith('/run.json'))
-    .map(path => readJson<TestRun>(path))
-    .filter(run => run.status === 'running')
-    .sort((left, right) => right.startedAt.localeCompare(left.startedAt))[0];
+function currentSourceRun(root: string, task: TestTask): TestRun | undefined {
+  const path = taskSourceRunPath(root, task.metadata.moduleId, task.metadata.id);
+  if (!existsSync(path)) return undefined;
+  return readJson<TestRun>(path);
+}
+
+function resetSourceRunSlot(root: string, task: TestTask, previous: TestRun): void {
+  const activeScripts = listPythonRegressions(root, task.metadata.moduleId, task.metadata.id)
+    .filter(script => ['approved_unverified', 'validated'].includes(script.status));
+  if (activeScripts.length) {
+    throw new Error(`Source Run ${previous.id} is frozen by formal Python regression script(s): ${activeScripts.map(script => script.id).join(', ')}. Run those scripts through regression-runs, or change the reviewed plan so Runtime marks them stale before creating a new Source Run.`);
+  }
+  rmSync(taskSourceRunDirectory(root, task.metadata.moduleId, task.metadata.id), { recursive: true, force: true });
+  clearTaskResultSection(root, task);
+  delete task.sourceRunRef;
+  delete task.sourceReportRef;
+  delete task.finalization;
+  task.metadata.version += 1;
+  task.updatedAt = now();
+  appendTaskEvent(root, {
+    type: 'source_run_restarted',
+    actor: { type: 'runtime', id: 'qa-agent-runtime' },
+    moduleId: task.metadata.moduleId,
+    taskId: task.metadata.id,
+    fromState: normalizeTaskState(task.metadata.status),
+    toState: normalizeTaskState(task.metadata.status),
+    reasonCode: 'replace_unpublished_source_run',
+    artifactHash: previous.planHash,
+    idempotencyKey: `source-run-restarted:${previous.id}:${task.metadata.version}`,
+    metadata: { previousRunId: previous.id, previousStatus: previous.status },
+  });
 }
 
 function beginAgentGuidedRunUnlocked(root: string, task: TestTask, context: RunContextInput = {}): TestRun {
-  const current = activeTaskRun(root, task);
-  if (current) {
-    if (!executionContractIsCurrent(task, current.planHash)) return block(root, task, current, requiresTestPlanApproval(task) ? `Task plan changed after active Run ${current.id} started. Stop execution and obtain a new TestPlan approval before resuming.` : `Quick Task execution contract changed after active Run ${current.id} started. Stop execution and refresh the Task before resuming.`, 'needs_confirmation');
-    if (context.scenarioId && current.scenarioId && current.scenarioId !== context.scenarioId) throw new Error(`Task ${task.metadata.id} already has active Run ${current.id} for Scenario ${current.scenarioId}.`);
+  const current = currentSourceRun(root, task);
+  if (current?.status === 'running') {
+    if (!executionContractIsCurrent(task, current.planHash)) return block(root, task, current, `Task plan changed after active Source Run ${current.id} started. Stop execution and obtain a new TestPlan approval before resuming.`, 'needs_confirmation');
+    if (context.scenarioId && current.scenarioId && current.scenarioId !== context.scenarioId) throw new Error(`Task ${task.metadata.id} already has active Source Run ${current.id} for Scenario ${current.scenarioId}.`);
     const contextKeys = ['environment', 'platform', 'role', 'device', 'deviceModel', 'osVersion', 'appVersion', 'webBuild', 'testDataFingerprint'] as const;
-    for (const key of contextKeys) if (context[key] !== undefined && context[key] !== current.context[key]) throw new Error(`Task ${task.metadata.id} already has active Run ${current.id} with ${key}=${current.context[key] ?? 'unknown'}, not ${context[key]}.`);
+    for (const key of contextKeys) if (context[key] !== undefined && context[key] !== current.context[key]) throw new Error(`Task ${task.metadata.id} already has active Source Run ${current.id} with ${key}=${current.context[key] ?? 'unknown'}, not ${context[key]}.`);
     return current;
   }
+  if (current) resetSourceRunSlot(root, task, current);
   const taskState = normalizeTaskState(task.metadata.status);
   if (['archived', 'deprecated', 'superseded'].includes(taskState)) throw new Error(`Task ${task.metadata.id} is ${taskState} and cannot start a new Run.`);
+  if (!['ready', 'reviewing_result', 'completed', 'blocked', 'paused'].includes(taskState)) throw new Error(`Task status is ${task.metadata.status}; present the Task PRD and wait for the user to reply “确认开始测试” before creating a Run.`);
+  if (!executionContractIsCurrent(task)) throw new Error('The Task plan is unapproved or changed after approval. Present the current Task PRD and obtain the exact user reply “确认开始测试” before creating a Run.');
   const run = newRun(root, task, context);
-  if (!['ready', 'reviewing_result', 'completed', 'blocked', 'paused'].includes(taskState)) return block(root, task, run, `Task status is ${task.metadata.status}; review and mark it ready before execution.`);
-  if (!executionContractIsCurrent(task, run.planHash)) return block(root, task, run, requiresTestPlanApproval(task) ? 'Generated test cases are unapproved or changed after approval. Present the current plan and obtain user confirmation before execution.' : 'The Quick Check execution contract changed before the Run started. Refresh the Task and retry.', 'needs_confirmation');
   const required = [...new Set([...task.capabilities.required, ...platformCapabilities(run.context.platform)])];
   const capabilities = checkCapabilities(root, required, task.capabilities.optional);
   if (capabilities.missing.length) return block(root, task, run, `Missing required capabilities: ${capabilities.missing.join(', ')}. ${capabilityAdvice(capabilities.missing).join(' ')}`, 'blocked');
   if (run.context.platform !== 'web' && run.context.permissionSnapshot.status !== 'verified') return block(root, task, run, 'macOS/MCP permissions are not verified. Run host doctor --platform android|ios, grant Screen Recording and Accessibility, then retry.', 'blocked');
   run.status = 'running';
   run.steps.push({ id: 'agent-guided-preflight', action: 'Agent-guided test preflight', status: 'passed', detail: 'Required capabilities are available. Persist every real UI action, screenshot, assertion, and cleanup.', at: now(), source: 'internal' });
+  task.sourceRunRef = 'source-run/run.json';
+  delete task.sourceReportRef;
   transitionTaskState(root, task, 'running', 'run_started', task.metadata.mode === 'quick' ? 'quick_test_started' : 'approved_test_started', { artifactHash: run.planHash, idempotencyKey: `run-started:${run.id}`, metadata: { runId: run.id, mode: run.mode, scenarioId: run.scenarioId, taskMode: task.metadata.mode ?? 'regression' } });
   saveTask(root, task);
   checkpointRun(root, run);
@@ -166,10 +189,11 @@ export function recordAgentStep(root: string, runId: string, input: { action: st
 
 function captureScreenshot(root: string, run: TestRun, stepId: string, sourcePath: string, visualInspection: VisualInspectionStatus, summary: string): string {
   if (!existsSync(sourcePath)) throw new Error(`Screenshot does not exist: ${sourcePath}`);
-  const destination = join(taskRunDirectory(root, run.moduleId, run.taskId, run.id), 'screenshots', 'steps', `${stepId}-${basename(sourcePath)}`);
+  const runDirectory = taskSourceRunDirectory(root, run.moduleId, run.taskId);
+  const destination = join(runDirectory, 'screenshots', 'steps', `${stepId}-${basename(sourcePath)}`);
   mkdirSync(join(destination, '..'), { recursive: true });
   copyFileSync(sourcePath, destination);
-  const relativePath = destination.slice(taskRunDirectory(root, run.moduleId, run.taskId, run.id).length + 1);
+  const relativePath = destination.slice(runDirectory.length + 1);
   run.screenshots.push({ stepId, path: relativePath, capturedAt: now(), visualInspection, summary });
   run.evidence.push({ type: 'screenshot', path: relativePath, summary: `Screenshot captured: ${summary}` });
   return relativePath;
@@ -183,10 +207,11 @@ export function recordHostEvidence(root: string, runId: string, input: { type: s
   let path: string | undefined;
   if (input.artifactPath) {
     if (!existsSync(input.artifactPath)) throw new Error(`Evidence artifact does not exist: ${input.artifactPath}`);
-    const destination = join(taskEvidenceDirectory(root, run.moduleId, run.taskId, run.id), 'artifacts', `${run.evidence.length + 1}-${basename(input.artifactPath)}`);
+    const runDirectory = taskSourceRunDirectory(root, run.moduleId, run.taskId);
+    const destination = join(taskSourceEvidenceDirectory(root, run.moduleId, run.taskId), 'artifacts', `${run.evidence.length + 1}-${basename(input.artifactPath)}`);
     mkdirSync(join(destination, '..'), { recursive: true });
     copyFileSync(input.artifactPath, destination);
-    path = destination.slice(taskRunDirectory(root, run.moduleId, run.taskId, run.id).length + 1);
+    path = destination.slice(runDirectory.length + 1);
   }
   run.evidence.push({ type: input.type, path, summary: input.summary });
   checkpointRun(root, run);

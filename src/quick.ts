@@ -73,16 +73,16 @@ export function prepareQuickCheck(root: string, input: QuickCheckInput): QuickCh
       idempotencyKey: `quick-task-created:${moduleId}:${taskId}`,
       metadata: { requestSummary: request.slice(0, 160), mode: 'quick' },
     });
-    transitionTaskState(root, task, 'ready', 'quick_task_ready', 'side_effect_only_policy', {
+    transitionTaskState(root, task, 'planning', 'quick_task_created', 'detailed_plan_required', {
       actor: { type: 'runtime', id: 'qa-agent-runtime' },
-      idempotencyKey: `quick-task-ready:${moduleId}:${taskId}`,
-      metadata: { approvalPolicy: 'side-effect-only' },
+      idempotencyKey: `quick-task-planning:${moduleId}:${taskId}`,
+      metadata: { approvalPolicy: 'test-plan-and-side-effects', next: 'Generate detailed Scenario steps and apply the PlanDraft.' },
     });
     saveTask(root, task);
   }
 
   const task = readTask(root, moduleId, taskId);
-  if (task.metadata.mode !== 'quick' || task.metadata.approvalPolicy !== 'side-effect-only') {
+  if (task.metadata.mode !== 'quick' || task.metadata.approvalPolicy !== 'test-plan-and-side-effects') {
     throw new Error(`Task ${moduleId}/${taskId} already exists as a strict Task. Use qa-agent start/test for that Task or choose another --task id.`);
   }
   rebuildIndexes(root);

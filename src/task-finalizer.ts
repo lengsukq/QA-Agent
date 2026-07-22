@@ -3,8 +3,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { testPlanHash } from './approval.ts';
 import { rebuildIndexes } from './indexer.ts';
-import { qaPath, readRunById, readTask, saveTask, taskDirectory, taskPrdPath, taskRunReportPath } from './project.ts';
-import { listFiles, now, readJson, withFileLock, writeTextAtomic } from './store.ts';
+import { qaPath, readRunById, readTask, saveTask, taskDirectory, taskPrdPath, taskSourceRunPath, taskSourceRunReportPath } from './project.ts';
+import { now, readJson, withFileLock, writeTextAtomic } from './store.ts';
 import type { RunStatus, TaskFinalizationResult, TestRun, TestTask } from './types.ts';
 import { normalizeTaskState, transitionTaskState } from './workflow-model.ts';
 
@@ -12,15 +12,15 @@ const PRD_START = '<!-- QA-AGENT:RESULTS:START -->';
 const PRD_END = '<!-- QA-AGENT:RESULTS:END -->';
 
 function latestCompletedRun(root: string, task: TestTask): TestRun | undefined {
-  return listFiles(join(taskDirectory(root, task.metadata.moduleId, task.metadata.id), 'runs'), path => path.endsWith('/run.json'))
-    .map(path => readJson<TestRun>(path))
-    .filter(run => Boolean(run.completedAt) && run.moduleId === task.metadata.moduleId && run.taskId === task.metadata.id)
-    .sort((left, right) => (right.completedAt ?? right.startedAt).localeCompare(left.completedAt ?? left.startedAt))[0];
+  const path = taskSourceRunPath(root, task.metadata.moduleId, task.metadata.id);
+  if (!existsSync(path)) return undefined;
+  const run = readJson<TestRun>(path);
+  return run.completedAt && run.moduleId === task.metadata.moduleId && run.taskId === task.metadata.id ? run : undefined;
 }
 
-function runRelativeAsset(run: TestRun, path: string): string {
+function runRelativeAsset(_run: TestRun, path: string): string {
   const normalized = path.replaceAll('\\', '/').replace(/^\.\//, '');
-  return normalized.startsWith(`runs/${run.id}/`) ? normalized : `runs/${run.id}/${normalized}`;
+  return normalized.startsWith('source-run/') ? normalized : `source-run/${normalized}`;
 }
 
 function verifiedRunAsset(root: string, task: TestTask, run: TestRun, path: string): string {
@@ -64,7 +64,7 @@ function generatedPrdSection(root: string, task: TestTask, run: TestRun): string
     `- Platform: ${run.context.platform}`,
     `- Role: ${run.context.role}`,
     `- Conclusion: ${markdownText(run.conclusion ?? 'No conclusion recorded.')}`,
-    `- Detailed report: [runs/${run.id}/report.md](./runs/${run.id}/report.md)`, '',
+    '- Detailed report: [source-run/report.md](./source-run/report.md)', '',
     '## Verified Scenarios', '',
     ...(run.scenarioResults.length ? run.scenarioResults.map(result => `- ${result.scenarioId}: ${statusLabel(result.status)}${result.detail ? ` — ${markdownText(result.detail)}` : ''}`) : ['- No Scenario result was recorded.']), '',
     '## Passed Checks', '',
@@ -87,6 +87,17 @@ function upsertGeneratedPrd(existing: string | undefined, task: TestTask, genera
   const end = existing.indexOf(PRD_END);
   if (start >= 0 && end > start) return `${existing.slice(0, start)}${generated}${existing.slice(end + PRD_END.length)}`.trimEnd() + '\n';
   return `${existing.trimEnd()}\n\n${generated}\n`;
+}
+
+export function clearTaskResultSection(root: string, task: TestTask): void {
+  const path = taskPrdPath(root, task.metadata.moduleId, task.metadata.id);
+  if (!existsSync(path)) return;
+  const existing = readFileSync(path, 'utf8');
+  const start = existing.indexOf(PRD_START);
+  const end = existing.indexOf(PRD_END);
+  if (start < 0 || end <= start) return;
+  const next = `${existing.slice(0, start)}${existing.slice(end + PRD_END.length)}`.trimEnd() + '\n';
+  writeTextAtomic(path, next);
 }
 
 export function taskFinalizationIsCurrent(root: string, task: TestTask, run: TestRun): boolean {
@@ -122,7 +133,7 @@ export function finalizeTask(root: string, moduleId: string, taskId: string, sou
     saveTask(root, task);
 
     try {
-      if (!run.reportPath || run.reportGeneratedBy !== 'qa-agent-runtime' || !existsSync(taskRunReportPath(root, moduleId, taskId, run.id))) throw new Error(`Run ${run.id} does not have an authoritative Runtime report.`);
+      if (!run.reportPath || run.reportGeneratedBy !== 'qa-agent-runtime' || !existsSync(taskSourceRunReportPath(root, moduleId, taskId))) throw new Error(`Source Run ${run.id} does not have an authoritative Runtime report.`);
       for (const screenshot of run.screenshots) verifiedRunAsset(root, task, run, screenshot.path);
       const generated = generatedPrdSection(root, task, run);
       const prd = upsertGeneratedPrd(existsSync(prdPath) ? readFileSync(prdPath, 'utf8') : undefined, task, generated);

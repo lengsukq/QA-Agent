@@ -1,5 +1,6 @@
-import { listFiles, readJson } from './store.ts';
-import { readTask, taskDirectory } from './project.ts';
+import { existsSync } from 'node:fs';
+import { readJson } from './store.ts';
+import { readTask, taskSourceRunPath } from './project.ts';
 import { closeTaskSession, resolveActiveTaskSession } from './session.ts';
 import { finalizeTask } from './task-finalizer.ts';
 import type { FinishResult, TestRun, TestTask } from './types.ts';
@@ -7,9 +8,8 @@ import { normalizeTaskState } from './workflow-model.ts';
 import { workflowStatus } from './workflow.ts';
 
 function latestRun(root: string, task: TestTask): TestRun | undefined {
-  return listFiles(`${taskDirectory(root, task.metadata.moduleId, task.metadata.id)}/runs`, path => path.endsWith('/run.json'))
-    .map(path => readJson<TestRun>(path))
-    .sort((left, right) => (right.completedAt ?? right.startedAt).localeCompare(left.completedAt ?? left.startedAt))[0];
+  const path = taskSourceRunPath(root, task.metadata.moduleId, task.metadata.id);
+  return existsSync(path) ? readJson<TestRun>(path) : undefined;
 }
 
 export function finishCurrentTask(root: string, sessionKey?: string): FinishResult {

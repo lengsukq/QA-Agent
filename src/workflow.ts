@@ -1,16 +1,17 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { approvalIsCurrent, requiresTestPlanApproval, testPlanHash } from './approval.ts';
+import { approvalIsCurrent, requiresTestPlanApproval, START_TEST_CONFIRMATION_ZH, testPlanHash } from './approval.ts';
 import { checkCapabilities, platformCapabilities } from './capabilities.ts';
 import { appendTaskEvent, readTaskEvents, resumeToken, workflowContextHash } from './events.ts';
 import { rebuildIndexes } from './indexer.ts';
 import { listPythonRegressions } from './python-regression.ts';
 import { createTaskSkeleton, taskPlan } from './planning.ts';
-import { createModule, modulePath, readModule, readTask, saveTask, taskDirectory } from './project.ts';
-import { listFiles, readJson } from './store.ts';
+import { createModule, modulePath, readModule, readTask, saveTask, taskDirectory, taskPrdPath, taskSourceRunPath } from './project.ts';
+import { readJson } from './store.ts';
 import type { NextAction, QaWorkflowState, RiskLevel, TestRun, WorkflowGate, WorkflowPhase, WorkflowTodo } from './types.ts';
 import { normalizeTaskState } from './workflow-model.ts';
 import { taskFinalizationIsCurrent } from './task-finalizer.ts';
+import { planningPrdIsCurrent } from './task-prd.ts';
 
 export interface WorkflowBootstrapInput { request: string; moduleId: string; taskId: string; moduleName?: string; taskName?: string; platforms?: string[]; riskLevel?: RiskLevel; }
 
@@ -19,19 +20,20 @@ function runMatchesCurrentPlan(task: NonNullable<ReturnType<typeof readTask>>, r
 }
 
 function latestRun(root: string, task: NonNullable<ReturnType<typeof readTask>>): TestRun | undefined {
-  const directory = join(taskDirectory(root, task.metadata.moduleId, task.metadata.id), 'runs');
-  if (!existsSync(directory)) return undefined;
-  return listFiles(directory, path => path.endsWith('/run.json')).map(path => readJson<TestRun>(path)).filter(run => runMatchesCurrentPlan(task, run)).sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running') || b.startedAt.localeCompare(a.startedAt))[0];
+  const path = taskSourceRunPath(root, task.metadata.moduleId, task.metadata.id);
+  if (!existsSync(path)) return undefined;
+  const run = readJson<TestRun>(path);
+  return runMatchesCurrentPlan(task, run) ? run : undefined;
 }
 
-function todos(moduleReady: boolean, taskReady: boolean, approvalRequired: boolean, executionAuthorized: boolean, capabilityReady: boolean, run?: TestRun, finalizationRequired = false, finalizationCurrent = false): WorkflowTodo[] {
+function todos(moduleReady: boolean, taskReady: boolean, planReady: boolean, approvalRequired: boolean, executionAuthorized: boolean, capabilityReady: boolean, run?: TestRun, finalizationRequired = false, finalizationCurrent = false): WorkflowTodo[] {
   const running = run?.status === 'running'; const completed = Boolean(run?.completedAt);
   return [
     { id: 'project', title: 'Load the active QA project and Runtime state', status: 'completed' },
     { id: 'module', title: 'Resolve or create the business Module', status: moduleReady ? 'completed' : 'in_progress' },
     { id: 'task', title: 'Create the Task directory and planning assets', status: taskReady ? 'completed' : moduleReady ? 'in_progress' : 'pending' },
-    { id: 'plan', title: 'Review scope, Scenarios, assertions, evidence, safety, and cleanup', status: taskReady ? 'completed' : 'pending' },
-    { id: 'approval', title: approvalRequired ? 'Wait for explicit human TestPlan approval' : 'Use the Quick Check side-effect-only policy', status: approvalRequired ? (executionAuthorized ? 'completed' : taskReady ? 'blocked' : 'pending') : 'completed', blocking: approvalRequired },
+    { id: 'plan', title: 'Generate detailed Scenario steps and the reviewable Task PRD', status: planReady ? 'completed' : taskReady ? 'in_progress' : 'pending', blocking: true },
+    { id: 'approval', title: `Wait for the user to reply “${START_TEST_CONFIRMATION_ZH}”`, status: executionAuthorized ? 'completed' : taskReady ? 'blocked' : 'pending', blocking: approvalRequired },
     { id: 'capabilities', title: 'Verify host tools, environment, test data, and permissions', status: capabilityReady ? 'completed' : executionAuthorized ? 'blocked' : 'pending', blocking: true },
     { id: 'run', title: 'Start or resume the Task Run', status: running || completed ? 'completed' : executionAuthorized && capabilityReady ? 'in_progress' : 'pending' },
     { id: 'execute', title: 'Execute UI steps, assertions, evidence, recovery, and cleanup', status: running ? 'in_progress' : completed ? 'completed' : 'pending' },
@@ -64,8 +66,9 @@ export function workflowStatus(root: string, moduleId: string, taskId: string, r
   const moduleReady = existsSync(join(modulePath(root, moduleId), 'module.json'));
   const taskReady = moduleReady && existsSync(join(taskDirectory(root, moduleId, taskId), 'task.json'));
   const task = taskReady ? readTask(root, moduleId, taskId) : undefined;
+  const planReady = Boolean(task && task.scenarios.length && task.scenarios.every(scenario => scenario.planningStatus === 'applicable' && scenario.plannedSteps?.length && scenario.plannedSteps.every(step => step.action.trim() && step.expected.trim())) && planningPrdIsCurrent(taskPrdPath(root, moduleId, taskId), task));
   const approvalRequired = Boolean(task && requiresTestPlanApproval(task));
-  const executionAuthorized = Boolean(task && (!approvalRequired || approvalIsCurrent(task)));
+  const executionAuthorized = Boolean(task && planReady && approvalIsCurrent(task));
   const run = task ? latestRun(root, task) : undefined;
   const scripts = task ? listPythonRegressions(root, moduleId, taskId) : [];
   const validatedScripts = scripts.filter(script => script.status === 'validated' && task && script.sourcePlanHash === testPlanHash(task));
@@ -77,9 +80,10 @@ export function workflowStatus(root: string, moduleId: string, taskId: string, r
   const quickFinalizationCurrent = Boolean(task && run && quickFinalizationRequired && taskFinalizationIsCurrent(root, task, run));
   let status: QaWorkflowState['workflowStatus']; let phase: WorkflowPhase; let reasonCode: string; let nextActions: NextAction[];
 
-  if (!moduleReady || !taskReady) { status = 'setup_required'; phase = 'intake'; reasonCode = 'task_assets_missing'; nextActions = [{ id: 'start_task', command: 'qa-agent start', description: 'Create or resume the Module, Task, TestPlan, and Scenario assets.', requiresHuman: false, requiredActor: 'agent', blockingGate: 'task_assets_ready' }]; }
+  if (!moduleReady || !taskReady) { status = 'setup_required'; phase = 'intake'; reasonCode = 'task_assets_missing'; nextActions = [{ id: 'start_task', command: 'qa-agent start', description: 'Create or resume the Module and Task directory before planning.', requiresHuman: false, requiredActor: 'agent', blockingGate: 'task_assets_ready' }]; }
   else if (taskState === 'archived') { status = 'completed'; phase = 'archive'; reasonCode = 'task_archived'; nextActions = []; }
-  else if (!executionAuthorized) { status = 'approval_required'; phase = 'approval'; reasonCode = 'test_plan_approval_required'; nextActions = [{ id: 'request_test_plan_approval', description: 'Present the current plan diff and request explicit human approval.', requiresHuman: true, requiredActor: 'human', blockingGate: 'test_plan_approved' }]; }
+  else if (!planReady) { status = 'setup_required'; phase = 'planning'; reasonCode = 'task_prd_or_detailed_steps_missing'; nextActions = [{ id: 'generate_detailed_plan', command: 'qa-agent plan apply', description: 'Inspect the project, generate detailed Scenario steps, and write the current plan into the Task PRD.', requiresHuman: false, requiredActor: 'agent', blockingGate: 'task_plan_ready' }]; }
+  else if (!executionAuthorized) { status = 'approval_required'; phase = 'approval'; reasonCode = 'explicit_start_confirmation_required'; nextActions = [{ id: 'request_test_plan_approval', description: `Present the Task PRD and wait for the exact user reply “${START_TEST_CONFIRMATION_ZH}”.`, requiresHuman: true, requiredActor: 'human', blockingGate: 'test_plan_approved' }]; }
   else if (quickFinalizationRequired && !quickFinalizationCurrent) { status = 'result_ready'; phase = 'result_review'; reasonCode = task?.finalization?.status === 'failed' ? 'task_finalization_retry_required' : 'runtime_result_ready_for_finalization'; nextActions = [{ id: 'finalize_task', command: `qa-agent task finalize ${taskId} --module ${moduleId}`, description: 'Update the Quick Task PRD and completed state from the authoritative Runtime Run.', requiresHuman: false, requiredActor: 'runtime' }]; }
   else if (!capabilityReady) { status = 'blocked'; phase = 'preflight'; reasonCode = 'host_capability_missing'; nextActions = [{ id: 'verify_host_capabilities', command: 'qa-agent host doctor', description: `Verify or restore required capabilities: ${capabilityStatus?.missing.join(', ') || 'unknown'}.`, requiresHuman: false, requiredActor: 'host', blockingGate: 'host_capabilities_ready' }]; }
   else if (run?.status === 'running') { status = 'running'; phase = 'execution'; reasonCode = 'test_run_active'; nextActions = runningNextActions(task!, run); }
@@ -93,14 +97,14 @@ export function workflowStatus(root: string, moduleId: string, taskId: string, r
   } else { status = 'ready_to_run'; phase = 'preflight'; reasonCode = 'approved_task_ready'; nextActions = [{ id: 'start_test', command: 'qa-agent test', description: 'Start the approved execution through the semantic test command.', requiresHuman: false, requiredActor: 'agent' }]; }
 
   const uiExecutionAllowed = status === 'running' && Boolean(run?.id); const mustStop = !uiExecutionAllowed;
-  const gates: WorkflowGate[] = [gate('task_assets_ready', taskReady, taskReady ? 'task_assets_ready' : 'task_assets_missing', 'runtime'), gate('test_plan_approved', executionAuthorized, approvalRequired ? executionAuthorized ? 'test_plan_approved' : 'test_plan_approval_required' : 'test_plan_not_required_quick', 'human', task ? testPlanHash(task) : undefined, approvalRequired && taskReady), gate('host_capabilities_ready', capabilityReady, capabilityReady ? 'host_capabilities_ready' : 'host_capability_missing', 'host', undefined, executionAuthorized), gate('task_assets_finalized', quickFinalizationCurrent, quickFinalizationCurrent ? 'task_assets_finalized' : 'task_finalization_pending', 'runtime', task?.finalization?.artifactHash, quickFinalizationRequired)];
+  const gates: WorkflowGate[] = [gate('task_assets_ready', taskReady, taskReady ? 'task_assets_ready' : 'task_assets_missing', 'runtime'), gate('task_plan_ready', planReady, planReady ? 'task_prd_and_detailed_steps_ready' : 'task_prd_or_detailed_steps_missing', 'agent', task ? testPlanHash(task) : undefined, taskReady), gate('test_plan_approved', executionAuthorized, executionAuthorized ? 'explicit_start_confirmation_recorded' : 'explicit_start_confirmation_required', 'human', task ? testPlanHash(task) : undefined, approvalRequired && planReady), gate('host_capabilities_ready', capabilityReady, capabilityReady ? 'host_capabilities_ready' : 'host_capability_missing', 'host', undefined, executionAuthorized), gate('task_assets_finalized', quickFinalizationCurrent, quickFinalizationCurrent ? 'task_assets_finalized' : 'task_finalization_pending', 'runtime', task?.finalization?.artifactHash, quickFinalizationRequired)];
   const allowedActions = uiExecutionAllowed ? ['ui.execute', 'run.step', 'run.evidence', 'run.observe', 'run.cleanup', 'run.recover', 'run.complete'] : [...new Set(nextActions.map(action => action.command).filter((v): v is string => Boolean(v)).concat(['workflow.status']))];
   const forbiddenActions = uiExecutionAllowed ? ['manual-report.write', 'pass.claim-before-run-complete'] : ['ui.execute', 'manual-report.write', 'pass.claim'];
   const events = taskReady ? readTaskEvents(root, moduleId, taskId) : []; const lastEvent = events.at(-1); const progress = runProgressKey(run);
   const scriptStates = scripts.map(script => [script.id, script.status, script.scriptHash]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
   const contextHash = workflowContextHash({ planHash: task ? testPlanHash(task) : undefined, taskState, workflowPhase: phase, runId: run?.id, runStatus: run?.status, runProgress: progress, pythonRegressionStates: scriptStates });
   const stateBreadcrumb = breadcrumb({ moduleId, taskId, taskState, phase, runId: run?.status === 'running' ? run.id : undefined, blockingGates: gates.filter(item => item.status === 'blocking').map(item => item.id), allowedActions, forbiddenActions, nextAction: nextActions[0] });
-  return { apiVersion: 'qa-agent/v3', kind: 'WorkflowState', request, moduleId, taskId, taskDirectory: taskReady ? `.qa-agent/modules/${moduleId}/tasks/${taskId}` : undefined, taskDirectoryAbsolute: taskReady ? taskDirectory(root, moduleId, taskId) : undefined, taskAssetsReady: taskReady, workflowStatus: status, taskState, workflowPhase: phase, reasonCode, gates, uiExecutionAllowed, mustStop, manualReportAllowed: false, runId: uiExecutionAllowed ? run?.id : undefined, plan: task ? taskPlan(task) : undefined, todoList: todos(moduleReady, taskReady, approvalRequired, executionAuthorized, capabilityReady, run, quickFinalizationRequired, quickFinalizationCurrent), allowedActions, forbiddenActions, nextAllowedAction: nextActions[0]?.description ?? 'No action is currently allowed.', nextActions, breadcrumb: stateBreadcrumb, resumeToken: taskReady ? resumeToken(moduleId, taskId, run?.status === 'running' ? run.id : undefined, lastEvent?.seq, run?.status === 'running' ? progress : undefined) : undefined, contextHash };
+  return { apiVersion: 'qa-agent/v3', kind: 'WorkflowState', request, moduleId, taskId, taskDirectory: taskReady ? `.qa-agent/modules/${moduleId}/tasks/${taskId}` : undefined, taskDirectoryAbsolute: taskReady ? taskDirectory(root, moduleId, taskId) : undefined, taskAssetsReady: taskReady, workflowStatus: status, taskState, workflowPhase: phase, reasonCode, gates, uiExecutionAllowed, mustStop, manualReportAllowed: false, runId: uiExecutionAllowed ? run?.id : undefined, plan: task ? taskPlan(task) : undefined, todoList: todos(moduleReady, taskReady, planReady, approvalRequired, executionAuthorized, capabilityReady, run, quickFinalizationRequired, quickFinalizationCurrent), allowedActions, forbiddenActions, nextAllowedAction: nextActions[0]?.description ?? 'No action is currently allowed.', nextActions, breadcrumb: stateBreadcrumb, resumeToken: taskReady ? resumeToken(moduleId, taskId, run?.status === 'running' ? run.id : undefined, lastEvent?.seq, run?.status === 'running' ? progress : undefined) : undefined, contextHash };
 }
 
 export function bootstrapWorkflow(root: string, input: WorkflowBootstrapInput): QaWorkflowState {
@@ -110,10 +114,10 @@ export function bootstrapWorkflow(root: string, input: WorkflowBootstrapInput): 
   const taskCreated = !existsSync(join(taskDirectory(root, input.moduleId, input.taskId), 'task.json'));
   if (taskCreated) {
     const task = createTaskSkeleton(readModule(root, input.moduleId), input.taskId, input.taskName ?? input.request.slice(0, 80));
-    task.description = input.request; task.objectives = [input.request]; task.metadata.status = 'awaiting_approval'; task.scenarios[0]!.title = input.taskName ?? input.request.slice(0, 80); task.scenarios[0]!.intent = input.request; task.scenarios[0]!.planningStatus = 'applicable'; task.scenarios[0]!.priority = task.metadata.priority; task.scenarios[0]!.requirementRefs = ['requirement-1']; task.scenarios[0]!.expected = { outcome: `The requested business outcome is verified: ${input.request}` }; task.scenarios[0]!.visualAssertions = [{ id: 'business-outcome', expected: `The visible result matches the approved request: ${input.request}`, importance: task.scenarios[0]!.risk }];
+    task.description = input.request; task.objectives = [input.request]; task.metadata.status = 'planning'; task.scenarios[0]!.title = input.taskName ?? input.request.slice(0, 80); task.scenarios[0]!.intent = input.request; task.scenarios[0]!.planningStatus = 'needs_user_decision'; task.scenarios[0]!.priority = task.metadata.priority; task.scenarios[0]!.requirementRefs = ['requirement-1']; task.scenarios[0]!.expected = { outcome: `The requested business outcome is verified: ${input.request}` }; task.scenarios[0]!.visualAssertions = [{ id: 'business-outcome', expected: `The visible result matches the approved request: ${input.request}`, importance: task.scenarios[0]!.risk }];
     if (task.requirements) { task.requirements.businessGoals = [input.request]; task.requirements.scope.included = [input.request]; task.requirements.requirementTrace = [{ requirementId: 'requirement-1', scenarioIds: ['happy-path'], assertionIds: ['business-outcome'], sourceRefs: task.requirements.sourceRefs, status: 'covered' }]; }
-    saveTask(root, task); appendTaskEvent(root, { type: 'task_created', actor: { type: 'agent', id: 'qa-agent' }, moduleId: input.moduleId, taskId: input.taskId, fromState: 'draft', toState: 'awaiting_approval', reasonCode: 'qa_request_materialized', artifactHash: testPlanHash(task), idempotencyKey: `task-created:${input.moduleId}:${input.taskId}:v1`, metadata: { requestSummary: input.request.slice(0, 160) } });
+    saveTask(root, task); appendTaskEvent(root, { type: 'task_created', actor: { type: 'agent', id: 'qa-agent' }, moduleId: input.moduleId, taskId: input.taskId, fromState: 'draft', toState: 'planning', reasonCode: 'qa_request_materialized_for_detailed_planning', artifactHash: testPlanHash(task), idempotencyKey: `task-created:${input.moduleId}:${input.taskId}:v1`, metadata: { requestSummary: input.request.slice(0, 160) } });
   }
   rebuildIndexes(root); const state = workflowStatus(root, input.moduleId, input.taskId, input.request); const directory = `.qa-agent/modules/${input.moduleId}/tasks/${input.taskId}`;
-  return { ...state, bootstrap: { moduleCreated, taskCreated, taskDirectory: directory, taskAssets: [`${directory}/task.json`, `${directory}/module-snapshot.json`, `${directory}/requirements.json`, `${directory}/test-plan.json`, `${directory}/scenarios/happy-path.json`, `${directory}/events.jsonl`, `${directory}/runs/`, `${directory}/regression/`, `${directory}/regression-runs/`] } };
+  return { ...state, bootstrap: { moduleCreated, taskCreated, taskDirectory: directory, taskAssets: [`${directory}/task.json`, `${directory}/module-snapshot.json`, `${directory}/requirements.json`, `${directory}/test-plan.json`, `${directory}/prd.md`, `${directory}/scenarios/happy-path.json`, `${directory}/events.jsonl`, `${directory}/source-run/`, `${directory}/regression/`, `${directory}/regression-runs/`] } };
 }

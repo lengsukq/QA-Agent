@@ -2,11 +2,13 @@
 
 QA Agent is a project-local AI testing runtime. Developers can request real UI checks in natural language while the Runtime persists Tasks, Runs, screenshots, business observations, cleanup, and reports.
 
-Current version: **v0.3.2**
+Current version: **v0.3.3**
 
-v0.3.2 separates Python script creation from regression execution:
+v0.3.3 separates Python script creation from regression execution:
 
-- the Agent presents a concise business test flow before real UI execution;
+- the Agent creates the Task first, then derives a detailed plan from the project with Step, Operation, and Expected Result entries;
+- Runtime writes the complete review plan into the Task `prd.md`, and the user must explicitly reply `确认开始测试`;
+- before that exact reply, Runtime creates no Run and the Agent may not invoke UI testing tools;
 - Runtime generates the screenshot-backed report;
 - after testing, the Agent may ask whether to generate Python from the exact executed flow;
 - the first confirmation permits a temporary draft only;
@@ -52,7 +54,7 @@ qa-agent --version
 Expected output:
 
 ```text
-0.3.2
+0.3.3
 ```
 
 ## Initialize a project
@@ -183,16 +185,16 @@ Test the login flow.
 
 The Agent follows this order:
 
-1. inspect relevant source, routes, tests, and configuration;
-2. present a concise business test flow;
-3. wait for the user to approve that flow;
-4. create or reuse a Quick Task;
-5. verify browser, simulator, or device capability;
-6. execute real UI actions;
-7. save screenshots and business observations;
-8. perform cleanup;
-9. generate the Runtime report;
-10. update the Task PRD automatically;
+1. create or reuse the Task directory without creating a Run;
+2. inspect relevant source, routes, tests, and configuration;
+3. build detailed Scenarios whose steps each contain an operation and expected result;
+4. write the complete review plan to the Task `prd.md`;
+5. present the Task PRD to the user;
+6. require the exact reply `确认开始测试`;
+7. only after Runtime records that reply, verify browser, simulator, or device capability and create a Run;
+8. execute real UI actions and save screenshots and business observations;
+9. perform cleanup and generate the Runtime report;
+10. append the latest result to the Task PRD;
 11. return a concise result;
 12. when the flow is suitable for reuse, ask whether to generate a Python regression script.
 
@@ -224,6 +226,27 @@ Compatible form:
 qa-agent check --request "Test the login flow"
 ```
 
+`check` creates the Task and review PRD only. It never starts testing. After the Agent refines the detailed steps from project source, the user reviews `prd.md` and replies exactly:
+
+```text
+确认开始测试
+```
+
+Then persist approval and start the Run:
+
+```bash
+qa-agent review \
+  --module MODULE \
+  --task TASK \
+  --approve \
+  --confirmed-by USER \
+  --confirmation-text "确认开始测试"
+
+qa-agent test --module MODULE --task TASK
+```
+
+Before that exact reply, `qa-agent test` fails without creating a Run.
+
 Continue:
 
 ```bash
@@ -236,18 +259,19 @@ Finish the session:
 qa-agent finish
 ```
 
-Quick Check does not require full TestPlan approval. It still enforces:
+Quick Check remains lightweight, but it now also requires review of the detailed TestPlan and Task PRD plus the exact reply `确认开始测试`. It enforces:
 
-- confirmation before real side effects;
+- a Task PRD matching the current plan hash;
+- exact human start confirmation;
 - capability and permission checks;
 - screenshot and business-assertion requirements;
 - cleanup;
 - Runtime-owned reports;
 - policies that stop real payment, refund, production write, and similar actions.
 
-## Minimal Quick Task assets
+## Initial Task test assets
 
-A completed Quick Task keeps:
+Each Task keeps exactly one Source Run used to derive the reusable script:
 
 ```text
 .qa-agent/modules/<module>/tasks/<task>/
@@ -256,20 +280,23 @@ A completed Quick Task keeps:
 ├── requirements.json
 ├── test-plan.json
 ├── scenarios/
-└── runs/
-    └── <run-id>/
-        ├── run.json
-        ├── report.md
-        ├── screenshots/
-        └── evidence/
+└── source-run/
+    ├── run.json
+    ├── report.md
+    ├── screenshots/
+    └── evidence/
 ```
 
-- `run.json` contains structured facts for one execution;
-- `report.md` is the authoritative report for that Run;
-- `prd.md` stores the long-lived Task goal and latest result;
+- `source-run/run.json` contains the structured facts from the first real AI test;
+- `source-run/report.md` is the authoritative report for that execution;
+- `prd.md` stores the reviewed plan and latest result;
 - `screenshots/` and `evidence/` contain real artifacts.
 
-v0.3.2 keeps the minimal asset model and does not create duplicate `summary.md`, Quick observed-Scenario JSON, or Session Journal files.
+A Task no longer keeps multiple `runs/<run-id>/` histories. Before a formal Python script is published, another initial test replaces the unpublished Source Run and records the restart in `events.jsonl`. After publication, the Source Run is frozen and all later execution goes to `regression-runs/`.
+
+When the TestPlan changes, the old Python script first becomes `stale`. After the user reviews and approves the changed plan, Runtime may create a replacement Source Run and a revised script.
+
+v0.3.3 does not create duplicate `summary.md`, Quick observed-Scenario JSON, Source Run history indexes, or Session Journal files.
 
 ## Python regression scripts
 
@@ -428,12 +455,12 @@ Show strict regression, release, and administration commands with:
 qa-agent help --advanced
 ```
 
-## Upgrade to v0.3.2
+## Upgrade to v0.3.3
 
 Upgrade the CLI:
 
 ```bash
-npm install -g qa-agent-skill@0.3.2
+npm install -g qa-agent-skill@0.3.3
 ```
 
 Then update an existing project:
@@ -461,7 +488,7 @@ npm run pack:check
 
 ## Three Skills
 
-v0.3.2 installs:
+v0.3.3 installs:
 
 ```text
 qa-agent

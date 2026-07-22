@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { beginAgentGuidedRun, completeAgentGuidedRun, recordAgentStep, recordVisualFinding } from '../src/engine.ts';
-import { createModule, initializeProject, readTask, saveTask, taskDirectory, taskRunReportPath } from '../src/project.ts';
+import { createModule, initializeProject, readTask, saveTask, taskDirectory, taskSourceRunDirectory, taskSourceRunPath, taskSourceRunReportPath } from '../src/project.ts';
 import { createTaskSkeleton } from '../src/planning.ts';
 import { inspectTaskArchive } from '../src/archive.ts';
 import { analyzeProjectImpact } from '../src/impact-analysis.ts';
@@ -36,8 +36,74 @@ function importHost(root: string): void {
 }
 function approve(task: TestTask): TestTask {
   task.metadata.status = 'ready';
-  task.metadata.approval = { confirmedBy: 'project-owner', confirmedAt: new Date().toISOString(), confirmationSource: 'external-review-record', statement: 'Approved.', planHash: testPlanHash(task) };
+  task.metadata.approval = { confirmedBy: 'project-owner', confirmedAt: new Date().toISOString(), confirmationSource: 'external-review-record', statement: '确认开始测试', planHash: testPlanHash(task) };
   return task;
+}
+function approveThroughCli(root: string, moduleId: string, taskId: string): void {
+  run(root, 'review', '--module', moduleId, '--task', taskId, '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '确认开始测试');
+}
+function applyDetailedPlan(root: string, task: TestTask): TestTask {
+  const scenario = task.scenarios[0]!;
+  const planPath = join(root, `plan-${task.metadata.moduleId}-${task.metadata.id}.json`);
+  writeFileSync(planPath, JSON.stringify({
+    apiVersion: 'qa-agent/plan-draft/v1',
+    moduleId: task.metadata.moduleId,
+    taskId: task.metadata.id,
+    taskName: task.metadata.name,
+    description: task.description,
+    objectives: task.objectives,
+    scope: task.scope,
+    preconditions: task.preconditions,
+    scenarios: [{
+      id: scenario.id,
+      title: scenario.title,
+      intent: scenario.intent,
+      input: scenario.input,
+      preconditions: scenario.preconditions,
+      expected: scenario.expected,
+      evidence: scenario.evidence,
+      cleanup: scenario.cleanup,
+      risk: scenario.risk,
+      planningStatus: 'applicable',
+      priority: scenario.priority,
+      requirementRefs: scenario.requirementRefs,
+      sourceRefs: scenario.sourceRefs,
+      steps: [
+        { id: 'open-target', action: '打开测试目标页面', expected: '页面正常加载并显示目标业务区域。' },
+        { id: 'locate-state', action: `定位与“${scenario.intent}”相关的控件和状态`, expected: '目标控件、文案和业务状态可以被稳定识别。' },
+        { id: 'execute-flow', action: `执行已规划业务流程：${scenario.intent}`, expected: String(scenario.expected.outcome ?? '业务流程进入预期状态。') },
+        { id: 'verify-result', action: '验证最终控件状态、可见文案和业务反馈', expected: '实际结果与所有业务断言一致，或记录明确差异。' },
+        { id: 'capture-evidence', action: '截取关键结果页面', expected: '截图保存到对应 Task Run 目录。' },
+      ],
+      visualAssertions: scenario.visualAssertions,
+    }],
+  }, null, 2));
+  const applied = json(root, 'plan', 'apply', '--file', planPath);
+  assert.equal(applied.approvalRequired, true);
+  assert.equal(applied.requiredConfirmation, '确认开始测试');
+  return readTask(root, task.metadata.moduleId, task.metadata.id);
+}
+function prepareQuickTask(root: string, request: string): { prepared: any; task: TestTask } {
+  const prepared = json(root, 'check', request);
+  assert.equal(prepared.runId, undefined);
+  assert.equal(prepared.uiExecutionAllowed, false);
+  assert.equal(prepared.mustStop, true);
+  assert.equal(prepared.planningRequired, true);
+  assert.equal(prepared.requiredConfirmationAfterPlanning, '确认开始测试');
+  assert.ok(existsSync(prepared.prdPath));
+  assert.match(readFileSync(prepared.prdPath, 'utf8'), /Task 初始草案/);
+  const task = applyDetailedPlan(root, readTask(root, prepared.quickCheck.moduleId, prepared.quickCheck.taskId));
+  const prd = readFileSync(prepared.prdPath, 'utf8');
+  assert.match(prd, /\| 步骤 \| 操作 \| 预期结果 \|/);
+  assert.match(prd, /确认开始测试/);
+  assert.doesNotMatch(prd, /Task 初始草案/);
+  return { prepared, task };
+}
+function startQuickTask(root: string, request: string): { prepared: any; task: TestTask; started: any } {
+  const { prepared, task } = prepareQuickTask(root, request);
+  approveThroughCli(root, task.metadata.moduleId, task.metadata.id);
+  const started = json(root, 'test', '--module', task.metadata.moduleId, '--task', task.metadata.id);
+  return { prepared, task: readTask(root, task.metadata.moduleId, task.metadata.id), started };
 }
 function completeRun(root: string, task: TestTask, runId: string, options: { businessStatus?: 'passed' | 'failed'; action?: 'click' | 'fill'; inputRefs?: Record<string,string> } = {}): TestRun {
   const screenshot = join(root, `${runId}.png`);
@@ -95,10 +161,10 @@ function strictTaskWithRun(root: string, moduleId: string, taskId: string, risk:
   return { task: readTask(root, moduleId, taskId), run: completed };
 }
 
-test('initializes v0.3.2 without replay directories and exposes simplified help', () => {
+test('initializes v0.3.3 without replay directories and exposes simplified help', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-init-'));
   run(root, 'init', '--id', 'fixture');
-  assert.equal(run(root, '--version').trim(), '0.3.2');
+  assert.equal(run(root, '--version').trim(), '0.3.3');
   const help = run(root, 'help');
   for (const commandName of ['init', 'check', 'continue', 'finish', 'doctor', 'update']) assert.match(help, new RegExp(commandName));
   assert.doesNotMatch(help, /operation plan|operation replay/i);
@@ -113,24 +179,28 @@ test('initializes v0.3.2 without replay directories and exposes simplified help'
   assert.equal(existsSync(join(taskRoot, 'operation-plans')), false);
   assert.equal(existsSync(join(taskRoot, 'regression-suite.json')), false);
   assert.equal(existsSync(join(taskRoot, 'reports')), false);
+  assert.equal(existsSync(join(taskRoot, 'runs')), false);
+  assert.equal(existsSync(join(taskRoot, 'source-run')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'operation.schema.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'regression-suite.schema.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'skills', 'built-in', 'operation-replay.json')), false);
-  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.2');
+  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.3');
   assert.equal(validateProject(root).valid, true);
 });
 
 test('Quick Check completes with report, PRD, and direct Python eligibility', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-quick-'));
   run(root, 'init', '--id', 'quick'); importHost(root);
-  const started = json(root, 'check', '测试登录流程');
-  const task = readTask(root, started.quickCheck.moduleId, started.quickCheck.taskId);
+  const { task, started } = startQuickTask(root, '测试登录流程');
   const completed = completeRun(root, task, started.runId);
   assert.equal(completed.status, 'passed');
   assert.equal(completed.pythonRegressionEligibility?.eligible, true);
   assert.ok(completed.pythonRegressionEligibility?.flowHash);
   const taskRoot = taskDirectory(root, task.metadata.moduleId, task.metadata.id);
-  assert.ok(existsSync(taskRunReportPath(root, task.metadata.moduleId, task.metadata.id, completed.id)));
+  assert.ok(existsSync(taskSourceRunReportPath(root, task.metadata.moduleId, task.metadata.id)));
+  assert.equal(existsSync(join(taskRoot, 'runs')), false);
+  assert.equal(readTask(root, task.metadata.moduleId, task.metadata.id).sourceRunRef, 'source-run/run.json');
+  assert.equal(readTask(root, task.metadata.moduleId, task.metadata.id).sourceReportRef, 'source-run/report.md');
   assert.ok(existsSync(join(taskRoot, 'prd.md')));
   assert.equal(readTask(root, task.metadata.moduleId, task.metadata.id).metadata.status, 'completed');
   assert.equal(existsSync(join(taskRoot, 'operation-plans')), false);
@@ -141,8 +211,7 @@ test('Quick Check completes with report, PRD, and direct Python eligibility', ()
 test('Run eligibility rejects incomplete structured input trace without creating duplicate assets', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-ineligible-'));
   run(root, 'init', '--id', 'ineligible'); importHost(root);
-  const started = json(root, 'check', '测试表单输入');
-  const task = readTask(root, started.quickCheck.moduleId, started.quickCheck.taskId);
+  const { task, started } = startQuickTask(root, '测试表单输入');
   const completed = completeRun(root, task, started.runId, { action: 'fill' });
   assert.equal(completed.status, 'passed');
   assert.equal(completed.pythonRegressionEligibility?.eligible, false);
@@ -150,15 +219,80 @@ test('Run eligibility rejects incomplete structured input trace without creating
   assert.equal(existsSync(join(taskDirectory(root, task.metadata.moduleId, task.metadata.id), 'operation-plans')), false);
 });
 
+test('a new initial execution replaces the unpublished Source Run instead of creating runs history', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-source-replace-'));
+  run(root, 'init', '--id', 'source-replace'); importHost(root);
+  const first = startQuickTask(root, '验证可重复的商品流程');
+  const completed = completeRun(root, first.task, first.started.runId);
+  const taskRoot = taskDirectory(root, first.task.metadata.moduleId, first.task.metadata.id);
+  assert.match(readFileSync(join(taskRoot, 'prd.md'), 'utf8'), /QA-AGENT:RESULTS:START/);
+  const second = json(root, 'test', '--module', first.task.metadata.moduleId, '--task', first.task.metadata.id);
+  assert.equal(second.status, 'running');
+  assert.notEqual(second.runId, completed.id);
+  assert.equal(JSON.parse(readFileSync(taskSourceRunPath(root, first.task.metadata.moduleId, first.task.metadata.id), 'utf8')).id, second.runId);
+  assert.equal(existsSync(join(taskRoot, 'runs')), false);
+  assert.doesNotMatch(readFileSync(join(taskRoot, 'prd.md'), 'utf8'), /QA-AGENT:RESULTS:START/);
+  assert.match(readFileSync(join(taskRoot, 'events.jsonl'), 'utf8'), /source_run_restarted/);
+});
+
+test('a formal Python script freezes the Source Run and sends later execution to regression-runs', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-source-frozen-'));
+  initializeProject(root, { id: 'source-frozen' }); importHost(root);
+  const source = strictTaskWithRun(root, 'catalog', 'frozen-flow');
+  createFormalScript(root, source.task, source.run, 'frozen-script');
+  const rejected = command(root, 'test', '--module', 'catalog', '--task', 'frozen-flow');
+  assert.notEqual(rejected.status, 0);
+  assert.match(rejected.stderr, /Source Run .* frozen|formal Python regression/i);
+  assert.equal(JSON.parse(readFileSync(taskSourceRunPath(root, 'catalog', 'frozen-flow'), 'utf8')).id, source.run.id);
+  assert.ok(existsSync(join(taskDirectory(root, 'catalog', 'frozen-flow'), 'regression-runs')));
+});
+
+test('PlanDraft requires explicit detailed steps before review', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-plan-steps-'));
+  run(root, 'init', '--id', 'plan-steps');
+  run(root, 'start', '--request', '验证商品状态', '--module', 'catalog', '--task', 'product-state');
+  const task = readTask(root, 'catalog', 'product-state');
+  const scenario = task.scenarios[0]!;
+  const planPath = join(root, 'plan-without-steps.json');
+  writeFileSync(planPath, JSON.stringify({
+    apiVersion: 'qa-agent/plan-draft/v1',
+    moduleId: 'catalog',
+    taskId: 'product-state',
+    description: task.description,
+    objectives: task.objectives,
+    scenarios: [{
+      id: scenario.id,
+      title: scenario.title,
+      intent: scenario.intent,
+      expected: scenario.expected,
+      planningStatus: 'applicable',
+      visualAssertions: scenario.visualAssertions,
+    }],
+  }));
+  const rejected = command(root, 'plan', 'apply', '--file', planPath);
+  assert.notEqual(rejected.status, 0);
+  assert.match(rejected.stderr, /requires explicit detailed steps/i);
+  assert.equal(readTask(root, 'catalog', 'product-state').metadata.status, 'planning');
+  assert.equal(readTask(root, 'catalog', 'product-state').sourceRunRef, undefined);
+});
+
 test('strict Task requires human approval before real execution', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-approval-'));
   run(root, 'init', '--id', 'approval'); importHost(root);
   const started = json(root, 'start', '--request', '验证登录流程', '--module', 'auth', '--task', 'login-flow');
-  assert.equal(started.workflowStatus, 'approval_required');
+  assert.equal(started.workflowStatus, 'setup_required');
+  assert.equal(started.workflowPhase, 'planning');
+  applyDetailedPlan(root, readTask(root, 'auth', 'login-flow'));
+  assert.equal(json(root, 'workflow', 'status', '--module', 'auth', '--task', 'login-flow').workflowStatus, 'approval_required');
   const blocked = command(root, 'test', '--module', 'auth', '--task', 'login-flow');
-  assert.equal(blocked.status, 0);
-  assert.equal(JSON.parse(blocked.stdout).status, 'needs_confirmation');
-  run(root, 'review', '--module', 'auth', '--task', 'login-flow', '--approve', '--confirmed-by', 'project-owner');
+  assert.notEqual(blocked.status, 0);
+  assert.match(blocked.stderr, /确认开始测试/);
+  assert.equal(readTask(root, 'auth', 'login-flow').sourceRunRef, undefined);
+  const missingPhrase = command(root, 'review', '--module', 'auth', '--task', 'login-flow', '--approve', '--confirmed-by', 'project-owner');
+  assert.notEqual(missingPhrase.status, 0);
+  const wrongPhrase = command(root, 'review', '--module', 'auth', '--task', 'login-flow', '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '可以测试');
+  assert.notEqual(wrongPhrase.status, 0);
+  approveThroughCli(root, 'auth', 'login-flow');
   const execution = json(root, 'test', '--module', 'auth', '--task', 'login-flow');
   assert.equal(execution.status, 'running');
   assert.equal(execution.uiExecutionAllowed, true);
@@ -167,7 +301,9 @@ test('strict Task requires human approval before real execution', () => {
 test('missing host capability blocks execution without fabricating results', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-capability-'));
   run(root, 'init', '--id', 'capability');
-  const started = json(root, 'check', '测试首页');
+  const { task } = prepareQuickTask(root, '测试首页');
+  approveThroughCli(root, task.metadata.moduleId, task.metadata.id);
+  const started = json(root, 'test', '--module', task.metadata.moduleId, '--task', task.metadata.id);
   assert.equal(started.status, 'blocked');
   assert.equal(started.uiExecutionAllowed, false);
   assert.match(started.conclusion, /capability|precondition/i);
@@ -176,7 +312,7 @@ test('missing host capability blocks execution without fabricating results', () 
 test('safety policy blocks prohibited UI actions', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-safety-'));
   run(root, 'init', '--id', 'safety'); importHost(root);
-  const started = json(root, 'check', '验证支付前页面');
+  const { started } = startQuickTask(root, '验证支付前页面');
   const screenshot = join(root, 'safe.png'); writeFileSync(screenshot, 'shot');
   assert.throws(() => recordAgentStep(root, started.runId, { action: 'Submit payment', safetyAction: 'payment.submit.real', detail: 'Would submit a real payment.', screenshotPath: screenshot, scenarioId: 'exploration', source: 'ui' }), /Safety policy blocks/);
 });
@@ -239,33 +375,68 @@ test('Archive requires validated Python coverage and succeeds after script valid
   assert.equal(readTask(root, 'account', 'profile').metadata.status, 'archived');
 });
 
-test('changing a Task plan marks a formal Python script stale', () => {
+test('changing a Task plan marks Python stale and allows a replacement Source Run after reapproval', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-stale-'));
   initializeProject(root, { id: 'stale' }); importHost(root);
   const source = strictTaskWithRun(root, 'settings', 'preferences'); createFormalScript(root, source.task, source.run, 'preferences-script');
   run(root, 'task', 'update', 'preferences', '--module', 'settings', '--name', 'Changed preferences flow');
   assert.equal(readPythonRegression(root, 'settings', 'preferences', 'preferences-script').status, 'stale');
+  approveThroughCli(root, 'settings', 'preferences');
+  const replacement = json(root, 'test', '--module', 'settings', '--task', 'preferences');
+  assert.equal(replacement.status, 'running');
+  assert.notEqual(replacement.runId, source.run.id);
+  assert.equal(JSON.parse(readFileSync(taskSourceRunPath(root, 'settings', 'preferences'), 'utf8')).id, replacement.runId);
 });
 
-test('Migration removes legacy replay assets and upgrades Python source metadata', () => {
+test('Migration selects one Source Run, preserves extra history, and upgrades Python metadata', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-migration-'));
   initializeProject(root, { id: 'migration' }); importHost(root);
   const source = strictTaskWithRun(root, 'legacy', 'legacy-task'); createFormalScript(root, source.task, source.run, 'legacy-script');
   const taskRoot = taskDirectory(root, 'legacy', 'legacy-task');
+  const oldRunsRoot = join(taskRoot, 'runs');
+  const oldSelectedRun = join(oldRunsRoot, source.run.id);
+  mkdirSync(oldRunsRoot, { recursive: true });
+  cpSync(taskSourceRunDirectory(root, 'legacy', 'legacy-task'), oldSelectedRun, { recursive: true });
+  rmSync(taskSourceRunDirectory(root, 'legacy', 'legacy-task'), { recursive: true, force: true });
+  const extraRunId = 'run-legacy-extra';
+  const oldExtraRun = join(oldRunsRoot, extraRunId);
+  cpSync(oldSelectedRun, oldExtraRun, { recursive: true });
+  const extraRunPath = join(oldExtraRun, 'run.json');
+  const extraRun = JSON.parse(readFileSync(extraRunPath, 'utf8'));
+  extraRun.id = extraRunId;
+  extraRun.startedAt = '2027-01-01T00:00:00.000Z';
+  extraRun.completedAt = '2027-01-01T00:01:00.000Z';
+  extraRun.reportPath = `runs/${extraRunId}/report.md`;
+  writeFileSync(extraRunPath, JSON.stringify(extraRun, null, 2));
+
   const manifestPath = join(taskRoot, 'regression', 'legacy-script.json');
   const scriptPath = join(taskRoot, 'regression', 'legacy-script.py');
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   manifest.apiVersion = 'qa-agent/python-regression/v1'; manifest.sourceOperationPlanIds = ['legacy-operation']; delete manifest.sourceFlowHash; delete manifest.scenarioIds;
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
   const script = readFileSync(scriptPath, 'utf8').replace(/,"sourceFlowHash":"[^"]+"/, ''); writeFileSync(scriptPath, script);
-  const taskManifestPath = join(taskRoot, 'task.json'); const taskManifest = JSON.parse(readFileSync(taskManifestPath, 'utf8')); taskManifest.operationPlanRefs = ['operation-plans/happy-path/v1.json']; taskManifest.regressionSuiteRef = 'regression-suite.json'; taskManifest.metadata.status = 'regression_ready'; writeFileSync(taskManifestPath, JSON.stringify(taskManifest, null, 2));
+  const taskManifestPath = join(taskRoot, 'task.json');
+  const taskManifest = JSON.parse(readFileSync(taskManifestPath, 'utf8'));
+  taskManifest.operationPlanRefs = ['operation-plans/happy-path/v1.json'];
+  taskManifest.regressionSuiteRef = 'regression-suite.json';
+  taskManifest.reportIndexRef = 'runs/index.json';
+  taskManifest.runRefs = [`runs/${source.run.id}/run.json`, `runs/${extraRunId}/run.json`];
+  delete taskManifest.sourceRunRef;
+  delete taskManifest.sourceReportRef;
+  taskManifest.metadata.status = 'regression_ready';
+  writeFileSync(taskManifestPath, JSON.stringify(taskManifest, null, 2));
   mkdirSync(join(taskRoot, 'operation-plans', 'happy-path'), { recursive: true }); writeFileSync(join(taskRoot, 'operation-plans', 'happy-path', 'v1.json'), '{}'); writeFileSync(join(taskRoot, 'regression-suite.json'), '{}');
   mkdirSync(join(taskRoot, 'reports'), { recursive: true });
+  writeFileSync(join(oldRunsRoot, 'index.json'), '{}');
+  writeFileSync(join(oldRunsRoot, 'latest.json'), '{}');
   writeFileSync(join(root, '.qa-agent', 'schemas', 'operation.schema.json'), '{}');
   writeFileSync(join(root, '.qa-agent', 'schemas', 'regression-suite.schema.json'), '{}');
   writeFileSync(join(root, '.qa-agent', 'skills', 'built-in', 'operation-replay.json'), '{}');
   writeFileSync(join(root, '.qa-agent', '.version'), JSON.stringify({ version: '0.3.0', initializedAt: '2026-01-01T00:00:00.000Z' }));
+  const projectPath = join(root, '.qa-agent', 'project.json'); const project = JSON.parse(readFileSync(projectPath, 'utf8')); project.storage.runIndexFormat = 'jsonl'; writeFileSync(projectPath, JSON.stringify(project, null, 2));
+  writeFileSync(join(root, '.qa-agent', 'index', 'runs.jsonl'), '{}\n');
   for (const name of ['archive', 'cache', 'evidence', 'runs']) mkdirSync(join(root, '.qa-agent', name), { recursive: true });
+
   assert.equal(validateProject(root).valid, false);
   const result = migrateProjectArtifacts(root);
   assert.equal(result.removedOperationPlanDirectories, 1);
@@ -274,19 +445,29 @@ test('Migration removes legacy replay assets and upgrades Python source metadata
   assert.equal(result.removedLegacyBuiltInSkills, 1);
   assert.equal(result.updatedProjectVersion, 1);
   assert.equal(result.removedLegacyRuntimeDirectories, 4);
+  assert.equal(result.migratedSourceRuns, 1);
+  assert.equal(result.quarantinedLegacySourceRuns, 1);
+  assert.ok(result.removedLegacyRunIndexes >= 4);
   assert.equal(existsSync(join(taskRoot, 'operation-plans')), false);
   assert.equal(existsSync(join(taskRoot, 'regression-suite.json')), false);
   assert.equal(existsSync(join(taskRoot, 'reports')), false);
+  assert.equal(existsSync(join(taskRoot, 'runs')), false);
+  assert.equal(JSON.parse(readFileSync(taskSourceRunPath(root, 'legacy', 'legacy-task'), 'utf8')).id, source.run.id);
+  assert.ok(existsSync(join(root, '.qa-agent', '.runtime', 'migration-backup', 'source-runs', 'legacy', 'legacy-task', extraRunId, 'run.json')));
   assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'operation.schema.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'regression-suite.schema.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'skills', 'built-in', 'operation-replay.json')), false);
-  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.2');
+  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.3');
   const migrated = JSON.parse(readFileSync(manifestPath, 'utf8'));
   assert.equal(migrated.apiVersion, 'qa-agent/python-regression/v2');
   assert.ok(migrated.sourceFlowHash);
   assert.ok(migrated.scenarioIds.length);
   assert.equal(migrated.sourceOperationPlanIds, undefined);
-  assert.equal(readTask(root, 'legacy', 'legacy-task').metadata.status, 'reviewing_result');
+  assert.equal(migrated.sourceReportRef, 'source-run/report.md');
+  const migratedTask = readTask(root, 'legacy', 'legacy-task');
+  assert.equal(migratedTask.sourceRunRef, 'source-run/run.json');
+  assert.equal(migratedTask.sourceReportRef, 'source-run/report.md');
+  assert.equal(migratedTask.metadata.status, 'reviewing_result');
   assert.equal(validateProject(root).valid, true);
 });
 

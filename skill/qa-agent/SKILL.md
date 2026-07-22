@@ -5,7 +5,7 @@ description: Run project-aware QA checks, preserve real evidence, and turn revie
 
 # QA Agent
 
-Use this Skill for ordinary QA work. The user should only need to describe what to test, approve the proposed business flow, say “continue”, or ask to finish.
+Use this Skill for ordinary QA work. The user should only need to describe what to test, review the generated Task PRD, explicitly reply “确认开始测试”, say “continue”, or ask to finish.
 
 Read `references/workflow.md` before acting. Runtime owns Task state, Run state, evidence, reports, safety decisions, Python script publication, and regression results.
 
@@ -23,21 +23,25 @@ Quick Check is the default. Do not force strict planning onto a one-off test.
 
 ## Daily workflow
 
-1. Inspect relevant source, routes, tests, configuration, existing QA assets, and available tools.
-2. Present a short business test flow in the user’s language before starting UI execution.
-3. Wait for the user to approve that flow.
-4. Call `qa-agent check --request "<original request>"`; infer safe Module and Task identities.
-5. On later turns call `qa-agent continue`; do not ask the user to repeat internal IDs.
-6. Use UI tools only when Runtime returns `uiExecutionAllowed=true`, `mustStop=false`, and a `runId`.
-7. Persist every real action, screenshot, business observation, cleanup result, evidence artifact, and recovery attempt through Runtime commands.
-8. Follow the Runtime `nextAction`. Ask at most one user-owned question per turn.
-9. Complete only through `qa-agent run complete`. Runtime owns the report and Quick Task PRD.
-10. Present the result: outcome, passed checks, failures or blockers, screenshots, and cleanup.
-11. If Runtime reports `pythonRegressionEligibility.eligible=true`, ask once whether the user wants a Python regression script generated from that exact completed Run.
-12. Generation consent authorizes a draft only. Read `references/python-regression.md` and `references/recommended-regression-stack.md`, prefer the recommended platform adapter when the project has no established framework, generate the Python file from the recorded Run steps, save it with `qa-agent regression draft`, and show the complete script or complete diff.
-13. Publish with `qa-agent regression publish` only after a separate explicit user approval of the reviewed script.
-14. For later reruns, load `qa-agent-regression-test`; it runs the formal script and reviews the Runtime-generated report without editing or replanning the flow.
-15. On explicit session closure call `qa-agent finish`. Session finish is not Task archive.
+1. Infer safe Module and Task identities, then call `qa-agent check --request "<original request>"`. It creates planning assets only and must not start a Run.
+2. Inspect relevant source, routes, tests, configuration, existing QA assets, and tools.
+3. Produce a PlanDraft. Every Scenario must contain ordered `steps`; every step needs `action` and `expected`.
+4. Apply it through `qa-agent plan apply`. Runtime writes Scenario sections and Step / Operation / Expected Result tables to Task `prd.md`.
+5. Present the current Task PRD without replacing it with a competing summary.
+6. Require the exact reply `确认开始测试`; “可以”, “继续”, and similar replies are not approval.
+7. Record it with `qa-agent review --module MODULE --task TASK --approve --confirmed-by HUMAN --confirmation-text "确认开始测试"`.
+8. Then call `qa-agent test` to create or resume the Task's single Source Run. Before approval, never create it or invoke UI tools.
+9. On later turns call `qa-agent continue`; do not request internal IDs again.
+10. Use UI tools only with `uiExecutionAllowed=true`, `mustStop=false`, and a `runId`.
+11. Persist each real action, screenshot, observation, cleanup, evidence artifact, and recovery attempt through Runtime.
+12. Follow `nextAction`; ask at most one user-owned question per turn.
+13. Complete only through `qa-agent run complete`. Runtime owns the report and Task PRD result section.
+14. Present outcome, checks, failures or blockers, screenshots, and cleanup.
+15. When `pythonRegressionEligibility.eligible=true`, ask whether to generate Python from that exact Run.
+16. Generation consent authorizes a draft only. Read `references/python-regression.md` and `references/recommended-regression-stack.md`, generate from recorded steps, save with `qa-agent regression draft`, and show the full script or diff.
+17. Publish with `qa-agent regression publish` only after separate explicit approval. Publication freezes the Source Run.
+18. For reruns, load `qa-agent-regression-test`; it writes to `regression-runs/` and reviews the Runtime report without editing or replanning.
+19. Call `qa-agent finish` only on explicit closure. Session finish is not Task archive.
 
 ## User-facing rules
 

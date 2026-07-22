@@ -32,8 +32,42 @@ test('creates a reviewed Python regression draft, publishes it into the Task, an
   run(root, 'init', '--id', 'python-regression-fixture');
   importHostSnapshot(root);
 
-  const started = JSON.parse(run(root, 'check', '测试登录回归脚本'));
-  const task = readTask(root, started.quickCheck.moduleId, started.quickCheck.taskId);
+  const prepared = JSON.parse(run(root, 'check', '测试登录回归脚本'));
+  assert.equal(prepared.runId, undefined);
+  assert.equal(prepared.planningRequired, true);
+  assert.equal(prepared.requiredConfirmationAfterPlanning, '确认开始测试');
+  assert.ok(existsSync(prepared.prdPath));
+  assert.match(readFileSync(prepared.prdPath, 'utf8'), /Task 初始草案/);
+  const initialTask = readTask(root, prepared.quickCheck.moduleId, prepared.quickCheck.taskId);
+  const scenario = initialTask.scenarios[0]!;
+  const planFile = join(root, 'login-plan.json');
+  writeFileSync(planFile, JSON.stringify({
+    apiVersion: 'qa-agent/plan-draft/v1',
+    moduleId: initialTask.metadata.moduleId,
+    taskId: initialTask.metadata.id,
+    description: initialTask.description,
+    objectives: initialTask.objectives,
+    scenarios: [{
+      id: scenario.id,
+      title: scenario.title,
+      intent: scenario.intent,
+      expected: scenario.expected,
+      planningStatus: 'applicable',
+      steps: [
+        { id: 'open-login', action: '打开登录页面', expected: '登录表单正常显示。' },
+        { id: 'submit-login', action: '点击登录按钮', expected: '进入认证后的首页。' },
+        { id: 'verify-home', action: '验证认证后的首页状态', expected: '首页和用户状态可见。' },
+        { id: 'capture-result', action: '截取登录成功页面', expected: '截图保存到对应 Task Run。' }
+      ],
+      visualAssertions: scenario.visualAssertions,
+    }],
+  }, null, 2));
+  const applied = JSON.parse(run(root, 'plan', 'apply', '--file', planFile));
+  assert.equal(applied.requiredConfirmation, '确认开始测试');
+  assert.match(readFileSync(prepared.prdPath, 'utf8'), /\| 步骤 \| 操作 \| 预期结果 \|/);
+  run(root, 'review', '--module', prepared.quickCheck.moduleId, '--task', prepared.quickCheck.taskId, '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '确认开始测试');
+  const started = JSON.parse(run(root, 'test', '--module', prepared.quickCheck.moduleId, '--task', prepared.quickCheck.taskId));
+  const task = readTask(root, prepared.quickCheck.moduleId, prepared.quickCheck.taskId);
   const sourceScreenshot = join(root, 'source-login.png');
   writeFileSync(sourceScreenshot, 'source screenshot', 'utf8');
   const updated = recordAgentStep(root, started.runId, {

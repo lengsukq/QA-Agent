@@ -1,11 +1,11 @@
-import { readProject, taskRunReportPath } from './project.ts';
+import { readProject, taskSourceRunReportPath } from './project.ts';
 import { runtimeReportMarker } from './report-contract.ts';
 import { writeTextAtomic } from './store.ts';
 import type { TestRun, TestTask } from './types.ts';
 
 export function writeReport(root: string, task: TestTask, run: TestRun): string {
   const project = readProject(root);
-  const relativeAsset = (path: string): string => path.startsWith(`runs/${run.id}/`) ? path.slice(`runs/${run.id}/`.length) : path;
+  const relativeAsset = (path: string): string => path.startsWith('source-run/') ? path.slice('source-run/'.length) : path;
   const image = (path: string, alt: string): string => `![${alt}](./${relativeAsset(path)})`;
   const visualFailures = run.visualFindings.filter(item => item.status === 'failed');
   const scenarioFailures = run.scenarioResults.filter(item => item.status === 'failed');
@@ -28,7 +28,7 @@ export function writeReport(root: string, task: TestTask, run: TestRun): string 
     `- Run ID: ${run.id}`,
     `- Runtime generator: ${run.reportGeneratedBy ?? 'missing'}`,
     `- Generated at: ${run.reportGeneratedAt ?? 'unknown'}`,
-    `- Report path: ${run.reportPath ?? `runs/${run.id}/report.md`}`,
+    `- Report path: ${run.reportPath ?? 'source-run/report.md'}`,
     `- Screenshot count: ${run.screenshots.length}`,
     `- Evidence count: ${run.evidence.length}`, '',
     '## Test Context', '',
@@ -72,7 +72,7 @@ export function writeReport(root: string, task: TestTask, run: TestRun): string 
     '## Recovery', '', ...(run.recoveryAttempts.length ? run.recoveryAttempts.map(item => `- ${item.id}: ${item.reason}\n  - Action: ${item.action}\n  - Outcome: ${item.outcome}\n  - Detail: ${item.detail}`) : ['- No recovery attempt recorded.']), '',
     ...(run.memoryCandidates?.length ? ['## Candidate Project Memory', '', ...run.memoryCandidates.map(item => `- ${item}`), ''] : []),
   ];
-  const path = taskRunReportPath(root, task.metadata.moduleId, task.metadata.id, run.id);
+  const path = taskSourceRunReportPath(root, task.metadata.moduleId, task.metadata.id);
   writeTextAtomic(path, `${lines.join('\n')}\n`);
   return path;
 }
