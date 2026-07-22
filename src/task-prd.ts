@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { approvalIsCurrent, START_TEST_CONFIRMATION_ZH, testPlanHash } from './approval.ts';
+import { approvalIsCurrent, PLAN_REQUIREMENTS_CONFIRMATION_ZH, planReviewIsCurrent, START_TEST_CONFIRMATION_ZH, testPlanHash } from './approval.ts';
 import { writeTextAtomic } from './store.ts';
 import type { TestTask } from './types.ts';
 
@@ -19,7 +19,18 @@ function list(values: string[]): string {
 export function renderTaskPlanningPrd(task: TestTask): string {
   const planHash = testPlanHash(task);
   const planReady = task.scenarios.length > 0 && task.scenarios.every(scenario => scenario.planningStatus === 'applicable' && scenario.plannedSteps.length > 0);
-  const approved = planReady && approvalIsCurrent(task);
+  const unresolvedQuestions = task.requirements?.userQuestions ?? [];
+  const requirementsConfirmed = planReady && planReviewIsCurrent(task);
+  const approved = requirementsConfirmed && approvalIsCurrent(task);
+  const status = !planReady
+    ? '等待 Agent 根据项目生成详细步骤，禁止请求确认或执行'
+    : unresolvedQuestions.length
+      ? '存在待 QA 回答的问题，禁止确认方案或执行'
+      : !requirementsConfirmed
+        ? '等待 QA 审阅测试场景、步骤和预期结果'
+        : !approved
+          ? '测试方案已确认，等待 QA 授权开始测试'
+          : '测试方案和开始执行均已确认';
   const scenarioSections = task.scenarios.flatMap((scenario, scenarioIndex) => {
     const rows = scenario.plannedSteps.map((step, stepIndex) => `| ${scenarioIndex + 1}.${stepIndex + 1} | ${inline(step.action)} | ${inline(step.expected)} |`);
     return [
@@ -48,14 +59,16 @@ export function renderTaskPlanningPrd(task: TestTask): string {
   return [
     PRD_PLAN_START,
     `<!-- QA-AGENT:PLAN-HASH:${planHash} -->`,
-    '## 测试计划（待用户审阅）',
+    '## 测试计划（待 QA 审阅）',
     '',
-    `> 当前状态：${approved ? '已确认，可以开始测试' : planReady ? '等待用户审阅，禁止执行任何 UI 测试' : '等待 Agent 根据项目生成详细步骤，禁止请求开始确认'}`,
-    `> 开始口令：${planReady ? `用户必须明确回复“${START_TEST_CONFIRMATION_ZH}”后，Runtime 才允许进入测试。` : '详细步骤尚未完成，当前不能批准或开始测试。'}`,
+    `> 当前状态：${status}`,
+    `> 方案确认口令：${planReady && !unresolvedQuestions.length ? `QA 确认 PRD 符合需求后回复“${PLAN_REQUIREMENTS_CONFIRMATION_ZH}”。` : '当前不能确认测试方案。'}`,
+    `> 开始口令：${requirementsConfirmed ? `准备执行时，QA 还必须明确回复“${START_TEST_CONFIRMATION_ZH}”。` : `测试方案尚未确认；方案确认后，QA 还必须明确回复“${START_TEST_CONFIRMATION_ZH}”。`}`,
     '',
     '## Task 信息',
     '',
     `- 名称：${inline(task.metadata.name)}`,
+    `- 模式：${task.metadata.mode ?? 'regression'}`,
     `- 目标：${inline(task.description)}`,
     `- 模块：${task.metadata.moduleId}`,
     `- 平台：${task.scope.platforms.join(', ') || '未指定'}`,
@@ -71,15 +84,28 @@ export function renderTaskPlanningPrd(task: TestTask): string {
     '',
     list(task.preconditions),
     '',
+    '## 待 QA 确认的问题',
+    '',
+    unresolvedQuestions.length ? list(unresolvedQuestions) : '- 无。若 Agent 对需求、环境、账号、预期结果或危险操作仍有疑问，必须先补充到这里并暂停。',
+    '',
+    '## 已确认决定',
+    '',
+    list(task.requirements?.confirmedDecisions ?? []),
+    '',
     ...scenarioSections,
     '## 审阅确认',
     '',
+    requirementsConfirmed
+      ? `- 测试方案已由 ${inline(task.metadata.planReview?.confirmedBy ?? 'unknown')} 于 ${task.metadata.planReview?.confirmedAt ?? 'unknown'} 确认。`
+      : planReady && !unresolvedQuestions.length
+        ? `- 请 QA 审阅测试目标、范围、场景、每一步操作和预期结果。符合需求后明确回复：**${PLAN_REQUIREMENTS_CONFIRMATION_ZH}**。`
+        : '- 需要先补全详细步骤并解决所有待确认问题。',
     approved
-      ? `- 已由 ${inline(task.metadata.approval?.confirmedBy ?? 'unknown')} 于 ${task.metadata.approval?.confirmedAt ?? 'unknown'} 确认。`
-      : planReady
-        ? `- 请审阅以上场景、步骤和预期结果。确认无误后，明确回复：**${START_TEST_CONFIRMATION_ZH}**。`
-        : '- 当前仅为 Task 初始草案。Agent 必须先读取项目并通过 PlanDraft 补全可执行的详细步骤。',
-    '- 在确认前，Agent 只能修改计划，不能启动 Run，也不能调用 UI 自动化工具。',
+      ? `- 已由 ${inline(task.metadata.approval?.confirmedBy ?? 'unknown')} 于 ${task.metadata.approval?.confirmedAt ?? 'unknown'} 授权开始测试。`
+      : requirementsConfirmed
+        ? `- 方案确认不等于授权执行。准备开始时，请 QA 再明确回复：**${START_TEST_CONFIRMATION_ZH}**。`
+        : '- 在方案确认前不得请求开始执行。',
+    '- 在两个确认门禁完成前，Agent 只能修改计划或询问 QA，不能启动 Run，也不能调用 UI 自动化工具。',
     '',
     PRD_PLAN_END,
   ].join('\n');

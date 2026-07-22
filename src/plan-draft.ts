@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { invalidateApproval, START_TEST_CONFIRMATION_ZH, testPlanHash } from './approval.ts';
+import { invalidateApproval, PLAN_REQUIREMENTS_CONFIRMATION_ZH, START_TEST_CONFIRMATION_ZH, testPlanHash } from './approval.ts';
 import { appendTaskEvent } from './events.ts';
 import { rebuildIndexes } from './indexer.ts';
 import { markPythonRegressionsStaleForPlanHash } from './python-regression.ts';
@@ -15,6 +15,9 @@ export interface PlanDraftApplyResult {
   taskId: string;
   planHash: string;
   previousPlanHash: string;
+  requirementsConfirmationRequired: boolean;
+  requiredRequirementsConfirmation: string;
+  unresolvedQuestions: string[];
   approvalRequired: boolean;
   requiredConfirmation: string;
   prdPath: string;
@@ -178,7 +181,7 @@ export function applyPlanDraft(root: string, draft: PlanDraft): PlanDraftApplyRe
   task.requirements.requirementTrace = requirementTrace(task.scenarios);
 
   let planHash = testPlanHash(task);
-  if (planHash === previousPlanHash) return { changed: false, moduleId: draft.moduleId, taskId: draft.taskId, planHash, previousPlanHash, approvalRequired: true, requiredConfirmation: START_TEST_CONFIRMATION_ZH, prdPath: taskPrdPath(root, draft.moduleId, draft.taskId), scenarioIds: task.scenarios.map(scenario => scenario.id), task };
+  if (planHash === previousPlanHash) return { changed: false, moduleId: draft.moduleId, taskId: draft.taskId, planHash, previousPlanHash, requirementsConfirmationRequired: true, requiredRequirementsConfirmation: PLAN_REQUIREMENTS_CONFIRMATION_ZH, unresolvedQuestions: task.requirements?.userQuestions ?? [], approvalRequired: true, requiredConfirmation: START_TEST_CONFIRMATION_ZH, prdPath: taskPrdPath(root, draft.moduleId, draft.taskId), scenarioIds: task.scenarios.map(scenario => scenario.id), task };
   task.requirements.updatedAt = now();
   planHash = testPlanHash(task);
 
@@ -193,5 +196,5 @@ export function applyPlanDraft(root: string, draft: PlanDraft): PlanDraftApplyRe
   saveTask(root, task);
   markPythonRegressionsStaleForPlanHash(root, task, planHash);
   rebuildIndexes(root);
-  return { changed: true, moduleId: draft.moduleId, taskId: draft.taskId, planHash, previousPlanHash, approvalRequired: true, requiredConfirmation: START_TEST_CONFIRMATION_ZH, prdPath: taskPrdPath(root, draft.moduleId, draft.taskId), scenarioIds: task.scenarios.map(scenario => scenario.id), task: readTask(root, draft.moduleId, draft.taskId) };
+  return { changed: true, moduleId: draft.moduleId, taskId: draft.taskId, planHash, previousPlanHash, requirementsConfirmationRequired: true, requiredRequirementsConfirmation: PLAN_REQUIREMENTS_CONFIRMATION_ZH, unresolvedQuestions: task.requirements?.userQuestions ?? [], approvalRequired: true, requiredConfirmation: START_TEST_CONFIRMATION_ZH, prdPath: taskPrdPath(root, draft.moduleId, draft.taskId), scenarioIds: task.scenarios.map(scenario => scenario.id), task: readTask(root, draft.moduleId, draft.taskId) };
 }

@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { qaPath, readTask, taskPrdPath, taskSourceRunPath, taskSourceRunReportPath } from './project.ts';
 import { hasSecrets, isSafeId, listFiles, readJson } from './store.ts';
-import { isExplicitStartConfirmation, isHumanApprover, testPlanHash } from './approval.ts';
+import { isExplicitPlanRequirementsConfirmation, isExplicitStartConfirmation, isHumanApprover, testPlanHash } from './approval.ts';
 import { hasRuntimeReportMarker, RUNTIME_REPORT_GENERATOR } from './report-contract.ts';
 import type { RegressionRun, TaskLifecycleState, TestRun } from './types.ts';
 import { readTaskEvents } from './events.ts';
@@ -24,8 +24,9 @@ function validateDomainObject(path: string): string[] {
     if (value.apiVersion !== 'qa-agent/v2' || !value.metadata || !isSafeId(value.metadata.id) || !isSafeId(value.metadata.moduleId)) errors.push(`${path}: invalid Task contract.`);
     const statuses = ['draft', 'planning', 'awaiting_approval', 'ready', 'running', 'reviewing_result', 'completed', 'archived', 'needs_input', 'blocked', 'paused', 'deprecated', 'superseded', 'active', 'needs_review', 'finalizing', 'regression_ready'];
     if (!statuses.includes(value.metadata?.status)) errors.push(`${path}: invalid Task lifecycle state ${value.metadata?.status}.`);
-    if (value.metadata?.mode && !['quick', 'regression'].includes(value.metadata.mode)) errors.push(`${path}: invalid QA mode ${value.metadata.mode}.`);
+    if (value.metadata?.mode && !['quick', 'guided', 'regression'].includes(value.metadata.mode)) errors.push(`${path}: invalid QA mode ${value.metadata.mode}.`);
     if (value.metadata?.approvalPolicy !== 'test-plan-and-side-effects') errors.push(`${path}: every Task must require reviewed TestPlan and explicit start confirmation.`);
+    if (['ready', 'running', 'reviewing_result', 'completed', 'archived', 'active'].includes(value.metadata?.status) && (!isHumanApprover(value.metadata.planReview?.confirmedBy) || !value.metadata.planReview?.confirmedAt || !value.metadata.planReview?.confirmationSource || !value.metadata.planReview?.planHash || !isExplicitPlanRequirementsConfirmation(value.metadata.planReview?.statement))) errors.push(`${path}: executable or completed Task requires QA confirmation that the PRD matches requirements.`);
     if (['ready', 'running', 'reviewing_result', 'completed', 'archived', 'active'].includes(value.metadata?.status) && (!isHumanApprover(value.metadata.approval?.confirmedBy) || !value.metadata.approval?.confirmedAt || !value.metadata.approval?.confirmationSource || !value.metadata.approval?.planHash || !isExplicitStartConfirmation(value.metadata.approval?.statement))) errors.push(`${path}: executable or completed Task requires the exact human start confirmation.`);
     if (!Array.isArray(value.scenarioRefs) || !value.scenarioRefs.length || value.scenarioRefs.some((ref: unknown) => typeof ref !== 'string' || !/^scenarios\/[a-z0-9][a-z0-9-]{0,62}\.json$/.test(ref))) errors.push(`${path}: invalid scenarioRefs.`);
     if (value.pythonRegressionRefs !== undefined && (!Array.isArray(value.pythonRegressionRefs) || value.pythonRegressionRefs.some((ref: unknown) => typeof ref !== 'string' || !/^regression\/[a-z0-9][a-z0-9-]{0,62}\.json$/.test(ref)))) errors.push(`${path}: invalid pythonRegressionRefs.`);
@@ -48,6 +49,11 @@ function validateDomainObject(path: string): string[] {
   if (/\/tasks\/[^/]+\/source-run\/run\.json$/.test(path)) {
     if (!['pending', 'running', 'passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable', 'needs_confirmation', 'adapted'].includes(value.status)) errors.push(`${path}: invalid Source Run status.`);
     if (value.operationPlanId !== undefined || value.replayStatus !== undefined || value.replayStage !== undefined || value.replayCursor !== undefined || value.operationCandidates !== undefined || (value.steps ?? []).some((step: Record<string, unknown>) => step.operationAction !== undefined)) errors.push(`${path}: legacy replay or action fields remain; run qa-agent migrate.`);
+    if (value.guidedInteraction) {
+      if (!['awaiting_action_approval', 'ready_to_execute', 'awaiting_result_verdict', 'completed'].includes(value.guidedInteraction.phase)) errors.push(`${path}: invalid Guided interaction phase.`);
+      if (!Array.isArray(value.guidedInteraction.actionApprovals) || !Array.isArray(value.guidedInteraction.verdicts)) errors.push(`${path}: Guided interaction history is incomplete.`);
+      if (value.completedAt && (value.steps ?? []).some((step: Record<string, unknown>) => step.source === 'ui' && !step.humanVerdict)) errors.push(`${path}: completed Guided Run has a UI step without a QA verdict.`);
+    }
     if (value.completedAt) {
       if (!value.planHash) errors.push(`${path}: completed Run requires planHash.`);
       const expected = 'source-run/report.md'; if (value.reportPath !== expected) errors.push(`${path}: reportPath must be ${expected}.`);
@@ -163,11 +169,11 @@ export function validateSkill(skillRoot: string): ValidationResult {
   if (text.includes('[TODO:')) errors.push('SKILL.md: contains TODO text.');
   const workflowPath = join(skillRoot, 'references', 'workflow.md'); const pythonPath = join(skillRoot, 'references', 'python-regression.md'); const recommendedStackPath = join(skillRoot, 'references', 'recommended-regression-stack.md');
   for (const file of [workflowPath, pythonPath, recommendedStackPath]) if (!existsSync(file)) errors.push(`${file}: not found`);
-  for (const phase of ['plan', 'regression-test']) { const phasePath = join(skillRoot, 'skills', phase, 'SKILL.md'); if (!existsSync(phasePath)) { errors.push(`${phasePath}: not found`); continue; } const phaseText = readFileSync(phasePath, 'utf8'); if (!new RegExp(`^---\\nname: qa-agent-${phase}\\ndescription: .+\\n---\\n`, 's').test(phaseText)) errors.push(`${phasePath}: invalid frontmatter.`); if (!text.includes(`qa-agent-${phase}`)) errors.push(`SKILL.md: route qa-agent-${phase} is missing.`); if (phase === 'regression-test' && (!phaseText.includes('qa-agent regression run') || /qa-agent regression (?:draft|publish)/.test(phaseText))) errors.push(`${phasePath}: regression-test must only run formal Python scripts.`); }
+  for (const phase of ['guided', 'regression-test']) { const phasePath = join(skillRoot, 'skills', phase, 'SKILL.md'); if (!existsSync(phasePath)) { errors.push(`${phasePath}: not found`); continue; } const phaseText = readFileSync(phasePath, 'utf8'); if (!new RegExp(`^---\\nname: qa-agent-${phase}\\ndescription: .+\\n---\\n`, 's').test(phaseText)) errors.push(`${phasePath}: invalid frontmatter.`); if (!text.includes(`qa-agent-${phase}`)) errors.push(`SKILL.md: route qa-agent-${phase} is missing.`); if (phase === 'regression-test' && (!phaseText.includes('qa-agent regression run') || /qa-agent regression (?:draft|publish)/.test(phaseText))) errors.push(`${phasePath}: regression-test must only run formal Python scripts.`); }
   const recommendedStackText = existsSync(recommendedStackPath) ? readFileSync(recommendedStackPath, 'utf8') : '';
   if (recommendedStackText && (!/Python 3\.12/.test(recommendedStackText) || !/pytest-playwright/.test(recommendedStackText) || !/xcrun simctl/.test(recommendedStackText) || !/fb-idb/.test(recommendedStackText) || !/idb_companion/.test(recommendedStackText) || !/ios-simulator-mcp/.test(recommendedStackText) || !/result\.json/.test(recommendedStackText) || !/report\.md/.test(recommendedStackText) || !/screenshots\//.test(recommendedStackText) || !/stdout\.log/.test(recommendedStackText) || !/stderr\.log/.test(recommendedStackText) || !/evidence\//.test(recommendedStackText))) errors.push(`${recommendedStackPath}: recommended stack contract is incomplete.`);
   if (recommendedStackText && /junit|allure|ui-tree|playwright trace|videos?\//i.test(recommendedStackText)) errors.push(`${recommendedStackPath}: removed extended artifact requirements must not be documented.`);
-  const allSkillText = [text, existsSync(workflowPath) ? readFileSync(workflowPath, 'utf8') : '', existsSync(pythonPath) ? readFileSync(pythonPath, 'utf8') : '', recommendedStackText, ...['plan', 'regression-test'].map(name => { const p = join(skillRoot, 'skills', name, 'SKILL.md'); return existsSync(p) ? readFileSync(p, 'utf8') : ''; })].join('\n');
+  const allSkillText = [text, existsSync(workflowPath) ? readFileSync(workflowPath, 'utf8') : '', existsSync(pythonPath) ? readFileSync(pythonPath, 'utf8') : '', recommendedStackText, ...['guided', 'regression-test'].map(name => { const p = join(skillRoot, 'skills', name, 'SKILL.md'); return existsSync(p) ? readFileSync(p, 'utf8') : ''; })].join('\n');
   if (/OperationPlan|operation-plans|RegressionSuite|regression-suite|sourceOperationPlanIds/.test(allSkillText)) errors.push('Skill package still references removed OperationPlan or RegressionSuite assets.');
   return { valid: errors.length === 0, errors, checked: 6 };
 }

@@ -7,10 +7,16 @@ function canonicalize(value: unknown): unknown {
   return value;
 }
 
-
 const reservedApproverIds = new Set(['qa-agent', 'qa agent', 'assistant', 'system', 'auto-approved', 'auto approved', 'unknown']);
+export const PLAN_REQUIREMENTS_CONFIRMATION_ZH = '确认测试方案';
+export const PLAN_REQUIREMENTS_CONFIRMATION_EN = 'confirm test plan';
 export const START_TEST_CONFIRMATION_ZH = '确认开始测试';
 export const START_TEST_CONFIRMATION_EN = 'confirm start testing';
+
+export function isExplicitPlanRequirementsConfirmation(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === PLAN_REQUIREMENTS_CONFIRMATION_ZH || normalized === PLAN_REQUIREMENTS_CONFIRMATION_EN;
+}
 
 export function isExplicitStartConfirmation(value: string | undefined): boolean {
   const normalized = value?.trim().toLowerCase();
@@ -23,7 +29,7 @@ export function isHumanApprover(value: string | undefined): boolean {
 }
 
 export function assertHumanApprover(value: string): void {
-  if (!isHumanApprover(value)) throw new Error('Test Plan approval must identify the real human reviewer; qa-agent, assistant, system, auto-approved, and unknown are not valid approvers.');
+  if (!isHumanApprover(value)) throw new Error('QA approval must identify the real human reviewer; qa-agent, assistant, system, auto-approved, and unknown are not valid approvers.');
 }
 
 /** Hash only the user-reviewed execution contract, never mutable run metadata. */
@@ -37,8 +43,22 @@ export function testPlanHash(task: TestTask): string {
   return createHash('sha256').update(JSON.stringify(canonicalize(contract))).digest('hex');
 }
 
+export function planReviewIsCurrent(task: TestTask): boolean {
+  return Boolean(task.metadata.planReview?.planHash
+    && task.metadata.planReview.confirmationSource
+    && isHumanApprover(task.metadata.planReview.confirmedBy)
+    && isExplicitPlanRequirementsConfirmation(task.metadata.planReview.statement)
+    && task.metadata.planReview.planHash === testPlanHash(task)
+    && !(task.requirements?.userQuestions?.length));
+}
+
 export function approvalIsCurrent(task: TestTask): boolean {
-  return Boolean(task.metadata.approval?.planHash && task.metadata.approval.confirmationSource && isHumanApprover(task.metadata.approval.confirmedBy) && isExplicitStartConfirmation(task.metadata.approval.statement) && task.metadata.approval.planHash === testPlanHash(task));
+  return Boolean(planReviewIsCurrent(task)
+    && task.metadata.approval?.planHash
+    && task.metadata.approval.confirmationSource
+    && isHumanApprover(task.metadata.approval.confirmedBy)
+    && isExplicitStartConfirmation(task.metadata.approval.statement)
+    && task.metadata.approval.planHash === testPlanHash(task));
 }
 
 export function requiresTestPlanApproval(_task: TestTask): boolean {
@@ -50,8 +70,10 @@ export function executionContractIsCurrent(task: TestTask, planHash?: string): b
   return !requiresTestPlanApproval(task) || approvalIsCurrent(task);
 }
 
+/** A changed plan invalidates both the requirement review and execution approval. */
 export function invalidateApproval(task: TestTask): boolean {
-  if (!task.metadata.approval) return false;
+  const changed = Boolean(task.metadata.planReview || task.metadata.approval);
+  delete task.metadata.planReview;
   delete task.metadata.approval;
-  return true;
+  return changed;
 }

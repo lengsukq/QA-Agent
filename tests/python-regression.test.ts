@@ -35,9 +35,10 @@ test('creates a reviewed Python regression draft, publishes it into the Task, an
   const prepared = JSON.parse(run(root, 'check', '测试登录回归脚本'));
   assert.equal(prepared.runId, undefined);
   assert.equal(prepared.planningRequired, true);
+  assert.equal(prepared.requiredRequirementsConfirmationAfterPlanning, '确认测试方案');
   assert.equal(prepared.requiredConfirmationAfterPlanning, '确认开始测试');
   assert.ok(existsSync(prepared.prdPath));
-  assert.match(readFileSync(prepared.prdPath, 'utf8'), /Task 初始草案/);
+  assert.match(readFileSync(prepared.prdPath, 'utf8'), /等待 Agent 根据项目生成详细步骤/);
   const initialTask = readTask(root, prepared.quickCheck.moduleId, prepared.quickCheck.taskId);
   const scenario = initialTask.scenarios[0]!;
   const planFile = join(root, 'login-plan.json');
@@ -63,8 +64,10 @@ test('creates a reviewed Python regression draft, publishes it into the Task, an
     }],
   }, null, 2));
   const applied = JSON.parse(run(root, 'plan', 'apply', '--file', planFile));
+  assert.equal(applied.requiredRequirementsConfirmation, '确认测试方案');
   assert.equal(applied.requiredConfirmation, '确认开始测试');
   assert.match(readFileSync(prepared.prdPath, 'utf8'), /\| 步骤 \| 操作 \| 预期结果 \|/);
+  run(root, 'plan', 'review', '--module', prepared.quickCheck.moduleId, '--task', prepared.quickCheck.taskId, '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '确认测试方案');
   run(root, 'review', '--module', prepared.quickCheck.moduleId, '--task', prepared.quickCheck.taskId, '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '确认开始测试');
   const started = JSON.parse(run(root, 'test', '--module', prepared.quickCheck.moduleId, '--task', prepared.quickCheck.taskId));
   const task = readTask(root, prepared.quickCheck.moduleId, prepared.quickCheck.taskId);

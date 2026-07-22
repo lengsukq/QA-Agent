@@ -4,7 +4,7 @@ import { basename, dirname, join, relative } from 'node:path';
 import { qaPath, readTask, saveTask, taskDirectory, taskSourceRunDirectory, taskSourceRunPath, taskSourceRunReportPath } from './project.ts';
 import { appendTaskEvent, readTaskEvents } from './events.ts';
 import { normalizeTaskState } from './workflow-model.ts';
-import { isExplicitStartConfirmation, testPlanHash } from './approval.ts';
+import { isExplicitStartConfirmation, PLAN_REQUIREMENTS_CONFIRMATION_ZH, testPlanHash } from './approval.ts';
 import { inspectPythonRegressionEligibility } from './python-regression.ts';
 import { RUNTIME_REPORT_GENERATOR, runtimeReportMarker } from './report-contract.ts';
 import { listFiles, now, readJson, writeJsonAtomic, writeTextAtomic } from './store.ts';
@@ -28,6 +28,7 @@ export interface MigrationResult {
   invalidatedLegacyApprovals: number;
   backfilledRequirementTrace: number;
   rehashedApprovedPlans: number;
+  backfilledPlanReviews: number;
   backfilledRunPlanHashes: number;
   removedOperationPlanDirectories: number;
   removedRegressionSuites: number;
@@ -170,7 +171,7 @@ function migratePythonAsset(root: string, task: TestTask, manifestPath: string, 
 
 export function migrateProjectArtifacts(root: string): MigrationResult {
   const managed = syncManagedRuntimeAssets(qaPath(root));
-  const result: MigrationResult = { migratedTaskReports: 0, migratedRunIndexes: 0, migratedSourceRuns: 0, quarantinedLegacySourceRuns: 0, removedLegacyRunIndexes: 0, updatedRuns: 0, updatedTasks: 0, quarantinedOrphanReports: 0, normalizedTaskStates: 0, createdTaskEventLogs: 0, backfilledScenarioAssertions: 0, backfilledScenarioPlanning: 0, backfilledPlannedSteps: 0, invalidatedLegacyApprovals: 0, backfilledRequirementTrace: 0, rehashedApprovedPlans: 0, backfilledRunPlanHashes: 0, removedOperationPlanDirectories: 0, removedRegressionSuites: 0, migratedPythonRegressions: 0, migratedPythonDrafts: 0, removedLegacyRegressionRuns: 0, ...managed, removedLegacyRuntimeDirectories: 0, warnings: [] };
+  const result: MigrationResult = { migratedTaskReports: 0, migratedRunIndexes: 0, migratedSourceRuns: 0, quarantinedLegacySourceRuns: 0, removedLegacyRunIndexes: 0, updatedRuns: 0, updatedTasks: 0, quarantinedOrphanReports: 0, normalizedTaskStates: 0, createdTaskEventLogs: 0, backfilledScenarioAssertions: 0, backfilledScenarioPlanning: 0, backfilledPlannedSteps: 0, invalidatedLegacyApprovals: 0, backfilledRequirementTrace: 0, rehashedApprovedPlans: 0, backfilledPlanReviews: 0, backfilledRunPlanHashes: 0, removedOperationPlanDirectories: 0, removedRegressionSuites: 0, migratedPythonRegressions: 0, migratedPythonDrafts: 0, removedLegacyRegressionRuns: 0, ...managed, removedLegacyRuntimeDirectories: 0, warnings: [] };
   const projectPath = qaPath(root, 'project.json');
   if (existsSync(projectPath)) {
     const project = readJson<Record<string, any>>(projectPath);
@@ -239,6 +240,10 @@ export function migrateProjectArtifacts(root: string): MigrationResult {
     const currentPlanHash = testPlanHash(task); const legacyPlanHash = legacyWorkflowV2PlanHash(task);
     const canRehash = Boolean(previousApprovedHash && previousApprovedHash !== currentPlanHash && previousApprovedHash === legacyPlanHash && task.metadata.approval);
     if (canRehash && task.metadata.approval) { task.metadata.approval.planHash = currentPlanHash; if (task.testPlan) { task.testPlan.planHash = currentPlanHash; task.testPlan.status = 'approved'; task.testPlan.approvedBy = task.metadata.approval.confirmedBy; task.testPlan.approvedAt = task.metadata.approval.confirmedAt; task.testPlan.updatedAt = now(); } task.updatedAt = now(); taskChanged = true; result.rehashedApprovedPlans += 1; }
+    if (task.metadata.approval && !task.metadata.planReview && isExplicitStartConfirmation(task.metadata.approval.statement)) {
+      task.metadata.planReview = { confirmedBy: task.metadata.approval.confirmedBy, confirmedAt: task.metadata.approval.confirmedAt, confirmationSource: task.metadata.approval.confirmationSource, statement: PLAN_REQUIREMENTS_CONFIRMATION_ZH, planHash: task.metadata.approval.planHash };
+      taskChanged = true; result.backfilledPlanReviews += 1;
+    }
 
     const regressionManifestPaths = listFiles(join(taskDir, 'regression'), path => path.endsWith('.json'));
     const regressionManifests = regressionManifestPaths.map(path => { try { return readJson<Record<string, any>>(path); } catch { return {}; } });

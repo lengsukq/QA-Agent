@@ -2,46 +2,69 @@
 
 ## Request classification
 
-Use the main `qa-agent` Skill for ordinary checks, script drafting, script review, script publication, and Runtime-owned Task work. Use `qa-agent-plan` only for strict pre-execution planning. Use `qa-agent-regression-test` only to run a Python script that is already published under a Task.
+Use the main `qa-agent` Skill for ordinary AI-led checks, strict test matrices, release scope, script drafting/publication, and Runtime-owned Task work. Use `qa-agent-guided` when a human QA must approve each action and judge each observed result. Use `qa-agent-regression-test` only to run a Python script already published under a Task.
 
 ## Session continuity
 
-`qa-agent check` creates or resumes a Task, writes its initial reviewable `prd.md`, and binds it to the current Session. It never starts a Run. `qa-agent continue` follows the persisted Runtime state. `qa-agent finish` closes the Session pointer without silently archiving or deleting the Task.
+`qa-agent check` creates or resumes a Task, writes its initial reviewable `prd.md`, and binds it to the current Session. It never starts a Run. `qa-agent continue` follows persisted Runtime state. `qa-agent finish` closes the Session pointer without silently archiving or deleting the Task.
+
+## Shared PRD review gates
+
+Both Quick and Guided modes use the same planning contract:
+
+1. Create the Task through `qa-agent check`; use `--mode guided` for human-led execution.
+2. Inspect relevant source, routes, configuration, tests, existing QA assets, and tools.
+3. Build and apply a structured PlanDraft. Every Scenario must have ordered `steps`; every step needs an operation and expected result.
+4. Present the complete Runtime-written Task PRD.
+5. Resolve every `userQuestions` entry with the QA. Ask one concrete question at a time, store the answer under `confirmedDecisions`, remove the resolved question, and apply the updated PlanDraft again.
+6. If the Agent has any material uncertainty not yet listed—requirements, environment, role, account, test data, expected behavior, or safety—it must add the question and stop.
+7. Wait for the exact reply `确认测试方案`, then persist it with `qa-agent plan review`. This confirms that the PRD matches the QA requirement; it does not authorize UI execution.
+8. Separately wait for the exact reply `确认开始测试`, then persist it with `qa-agent review`.
+9. Only after both gates may `qa-agent test` create the Task's single Source Run or any UI tool be used.
+
+Vague replies such as “可以”, “继续”, or “没问题” do not satisfy either planning gate.
 
 ## Daily Quick workflow
 
-1. Call `qa-agent check` to create or resume the Task directory. No Run or UI action is allowed at this stage.
-2. Inspect the relevant source, routes, configuration, existing QA assets, and available tools.
-3. Build a structured PlanDraft. Every Scenario must have ordered `steps`; every step must include an operation and expected result.
-4. Apply the PlanDraft. Runtime persists Scenario JSON and writes the current plan into Task `prd.md` using numbered Step / Operation / Expected Result tables.
-5. Present the Task PRD to the user for review.
-6. Wait for the exact reply `确认开始测试`. Replies such as “可以”, “继续”, or “没问题” do not authorize execution.
-7. Persist that exact reply through `qa-agent review ... --confirmation-text "确认开始测试"`.
-8. Only then call `qa-agent test`. Runtime creates or resumes the Task's single Source Run and must return its Run ID with `uiExecutionAllowed=true` before the Agent uses a UI tool.
-9. Persist every real UI action with a screenshot, then record declared visual assertions and Cleanup results.
-10. Complete through `qa-agent run complete`.
-11. Runtime writes `source-run/run.json`, `source-run/report.md`, screenshots, evidence, and the Task PRD result update.
-12. Runtime evaluates whether the completed Source Run can safely become a Python regression source.
-13. If eligible, the Agent may ask whether to generate a script draft. That confirmation permits only draft generation.
-14. The Agent writes Python from the exact recorded Run and saves it through `qa-agent regression draft`.
-15. Show the complete script or complete diff, environment variables, host bridge requirements, assertions, screenshots, and Cleanup.
-16. Wait for a separate script-publication approval, then publish through `qa-agent regression publish`.
-17. Later regression uses `qa-agent-regression-test`, which runs the existing script and reviews the Runtime report without replanning steps.
+Quick mode is AI-led after both planning gates:
 
-Before script publication, a new initial test may replace the existing Source Run; Runtime records `source_run_restarted` instead of creating exploratory Run history. After publication, the Source Run is frozen and later execution must use `regression-runs/`. A changed TestPlan first marks the old script `stale`, after which a newly approved plan may produce a replacement Source Run.
+1. Call `qa-agent test` and wait for a Run ID with `uiExecutionAllowed=true`.
+2. Execute the approved flow and persist every real UI action with a screenshot.
+3. Record every declared business/visual assertion and Cleanup result.
+4. Complete through `qa-agent run complete`.
+5. Runtime writes `source-run/run.json`, `source-run/report.md`, screenshots, evidence, and the Task PRD result update.
+6. When eligible, ask whether to generate a Python script draft from the exact completed Run.
+7. Generation consent permits only draft creation. Show the complete script or diff and publish only after a separate script-publication approval.
+8. Publication freezes the Source Run. Later regression uses `qa-agent-regression-test` and writes execution assets under `regression-runs/` without replanning or editing the formal script.
 
-## Strict workflow
+## Guided workflow
 
-Use `qa-agent-plan` when the user explicitly requests a fixed Scenario matrix, strict release scope, or GO/NO-GO planning. It must create detailed Scenario steps, apply them, and write them into the Task PRD before requesting approval. The same exact `确认开始测试` gate applies to Quick and strict Tasks. Once Python scripts have been reviewed and validated, Task, Module, and Release regression select those scripts directly.
+Guided mode is QA-led and uses `qa-agent check --mode guided`.
+
+After both PRD gates and `qa-agent test`:
+
+1. Propose exactly one next action and expected result.
+2. Ask the QA whether to execute it. Persist approval with `qa-agent run guide-approve`, preferably using the matching PRD `--planned-step`.
+3. Use a UI tool only after Runtime returns `uiExecutionAllowed=true`.
+4. Execute only the approved action and persist it with `qa-agent run step`, including the real screenshot, actual locator, expected state, and actual state.
+5. Present the observed result and ask whether it matches expectations.
+6. Persist the QA's verdict with `qa-agent run guide-verdict`.
+7. Do not execute another UI operation or complete the Run while a verdict is pending.
+
+The QA may add a new action during execution. Record its explicit operation and expected result; do not silently alter an existing PRD expectation. A negative verdict remains a failure unless the QA later approves a new plan or retry. When the QA asks to save the Case, ensure every UI step has a human verdict, record all assertions and Cleanup, then complete through Runtime.
+
+## Strict and release workflow
+
+A fixed Scenario matrix, release scope, impact analysis, Release Gate, or GO/NO-GO remains part of the main `qa-agent` Skill. It uses the same PRD questions, `确认测试方案`, and separate `确认开始测试` gates. Task, Module, and Release regression select validated Python scripts directly.
 
 ## Session finish
 
-Session finish and Task archive are different. Finish closes the active Session. Archive requires a complete Task definition, current approval, a successful Source Run, validated Python coverage, regression results, evidence, Cleanup, and no unresolved known-issue candidates.
+Session finish and Task archive are different. Finish closes the active Session. Archive requires a complete Task definition, current approvals, a successful Source Run, validated Python coverage, regression results, evidence, Cleanup, and no unresolved known-issue candidates.
 
 ## User-visible language
 
-Use goal, progress, result, evidence, script, and next decision. Hide internal Module, Task, Scenario, Run, hash, gate, token, and file-path details unless requested.
+Use goal, plan, question, progress, observed result, QA verdict, evidence, script, and next decision. Hide internal Module, Task, Scenario, Run, hash, gate, token, and file-path details unless requested.
 
 ## Safety boundaries
 
-Never invent a Run step, screenshot, locator, assertion, Cleanup result, script approval, or regression result. Do not publish a draft without separate human approval. Do not edit a formal script merely to make a failing regression pass.
+Never invent a Run step, screenshot, locator, assertion, Cleanup result, human decision, script approval, or regression result. Do not publish a draft without separate human approval. Do not edit a formal script merely to make a failing regression pass.

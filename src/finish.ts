@@ -51,12 +51,12 @@ export function finishCurrentTask(root: string, sessionKey?: string): FinishResu
   }
 
   const closure = closeTaskSession(root, { ...resolution.binding, runId: run?.id ?? resolution.binding.runId }, sessionKey);
-  const strictPreserved = task.metadata.mode !== 'quick';
+  const persistentTaskPreserved = task.metadata.mode !== 'quick';
   return {
-    apiVersion: 'qa-agent/finish/v1', kind: 'FinishResult', status: strictPreserved ? 'task_preserved' : 'finished',
+    apiVersion: 'qa-agent/finish/v1', kind: 'FinishResult', status: persistentTaskPreserved ? 'task_preserved' : 'finished',
     session: resolution.binding, closure, task: { ...resolution.task, taskState: normalizeTaskState(task.metadata.status), updatedAt: task.updatedAt }, workflow, finalization,
-    userMessage: strictPreserved
-      ? `The current QA session is finished. Strict task “${resolution.task.title}” remains available in its current state and can be explicitly resumed later.`
+    userMessage: persistentTaskPreserved
+      ? `The current QA session is finished. Persistent QA task “${resolution.task.title}” remains available in its current state and can be explicitly resumed later.`
       : `QA task “${resolution.task.title}” is complete and the current session is finished. The Runtime report, PRD, screenshots, and evidence are saved.`,
   };
 }

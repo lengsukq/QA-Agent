@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
-import { beginAgentGuidedRun, completeAgentGuidedRun, recordAgentStep, recordVisualFinding } from '../src/engine.ts';
+import { approveGuidedAction, beginAgentGuidedRun, completeAgentGuidedRun, recordAgentStep, recordGuidedVerdict, recordVisualFinding } from '../src/engine.ts';
 import { createModule, initializeProject, readTask, saveTask, taskDirectory, taskSourceRunDirectory, taskSourceRunPath, taskSourceRunReportPath } from '../src/project.ts';
 import { createTaskSkeleton } from '../src/planning.ts';
 import { inspectTaskArchive } from '../src/archive.ts';
@@ -36,13 +36,17 @@ function importHost(root: string): void {
 }
 function approve(task: TestTask): TestTask {
   task.metadata.status = 'ready';
-  task.metadata.approval = { confirmedBy: 'project-owner', confirmedAt: new Date().toISOString(), confirmationSource: 'external-review-record', statement: '确认开始测试', planHash: testPlanHash(task) };
+  const confirmedAt = new Date().toISOString();
+  const planHash = testPlanHash(task);
+  task.metadata.planReview = { confirmedBy: 'project-owner', confirmedAt, confirmationSource: 'external-review-record', statement: '确认测试方案', planHash };
+  task.metadata.approval = { confirmedBy: 'project-owner', confirmedAt, confirmationSource: 'external-review-record', statement: '确认开始测试', planHash };
   return task;
 }
 function approveThroughCli(root: string, moduleId: string, taskId: string): void {
+  run(root, 'plan', 'review', '--module', moduleId, '--task', taskId, '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '确认测试方案');
   run(root, 'review', '--module', moduleId, '--task', taskId, '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '确认开始测试');
 }
-function applyDetailedPlan(root: string, task: TestTask): TestTask {
+function applyDetailedPlan(root: string, task: TestTask, options: { userQuestions?: string[]; confirmedDecisions?: string[] } = {}): TestTask {
   const scenario = task.scenarios[0]!;
   const planPath = join(root, `plan-${task.metadata.moduleId}-${task.metadata.id}.json`);
   writeFileSync(planPath, JSON.stringify({
@@ -54,6 +58,8 @@ function applyDetailedPlan(root: string, task: TestTask): TestTask {
     objectives: task.objectives,
     scope: task.scope,
     preconditions: task.preconditions,
+    userQuestions: options.userQuestions ?? [],
+    confirmedDecisions: options.confirmedDecisions ?? [],
     scenarios: [{
       id: scenario.id,
       title: scenario.title,
@@ -79,6 +85,9 @@ function applyDetailedPlan(root: string, task: TestTask): TestTask {
     }],
   }, null, 2));
   const applied = json(root, 'plan', 'apply', '--file', planPath);
+  assert.equal(applied.requirementsConfirmationRequired, true);
+  assert.equal(applied.requiredRequirementsConfirmation, '确认测试方案');
+  assert.deepEqual(applied.unresolvedQuestions, options.userQuestions ?? []);
   assert.equal(applied.approvalRequired, true);
   assert.equal(applied.requiredConfirmation, '确认开始测试');
   return readTask(root, task.metadata.moduleId, task.metadata.id);
@@ -89,14 +98,16 @@ function prepareQuickTask(root: string, request: string): { prepared: any; task:
   assert.equal(prepared.uiExecutionAllowed, false);
   assert.equal(prepared.mustStop, true);
   assert.equal(prepared.planningRequired, true);
+  assert.equal(prepared.requiredRequirementsConfirmationAfterPlanning, '确认测试方案');
   assert.equal(prepared.requiredConfirmationAfterPlanning, '确认开始测试');
   assert.ok(existsSync(prepared.prdPath));
-  assert.match(readFileSync(prepared.prdPath, 'utf8'), /Task 初始草案/);
+  assert.match(readFileSync(prepared.prdPath, 'utf8'), /等待 Agent 根据项目生成详细步骤/);
   const task = applyDetailedPlan(root, readTask(root, prepared.quickCheck.moduleId, prepared.quickCheck.taskId));
   const prd = readFileSync(prepared.prdPath, 'utf8');
   assert.match(prd, /\| 步骤 \| 操作 \| 预期结果 \|/);
+  assert.match(prd, /确认测试方案/);
   assert.match(prd, /确认开始测试/);
-  assert.doesNotMatch(prd, /Task 初始草案/);
+  assert.doesNotMatch(prd, /等待 Agent 根据项目生成详细步骤/);
   return { prepared, task };
 }
 function startQuickTask(root: string, request: string): { prepared: any; task: TestTask; started: any } {
@@ -161,10 +172,10 @@ function strictTaskWithRun(root: string, moduleId: string, taskId: string, risk:
   return { task: readTask(root, moduleId, taskId), run: completed };
 }
 
-test('initializes v0.3.3 without replay directories and exposes simplified help', () => {
+test('initializes v0.3.4 without replay directories and exposes simplified help', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-init-'));
   run(root, 'init', '--id', 'fixture');
-  assert.equal(run(root, '--version').trim(), '0.3.3');
+  assert.equal(run(root, '--version').trim(), '0.3.4');
   const help = run(root, 'help');
   for (const commandName of ['init', 'check', 'continue', 'finish', 'doctor', 'update']) assert.match(help, new RegExp(commandName));
   assert.doesNotMatch(help, /operation plan|operation replay/i);
@@ -184,7 +195,7 @@ test('initializes v0.3.3 without replay directories and exposes simplified help'
   assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'operation.schema.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'regression-suite.schema.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'skills', 'built-in', 'operation-replay.json')), false);
-  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.3');
+  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.4');
   assert.equal(validateProject(root).valid, true);
 });
 
@@ -248,7 +259,7 @@ test('a formal Python script freezes the Source Run and sends later execution to
 });
 
 test('PlanDraft requires explicit detailed steps before review', () => {
-  const root = mkdtempSync(join(tmpdir(), 'qa-agent-plan-steps-'));
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-prd-steps-'));
   run(root, 'init', '--id', 'plan-steps');
   run(root, 'start', '--request', '验证商品状态', '--module', 'catalog', '--task', 'product-state');
   const task = readTask(root, 'catalog', 'product-state');
@@ -276,26 +287,125 @@ test('PlanDraft requires explicit detailed steps before review', () => {
   assert.equal(readTask(root, 'catalog', 'product-state').sourceRunRef, undefined);
 });
 
-test('strict Task requires human approval before real execution', () => {
+test('Task requires QA PRD confirmation and separate start authorization before real execution', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-approval-'));
   run(root, 'init', '--id', 'approval'); importHost(root);
   const started = json(root, 'start', '--request', '验证登录流程', '--module', 'auth', '--task', 'login-flow');
   assert.equal(started.workflowStatus, 'setup_required');
   assert.equal(started.workflowPhase, 'planning');
   applyDetailedPlan(root, readTask(root, 'auth', 'login-flow'));
-  assert.equal(json(root, 'workflow', 'status', '--module', 'auth', '--task', 'login-flow').workflowStatus, 'approval_required');
+  const workflowBeforeReview = json(root, 'workflow', 'status', '--module', 'auth', '--task', 'login-flow');
+  assert.equal(workflowBeforeReview.workflowStatus, 'approval_required');
+  assert.equal(workflowBeforeReview.reasonCode, 'test_plan_requirements_confirmation_required');
   const blocked = command(root, 'test', '--module', 'auth', '--task', 'login-flow');
   assert.notEqual(blocked.status, 0);
-  assert.match(blocked.stderr, /确认开始测试/);
+  assert.match(blocked.stderr, /确认测试方案|confirmed by QA/i);
   assert.equal(readTask(root, 'auth', 'login-flow').sourceRunRef, undefined);
+  const earlyStart = command(root, 'review', '--module', 'auth', '--task', 'login-flow', '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '确认开始测试');
+  assert.notEqual(earlyStart.status, 0);
+  assert.match(earlyStart.stderr, /确认测试方案/);
+  const wrongPlanPhrase = command(root, 'plan', 'review', '--module', 'auth', '--task', 'login-flow', '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '没问题');
+  assert.notEqual(wrongPlanPhrase.status, 0);
+  run(root, 'plan', 'review', '--module', 'auth', '--task', 'login-flow', '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '确认测试方案');
+  const afterPlanReview = json(root, 'workflow', 'status', '--module', 'auth', '--task', 'login-flow');
+  assert.equal(afterPlanReview.reasonCode, 'explicit_start_confirmation_required');
   const missingPhrase = command(root, 'review', '--module', 'auth', '--task', 'login-flow', '--approve', '--confirmed-by', 'project-owner');
   assert.notEqual(missingPhrase.status, 0);
   const wrongPhrase = command(root, 'review', '--module', 'auth', '--task', 'login-flow', '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '可以测试');
   assert.notEqual(wrongPhrase.status, 0);
-  approveThroughCli(root, 'auth', 'login-flow');
+  run(root, 'review', '--module', 'auth', '--task', 'login-flow', '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '确认开始测试');
   const execution = json(root, 'test', '--module', 'auth', '--task', 'login-flow');
   assert.equal(execution.status, 'running');
   assert.equal(execution.uiExecutionAllowed, true);
+});
+
+test('unresolved QA questions block PRD confirmation until answers are applied', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-prd-questions-'));
+  run(root, 'init', '--id', 'prd-questions');
+  run(root, 'start', '--request', '验证首次启动欢迎弹窗', '--module', 'onboarding', '--task', 'welcome-dialog');
+  let task = readTask(root, 'onboarding', 'welcome-dialog');
+  task = applyDetailedPlan(root, task, { userQuestions: ['本场景是否要求全新安装且没有历史本地状态？'] });
+  const workflow = json(root, 'workflow', 'status', '--module', 'onboarding', '--task', 'welcome-dialog');
+  assert.equal(workflow.reasonCode, 'qa_requirement_questions_unresolved');
+  assert.match(workflow.nextActions[0].description, /全新安装/);
+  const prd = readFileSync(join(taskDirectory(root, 'onboarding', 'welcome-dialog'), 'prd.md'), 'utf8');
+  assert.match(prd, /本场景是否要求全新安装/);
+  const rejected = command(root, 'plan', 'review', '--module', 'onboarding', '--task', 'welcome-dialog', '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '确认测试方案');
+  assert.notEqual(rejected.status, 0);
+  assert.match(rejected.stderr, /unresolved QA questions|待 QA 回答/i);
+
+  task = applyDetailedPlan(root, task, { confirmedDecisions: ['该场景必须从全新安装且无历史本地状态开始。'] });
+  run(root, 'plan', 'review', '--module', 'onboarding', '--task', 'welcome-dialog', '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '确认测试方案');
+  const reviewed = readTask(root, 'onboarding', 'welcome-dialog');
+  assert.equal(reviewed.requirements?.userQuestions.length, 0);
+  assert.deepEqual(reviewed.requirements?.confirmedDecisions, ['该场景必须从全新安装且无历史本地状态开始。']);
+  assert.equal(reviewed.metadata.planReview?.statement, '确认测试方案');
+});
+
+test('Guided QA enforces one human-approved action and one human verdict at a time', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-guided-'));
+  run(root, 'init', '--id', 'guided'); importHost(root);
+  const prepared = json(root, 'check', '--mode', 'guided', '--request', '验证首次安装 Welcome Dialog');
+  assert.equal(prepared.check.mode, 'guided');
+  let task = readTask(root, prepared.check.moduleId, prepared.check.taskId);
+  assert.equal(task.metadata.mode, 'guided');
+  task = applyDetailedPlan(root, task);
+  approveThroughCli(root, task.metadata.moduleId, task.metadata.id);
+
+  const started = json(root, 'test', '--module', task.metadata.moduleId, '--task', task.metadata.id);
+  assert.equal(started.status, 'running');
+  const guidedRunId = started.runId as string;
+  assert.equal(guidedRunId !== undefined, true);
+  assert.equal(started.uiExecutionAllowed, false);
+  assert.equal(started.mustStop, true);
+  const scenario = task.scenarios[0]!;
+  const plannedStep = scenario.plannedSteps[0]!;
+  const screenshot = join(root, 'guided-step.png'); writeFileSync(screenshot, 'guided screenshot');
+
+  assert.throws(() => recordAgentStep(root, guidedRunId, {
+    action: plannedStep.action, detail: 'Attempted without QA approval.', screenshotPath: screenshot,
+    scenarioId: scenario.id, source: 'ui', executionMode: 'host-automated', uiAction: 'click',
+    actualLocator: { strategy: 'role', value: 'button:Open' }, expectedState: plannedStep.expected, actualState: plannedStep.expected,
+  }), /QA-approved action|guide-approve/i);
+
+  const approvedAction = json(root, 'run', 'guide-approve', guidedRunId,
+    '--scenario', scenario.id, '--planned-step', plannedStep.id,
+    '--confirmed-by', 'project-owner', '--confirmation-text', '是的，执行这一步');
+  assert.equal(approvedAction.uiExecutionAllowed, true);
+
+  const afterStep = recordAgentStep(root, guidedRunId, {
+    action: plannedStep.action, detail: 'The approved action was executed.', screenshotPath: screenshot,
+    scenarioId: scenario.id, source: 'ui', executionMode: 'host-automated', uiAction: 'click',
+    actualLocator: { strategy: 'role', value: 'button:Open' }, expectedState: plannedStep.expected, actualState: plannedStep.expected,
+  });
+  const step = afterStep.steps.at(-1)!;
+  assert.equal(step.status, 'needs_confirmation');
+  assert.equal(afterStep.guidedInteraction?.phase, 'awaiting_result_verdict');
+  assert.throws(() => approveGuidedAction(root, guidedRunId, {
+    scenarioId: scenario.id, plannedStepId: scenario.plannedSteps[1]!.id,
+    confirmedBy: 'project-owner', statement: '继续下一步',
+  }), /waiting for the QA verdict/i);
+  assert.throws(() => completeAgentGuidedRun(root, task, guidedRunId), /waiting for the QA verdict|QA confirms every UI result/i);
+
+  const verdict = json(root, 'run', 'guide-verdict', guidedRunId,
+    '--step', step.id, '--status', 'passed', '--confirmed-by', 'project-owner',
+    '--confirmation-text', '是的，符合预期');
+  assert.equal(verdict.uiExecutionAllowed, false);
+  const afterVerdict = JSON.parse(readFileSync(taskSourceRunPath(root, task.metadata.moduleId, task.metadata.id), 'utf8')) as TestRun;
+  assert.equal(afterVerdict.steps.at(-1)?.humanVerdict?.status, 'passed');
+  assert.equal(afterVerdict.guidedInteraction?.phase, 'awaiting_action_approval');
+
+  for (const assertion of scenario.visualAssertions ?? []) recordVisualFinding(root, guidedRunId, {
+    assertionId: assertion.id, expected: assertion.expected, actual: assertion.expected,
+    status: 'passed', screenshotPath: screenshot, scenarioId: scenario.id,
+  });
+  const completed = completeAgentGuidedRun(root, task, guidedRunId);
+  assert.equal(completed.status, 'passed');
+  assert.equal(completed.guidedInteraction?.phase, 'completed');
+  const report = readFileSync(taskSourceRunReportPath(root, task.metadata.moduleId, task.metadata.id), 'utf8');
+  assert.match(report, /Guided QA Decisions/);
+  assert.match(report, /project-owner/);
+  assert.equal(validateProject(root).valid, true);
 });
 
 test('missing host capability blocks execution without fabricating results', () => {
@@ -457,7 +567,7 @@ test('Migration selects one Source Run, preserves extra history, and upgrades Py
   assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'operation.schema.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'regression-suite.schema.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'skills', 'built-in', 'operation-replay.json')), false);
-  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.3');
+  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.4');
   const migrated = JSON.parse(readFileSync(manifestPath, 'utf8'));
   assert.equal(migrated.apiVersion, 'qa-agent/python-regression/v2');
   assert.ok(migrated.sourceFlowHash);

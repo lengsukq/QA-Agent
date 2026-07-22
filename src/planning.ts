@@ -2,7 +2,7 @@ import { now } from './store.ts';
 import { createHash } from 'node:crypto';
 import type { ModuleSnapshot, ProjectMemory, QaModule, TestRequirements, TestScenario, TestTask } from './types.ts';
 import { platformCapabilities } from './capabilities.ts';
-import { approvalIsCurrent, requiresTestPlanApproval, testPlanHash } from './approval.ts';
+import { approvalIsCurrent, planReviewIsCurrent, requiresTestPlanApproval, testPlanHash } from './approval.ts';
 
 const coverageDimensions = [
   ['core-flow', '完成核心业务流程'], ['boundary', '覆盖输入、金额、数量、时间等边界'], ['permission', '覆盖不同角色的可见性和操作权限'],
@@ -93,7 +93,7 @@ export function createQuickTaskShell(module: QaModule, id: string, request: stri
 
 export function taskPlan(task: TestTask): object {
   return {
-    apiVersion: 'qa-agent/v2', taskId: task.metadata.id, mode: task.metadata.mode ?? 'regression', planHash: testPlanHash(task), businessLogic: { description: task.description, objectives: task.objectives, memoryRefs: task.memoryRefs }, approvalRequired: requiresTestPlanApproval(task) && !approvalIsCurrent(task), approval: task.metadata.approval,
+    apiVersion: 'qa-agent/v2', taskId: task.metadata.id, mode: task.metadata.mode ?? 'regression', planHash: testPlanHash(task), businessLogic: { description: task.description, objectives: task.objectives, memoryRefs: task.memoryRefs }, requirementsConfirmationRequired: !planReviewIsCurrent(task), unresolvedQuestions: task.requirements?.userQuestions ?? [], planReview: task.metadata.planReview, approvalRequired: requiresTestPlanApproval(task) && !approvalIsCurrent(task), approval: task.metadata.approval,
     prdRef: task.prdRef, preconditions: task.preconditions, scenarios: task.scenarios.map(scenario => ({ id: scenario.id, title: scenario.title, intent: scenario.intent, preconditions: scenario.preconditions, input: scenario.input, expected: scenario.expected, planningStatus: scenario.planningStatus ?? 'applicable', priority: scenario.priority ?? task.metadata.priority, requirementRefs: scenario.requirementRefs ?? [], sourceRefs: scenario.sourceRefs ?? [], plannedSteps: scenario.plannedSteps, visualAssertions: scenario.visualAssertions ?? [], evidence: scenario.evidence })),
     coverage: { requirementTrace: task.requirements?.requirementTrace ?? [], covered: (task.requirements?.requirementTrace ?? []).filter(item => item.status === 'covered').length, total: task.requirements?.requirementTrace?.length ?? 0 }, requiredSkills: task.requiredSkills, requiredCapabilities: task.capabilities, safety: task.safety, stopConditions: task.safety.stopBefore, cleanup: task.scenarios.flatMap(scenario => scenario.cleanup), evidencePolicy: task.evidencePolicy, recoveryPolicy: task.recoveryPolicy,
   };

@@ -2,21 +2,20 @@
 
 QA Agent is a project-local AI testing runtime. Developers can request real UI checks in natural language while the Runtime persists Tasks, Runs, screenshots, business observations, cleanup, and reports.
 
-Current version: **v0.3.3**
+Current version: **v0.3.4**
 
-v0.3.3 separates Python script creation from regression execution:
+v0.3.4 adds two-stage PRD approval and a QA-led Guided mode:
 
-- the Agent creates the Task first, then derives a detailed plan from the project with Step, Operation, and Expected Result entries;
-- Runtime writes the complete review plan into the Task `prd.md`, and the user must explicitly reply `确认开始测试`;
-- before that exact reply, Runtime creates no Run and the Agent may not invoke UI testing tools;
-- Runtime generates the screenshot-backed report;
-- after testing, the Agent may ask whether to generate Python from the exact executed flow;
-- the first confirmation permits a temporary draft only;
-- a second explicit approval is required after the user reviews the complete script or diff;
-- the main `qa-agent` Skill keeps draft creation and publication;
-- the dedicated `qa-agent-regression-test` Skill only runs already published scripts and reviews the Runtime-generated regression report;
-- ordinary testing still defaults to Quick Check and the installation remains three Skills;
-- safety gates, real evidence, strict release checks, and archive remain intact.
+- the Agent derives a detailed Task PRD from the project;
+- every material requirement, environment, account, test-data, expected-result, or safety question must be resolved with the QA;
+- the QA first replies `确认测试方案` to confirm that the PRD matches the requirement;
+- the QA separately replies `确认开始测试` before Runtime may create a Run or allow UI tools;
+- the main `qa-agent` performs AI-led execution;
+- `qa-agent-guided` requires human approval before each UI action and a human verdict after each observed result;
+- Runtime persists screenshots, QA decisions, assertions, cleanup, and formal reports;
+- Python draft generation and publication still require separate approvals;
+- `qa-agent-regression-test` only runs already published scripts;
+- strict matrices, release checks, GO/NO-GO, and archive gates remain in the main Skill and Runtime.
 
 ## What QA Agent is for
 
@@ -54,7 +53,7 @@ qa-agent --version
 Expected output:
 
 ```text
-0.3.3
+0.3.4
 ```
 
 ## Initialize a project
@@ -171,103 +170,83 @@ skill/qa-agent/references/recommended-regression-stack.md
 ```
 ## Simplest interaction
 
-For the first use, run this from the tested project:
-
-```bash
-qa-agent doctor
-```
-
-After resolving any required execution-capability or permission issue, say in the Agent conversation:
+For an AI-led check, say:
 
 ```text
 Test the login flow.
 ```
 
-The Agent follows this order:
-
-1. create or reuse the Task directory without creating a Run;
-2. inspect relevant source, routes, tests, and configuration;
-3. build detailed Scenarios whose steps each contain an operation and expected result;
-4. write the complete review plan to the Task `prd.md`;
-5. present the Task PRD to the user;
-6. require the exact reply `确认开始测试`;
-7. only after Runtime records that reply, verify browser, simulator, or device capability and create a Run;
-8. execute real UI actions and save screenshots and business observations;
-9. perform cleanup and generate the Runtime report;
-10. append the latest result to the Task PRD;
-11. return a concise result;
-12. when the flow is suitable for reuse, ask whether to generate a Python regression script.
-
-After an interruption, say:
+For QA-led step-by-step execution, say:
 
 ```text
-Continue.
+Use Guided QA to test the first-install Welcome Dialog.
 ```
 
-To end the current QA session, say:
+The shared planning order is mandatory:
 
-```text
-Finish this test.
-```
+1. create or resume a Task without creating a Run;
+2. inspect relevant source, routes, tests, configuration, and existing QA assets;
+3. generate detailed Scenarios whose steps contain an action and expected result;
+4. write and present the complete Task `prd.md`;
+5. ask the QA about every unresolved requirement, environment, account, test-data, expected-result, or safety question;
+6. persist answers in `confirmedDecisions`, clear resolved `userQuestions`, and reapply the plan;
+7. require the exact reply `确认测试方案` and persist it with `qa-agent plan review`;
+8. separately require `确认开始测试` and persist it with `qa-agent review`;
+9. only then run capability checks and create the Task's single Source Run.
 
-Users do not need to know Module, Task, Run, hash, or gate identifiers.
+Vague approval does not satisfy either gate.
 
-## Quick Check
+## Quick and Guided checks
 
-The CLI can also be used directly:
-
-```bash
-qa-agent check "Test the login flow"
-```
-
-Compatible form:
+Create an AI-led Task:
 
 ```bash
 qa-agent check --request "Test the login flow"
 ```
 
-`check` creates the Task and review PRD only. It never starts testing. After the Agent refines the detailed steps from project source, the user reviews `prd.md` and replies exactly:
-
-```text
-确认开始测试
-```
-
-Then persist approval and start the Run:
+Create a QA-led Task:
 
 ```bash
-qa-agent review \
-  --module MODULE \
-  --task TASK \
-  --approve \
-  --confirmed-by USER \
-  --confirmation-text "确认开始测试"
+qa-agent check --mode guided --request "Test the first-install Welcome Dialog"
+```
+
+After applying and presenting the PRD:
+
+```bash
+qa-agent plan review   --module MODULE   --task TASK   --approve   --confirmed-by QA   --confirmation-text "确认测试方案"
+
+qa-agent review   --module MODULE   --task TASK   --approve   --confirmed-by QA   --confirmation-text "确认开始测试"
 
 qa-agent test --module MODULE --task TASK
 ```
 
-Before that exact reply, `qa-agent test` fails without creating a Run.
+Quick mode executes the approved flow continuously while persisting each real action, screenshot, assertion, cleanup result, and recovery attempt.
 
-Continue:
+Guided mode enforces this loop:
 
-```bash
-qa-agent continue
+```text
+Agent proposes one action and expected result
+→ QA approves or changes that action
+→ Runtime records the action approval
+→ Agent executes only that action and captures a screenshot
+→ Agent presents the observed result
+→ QA records a pass/fail/block/pause/inconclusive verdict
+→ only then may the next UI action start
 ```
 
-Finish the session:
+Guided commands:
 
 ```bash
-qa-agent finish
+qa-agent run guide-approve RUN   --scenario SCENARIO   --planned-step STEP   --confirmed-by QA   --confirmation-text "Yes, execute this step"
+
+qa-agent run step RUN ...
+
+qa-agent run guide-verdict RUN   --step STEP   --status passed   --confirmed-by QA   --confirmation-text "Yes, this matches the expected result"
 ```
 
-Quick Check remains lightweight, but it now also requires review of the detailed TestPlan and Task PRD plus the exact reply `确认开始测试`. It enforces:
+Without a pending Guided action approval, Runtime forbids UI execution. After the action, Runtime forbids another UI action and Run completion until the QA verdict is stored.
 
-- a Task PRD matching the current plan hash;
-- exact human start confirmation;
-- capability and permission checks;
-- screenshot and business-assertion requirements;
-- cleanup;
-- Runtime-owned reports;
-- policies that stop real payment, refund, production write, and similar actions.
+After interruption, use `qa-agent continue`. `qa-agent finish` closes the current Session but does not archive or delete the Task.
 
 ## Initial Task test assets
 
@@ -296,7 +275,7 @@ A Task no longer keeps multiple `runs/<run-id>/` histories. Before a formal Pyth
 
 When the TestPlan changes, the old Python script first becomes `stale`. After the user reviews and approves the changed plan, Runtime may create a replacement Source Run and a revised script.
 
-v0.3.3 does not create duplicate `summary.md`, Quick observed-Scenario JSON, Source Run history indexes, or Session Journal files.
+v0.3.4 does not create duplicate `summary.md`, Quick observed-Scenario JSON, Source Run history indexes, or Session Journal files.
 
 ## Python regression scripts
 
@@ -388,39 +367,13 @@ export QA_AGENT_SESSION_KEY=cursor-window-a
 
 Different windows may work on different Tasks. Runtime automatically resumes the only unfinished Task when safe; with multiple candidates it requests a selection and never guesses.
 
-`qa-agent finish` closes the current Session while preserving Task assets. It does not archive a strict regression Task.
+`qa-agent finish` closes the current Session while preserving Task assets. It does not archive a persistent Guided or regression Task.
 
 ## Strict regression and release validation
 
-Strict planning is used only when the user explicitly requests:
+Fixed Scenario matrices, reviewed release scope, impact analysis, release readiness, GO/NO-GO, and Release Gates remain in the main `qa-agent` Skill. The former planning-only Skill has been replaced by `qa-agent-guided`.
 
-- a fixed reviewed Scenario matrix before execution;
-- a fixed and reviewed release test scope;
-- release readiness;
-- GO/NO-GO;
-- a Release Gate.
-
-The host loads:
-
-```text
-qa-agent-plan
-```
-
-After planning and explicit human approval, the main `qa-agent` performs the first real business test. Later Task, Module, and Release regression select validated Python scripts directly.
-
-Strict capabilities remain available:
-
-- PlanDraft;
-- human TestPlan approval;
-- plan hashes;
-- user-reviewed Python scripts;
-- real Python execution validation;
-- Task, Module, and Release script selection;
-- impact analysis;
-- release GO/NO-GO;
-- archive gates.
-
-These protocol details remain hidden during ordinary Quick Checks.
+Strict and release workflows use the same unresolved-question handling, exact `确认测试方案` PRD confirmation, and separate `确认开始测试` execution authorization. Plan hashes, reviewed Python scripts, real script validation, Task/Module/Release selection, impact analysis, release decisions, and archive gates remain available.
 
 ## Safety
 
@@ -455,12 +408,12 @@ Show strict regression, release, and administration commands with:
 qa-agent help --advanced
 ```
 
-## Upgrade to v0.3.3
+## Upgrade to v0.3.4
 
 Upgrade the CLI:
 
 ```bash
-npm install -g qa-agent-skill@0.3.3
+npm install -g qa-agent-skill@0.3.4
 ```
 
 Then update an existing project:
@@ -488,16 +441,16 @@ npm run pack:check
 
 ## Three Skills
 
-v0.3.3 installs:
+v0.3.4 installs:
 
 ```text
 qa-agent
-qa-agent-plan
+qa-agent-guided
 qa-agent-regression-test
 ```
 
-- `qa-agent`: ordinary testing, continuation, recovery, result presentation, Python draft/publication, and strict Runtime execution;
-- `qa-agent-plan`: strict regression or release planning and human approval;
+- `qa-agent`: AI-led testing, two-stage PRD approval, strict matrices and release planning, results, and Python draft/publication;
+- `qa-agent-guided`: QA-led single-step testing with action approval before execution and a result verdict afterward;
 - `qa-agent-regression-test`: only runs approved Python regression scripts already stored in a Task and reviews the Runtime-generated regression report.
 
 Runtime complexity remains internal. Users should only see the goal, progress, result, and any decision they must make.

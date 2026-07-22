@@ -2,7 +2,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { availableCapabilities, capabilityAdvice, platformCapabilities } from './capabilities.ts';
-import { beginAgentGuidedRun, completeAgentGuidedRun, recordAgentStep, recordCleanupFinding, recordHostEvidence, recordRecoveryAttempt, recordVisualFinding } from './engine.ts';
+import { approveGuidedAction, beginAgentGuidedRun, completeAgentGuidedRun, recordAgentStep, recordCleanupFinding, recordGuidedVerdict, recordHostEvidence, recordRecoveryAttempt, recordVisualFinding } from './engine.ts';
 import { readIndex, rebuildIndexes } from './indexer.ts';
 import { createTaskSkeleton, planModule, taskPlan } from './planning.ts';
 import { createModule, findProjectRoot, initializeProject, modulePath, qaPath, readModule, readRunById, readTask, requireProjectRoot, saveRun, saveTask, taskDirectory, taskPrdPath, taskSourceRunReportPath } from './project.ts';
@@ -13,7 +13,7 @@ import { validateProject, validateSkill } from './validation.ts';
 import { createMemoryCandidate, reviewMemory } from './memory.ts';
 import { configuredHostRecords, installHostIntegration, recordHostInstall, supportedHosts, updateHostIntegrations } from './host-adapters.ts';
 import { detectConfiguredHosts, hostsFromFlags, HOST_PLATFORMS } from './host-configurators/registry.ts';
-import { approvalIsCurrent, assertHumanApprover, invalidateApproval, isExplicitStartConfirmation, START_TEST_CONFIRMATION_ZH, testPlanHash } from './approval.ts';
+import { approvalIsCurrent, assertHumanApprover, invalidateApproval, isExplicitPlanRequirementsConfirmation, isExplicitStartConfirmation, PLAN_REQUIREMENTS_CONFIRMATION_ZH, planReviewIsCurrent, START_TEST_CONFIRMATION_ZH, testPlanHash } from './approval.ts';
 import { hostCapabilityDiagnosis } from './capabilities.ts';
 import { buildModuleRegressionSelection, buildReleaseRegressionSelection, buildTaskRegressionSelection, runRegressionSelection } from './regression.ts';
 import { analyzeProjectImpact } from './impact-analysis.ts';
@@ -58,10 +58,11 @@ Commands:
   install-host <${hostNames}> [--scope project|user] [--project PROJECT_DIRECTORY] [--path SKILLS_DIRECTORY] [--force]
   doctor [--platforms web,ios] | validate | migrate | index rebuild
   update [--force] [--migrate]
-  check --request TEXT [--module ID] [--task ID] [--session SESSION_KEY] [--platforms web,android,ios] [--risk low|medium|high|critical]
+  check --request TEXT [--mode quick|guided] [--module ID] [--task ID] [--session SESSION_KEY] [--platforms web,android,ios] [--risk low|medium|high|critical]
   continue [--session SESSION_KEY]
   finish [--session SESSION_KEY]
   plan apply --file PLAN_DRAFT.json | --stdin
+  plan review --module MODULE --task TASK --approve --confirmed-by USER --confirmation-text "确认测试方案" [--session SESSION_KEY]
   start --request TEXT --module ID --task ID [--session SESSION_KEY] [--module-name NAME] [--task-name NAME] [--platforms web,android,ios] [--risk low|medium|high|critical]
   review --module MODULE --task TASK --approve --confirmed-by USER --confirmation-text "确认开始测试" [--session SESSION_KEY] [--confirmation-source current-chat-explicit-approval]
   test --module MODULE --task TASK [--session SESSION_KEY] [--scenario SCENARIO] [execution context flags]
@@ -84,10 +85,12 @@ Commands:
   task list | task create ID --module MODULE [metadata flags] | task update ID --module MODULE [metadata flags] | task plan|finalize|explore|run|review|archive ID --module MODULE | task regression show|run ID --module MODULE
   module regression show|run MODULE [--priority p0|p1|p2|p3]
   memory list | memory search TEXT | memory add ID --module MODULE [--task TASK] --title TEXT --content TEXT | memory review ID --module MODULE [--task TASK] --approve|--reject
+  run guide-approve RUN --scenario ID [--planned-step STEP_ID | --action TEXT --expected TEXT] --confirmed-by HUMAN --confirmation-text TEXT
   run step RUN --action TEXT --detail TEXT --screenshot PATH [--ui-action launch|navigate|click|input|fill|swipe|back|wait|assert|screenshot|reset|restart-app] [--safety-action ACTION] [--scenario SCENARIO] [--status passed|failed|paused|blocked|adapted] [--visual-inspection performed|not-required|skipped] [--execution-mode host-automated|user-assisted|system-component-blocked|preseeded-test-data] [--locator-strategy STRATEGY] [--locator-value VALUE] [--actual-locator-strategy STRATEGY] [--actual-locator-value VALUE] [--input-refs key=ref,key=ref] [--expected-state TEXT] [--actual-state TEXT] [--adaptation TEXT]
   run evidence RUN --type TYPE --summary TEXT [--file PATH]
   run cleanup RUN --scenario ID --cleanup TEXT --actual TEXT --status passed|failed|blocked|paused|inconclusive [--screenshot PATH]
   run recover RUN --action wait|refresh|back|restart-app|reset-sandbox-data|reconnect-mcp|fallback-locator|resume-checkpoint --reason TEXT --detail TEXT --outcome continued|blocked|paused|failed [--failed-step STEP]
+  run guide-verdict RUN --step STEP_ID --status passed|failed|blocked|paused|inconclusive|adapted --confirmed-by HUMAN --confirmation-text TEXT [--note TEXT]
   run observe RUN --scenario ID --assertion ID --expected TEXT --actual TEXT --status passed|failed|paused|blocked [--screenshot PATH]
   run complete RUN | run show RUN | run report RUN
   skill list | skill validate
@@ -178,19 +181,21 @@ function runContextFromFlags(): Partial<ExecutionSnapshot> {
 
 function executionEnvelope(run: TestRun): Record<string, unknown> {
   const running = run.status === 'running';
+  const guidedPhase = run.guidedInteraction?.phase;
+  const uiAllowed = running && (!guidedPhase || guidedPhase === 'ready_to_execute');
   const taskDirectory = `.qa-agent/modules/${run.moduleId}/tasks/${run.taskId}`;
   const runDirectory = `${taskDirectory}/source-run`;
   return {
     ...run,
     executionMode: 'explore',
-    uiExecutionAllowed: running,
+    uiExecutionAllowed: uiAllowed,
     runId: running ? run.id : undefined,
-    mustStop: !running,
+    mustStop: !uiAllowed,
     manualReportAllowed: false,
     runtimeReportGenerated: run.reportGeneratedBy === 'qa-agent-runtime',
     assetContract: { taskDirectory, runDirectory, runJson: `${runDirectory}/run.json`, report: `${runDirectory}/report.md`, screenshotsDirectory: `${runDirectory}/screenshots/`, evidenceDirectory: `${runDirectory}/evidence/` },
-    forbiddenActions: running ? ['manual-report.write', 'pass.claim-before-run-complete'] : ['ui.execute', 'manual-report.write', 'pass.claim'],
-    next: running ? 'Execute the approved business flow and persist every UI action, screenshot, assertion, and cleanup.' : run.reportGeneratedBy === 'qa-agent-runtime' ? `Stop UI execution. Inspect the Runtime report at ${run.reportPath}.` : run.conclusion,
+    forbiddenActions: uiAllowed ? ['manual-report.write', 'pass.claim-before-run-complete'] : ['ui.execute', 'manual-report.write', 'pass.claim'],
+    next: guidedPhase === 'awaiting_action_approval' ? 'Ask the QA to approve exactly one next action before using a UI tool.' : guidedPhase === 'awaiting_result_verdict' ? `Present step ${run.guidedInteraction?.pendingStepId} and ask the QA whether the observed result matches expectations.` : running ? 'Execute the approved business flow and persist every UI action, screenshot, assertion, and cleanup.' : run.reportGeneratedBy === 'qa-agent-runtime' ? `Stop UI execution. Inspect the Runtime report at ${run.reportPath}.` : run.conclusion,
   };
 }
 
@@ -236,10 +241,34 @@ function archiveTask(projectRoot: string, moduleId: string, taskId: string): voi
   output({ ...task, archive: completeness, sessionCleared, workflow: workflowStatus(projectRoot, moduleId, taskId) });
 }
 
+function reviewPlanRequirements(projectRoot: string, moduleId: string, taskId: string): TestTask {
+  const task = readTask(projectRoot, moduleId, taskId);
+  if (!args.includes('--approve')) throw new Error('Plan review requires --approve after the QA has reviewed the complete Task PRD.');
+  const confirmedBy = requiredFlag('--confirmed-by'); assertHumanApprover(confirmedBy);
+  const confirmationText = requiredFlag('--confirmation-text');
+  if (!isExplicitPlanRequirementsConfirmation(confirmationText)) throw new Error(`The QA must explicitly reply “${PLAN_REQUIREMENTS_CONFIRMATION_ZH}” after confirming the PRD matches the requirement.`);
+  const confirmationSource = flag('--confirmation-source') ?? 'current-chat-explicit-approval';
+  if (!['current-chat-explicit-approval', 'external-review-record'].includes(confirmationSource)) throw new Error('--confirmation-source must be current-chat-explicit-approval or external-review-record.');
+  if (!task.scenarios.length || task.scenarios.some(scenario => scenario.planningStatus !== 'applicable' || !scenario.plannedSteps?.length || scenario.plannedSteps.some(step => !step.action.trim() || !step.expected.trim()))) throw new Error('Plan review requires complete applicable Scenarios and detailed steps.');
+  const unresolvedQuestions = task.requirements?.userQuestions ?? [];
+  if (unresolvedQuestions.length) throw new Error(`The Task PRD still has unresolved QA questions: ${unresolvedQuestions.join(' | ')} Ask the QA, update confirmedDecisions, clear userQuestions, and apply the PlanDraft again.`);
+  const prdPath = taskPrdPath(projectRoot, moduleId, taskId);
+  if (!planningPrdIsCurrent(prdPath, task)) throw new Error(`Task PRD is missing or stale. Regenerate ${prdPath} before requesting QA confirmation.`);
+  const currentPlanHash = testPlanHash(task);
+  if (planReviewIsCurrent(task) && task.metadata.planReview?.confirmedBy === confirmedBy && task.metadata.planReview.statement === confirmationText.trim()) return task;
+  if (normalizeTaskState(task.metadata.status) === 'running') throw new Error(`Task ${task.metadata.id} has an active Run; its requirements cannot be re-approved.`);
+  delete task.metadata.approval;
+  task.metadata.planReview = { confirmedBy, confirmedAt: now(), confirmationSource: confirmationSource as 'current-chat-explicit-approval' | 'external-review-record', statement: confirmationText.trim(), planHash: currentPlanHash };
+  appendTaskEvent(projectRoot, { type: 'test_plan_requirements_confirmed', actor: { type: 'human', id: confirmedBy }, moduleId, taskId, fromState: normalizeTaskState(task.metadata.status), toState: normalizeTaskState(task.metadata.status), reasonCode: 'qa_confirmed_prd_matches_requirements', artifactHash: currentPlanHash, idempotencyKey: `plan-requirements-confirmed:${taskId}:${currentPlanHash}:${confirmedBy}` });
+  task.metadata.version += 1; task.updatedAt = now(); saveTask(projectRoot, task); rebuildIndexes(projectRoot);
+  return readTask(projectRoot, moduleId, taskId);
+}
+
 function reviewTask(projectRoot: string, moduleId: string, taskId: string): TestTask {
   const task = readTask(projectRoot, moduleId, taskId);
   if (!args.includes('--approve')) throw new Error('Review requires --approve after verifying scope, business logic, scenarios, evidence, safety stops, and cleanup.');
   const confirmedBy = requiredFlag('--confirmed-by'); assertHumanApprover(confirmedBy);
+  if (!planReviewIsCurrent(task)) throw new Error(`The current Task PRD has not been confirmed by QA. Present it and obtain the exact reply “${PLAN_REQUIREMENTS_CONFIRMATION_ZH}” through qa-agent plan review first.`);
   const confirmationText = requiredFlag('--confirmation-text');
   if (!isExplicitStartConfirmation(confirmationText)) throw new Error(`The user must explicitly reply “${START_TEST_CONFIRMATION_ZH}” before testing. Pass that exact reply with --confirmation-text.`);
   const confirmationSource = flag('--confirmation-source') ?? 'current-chat-explicit-approval';
@@ -330,8 +359,11 @@ async function main(): Promise<void> {
     if (risk && !['low', 'medium', 'high', 'critical'].includes(risk)) throw new Error('--risk must be low, medium, high, or critical.');
     const quickRequest = flag('--request') ?? (action && !action.startsWith('--') ? action : undefined);
     if (!quickRequest) throw new Error('Provide the QA request as qa-agent check "<request>" or with --request.');
+    const mode = flag('--mode') ?? 'quick';
+    if (!['quick', 'guided'].includes(mode)) throw new Error('--mode must be quick or guided.');
     const prepared = prepareQuickCheck(projectRoot, {
       request: quickRequest,
+      mode: mode as 'quick' | 'guided',
       moduleId: flag('--module'),
       taskId: flag('--task'),
       moduleName: flag('--module-name'),
@@ -342,10 +374,12 @@ async function main(): Promise<void> {
     rebuildIndexes(projectRoot);
     const session = bindTaskSession(projectRoot, { sessionKey: flag('--session'), host: flag('--session-host'), moduleId: prepared.moduleId, taskId: prepared.taskId });
     output({
-      message: 'Quick Task prepared. Inspect the project, apply a detailed PlanDraft, and then present the updated Task PRD for review. Do not request start confirmation yet.',
+      message: `${mode === 'guided' ? 'Guided' : 'Quick'} Task prepared. Inspect the project, apply a detailed PlanDraft, present the PRD, resolve all questions, and request QA requirement confirmation before start authorization.`,
+      check: { moduleId: prepared.moduleId, taskId: prepared.taskId, mode, moduleCreated: prepared.moduleCreated, taskCreated: prepared.taskCreated, approvalPolicy: 'test-plan-and-side-effects' },
       quickCheck: { moduleId: prepared.moduleId, taskId: prepared.taskId, moduleCreated: prepared.moduleCreated, taskCreated: prepared.taskCreated, approvalPolicy: 'test-plan-and-side-effects' },
       prdPath: taskPrdPath(projectRoot, prepared.moduleId, prepared.taskId),
       planningRequired: true,
+      requiredRequirementsConfirmationAfterPlanning: PLAN_REQUIREMENTS_CONFIRMATION_ZH,
       requiredConfirmationAfterPlanning: START_TEST_CONFIRMATION_ZH,
       uiExecutionAllowed: false,
       mustStop: true,
@@ -380,7 +414,14 @@ async function main(): Promise<void> {
     throw new Error(`Session command must be bind, current, clear, or list.\n\n${advancedUsage}`);
   }
   if (group === 'plan') {
-    if (action !== 'apply') throw new Error(`Plan command must be apply.\n\n${advancedUsage}`);
+    if (action === 'review') {
+      const projectRoot = root(); const moduleId = requiredFlag('--module'); const taskId = requiredFlag('--task');
+      const task = reviewPlanRequirements(projectRoot, moduleId, taskId);
+      const session = bindTaskSession(projectRoot, { sessionKey: flag('--session'), host: flag('--session-host'), moduleId, taskId });
+      output({ task, session, requiredStartConfirmation: START_TEST_CONFIRMATION_ZH, workflow: workflowStatus(projectRoot, moduleId, taskId) });
+      return;
+    }
+    if (action !== 'apply') throw new Error(`Plan command must be apply or review.\n\n${advancedUsage}`);
     const file = flag('--file');
     if (Boolean(file) === args.includes('--stdin')) throw new Error('Specify exactly one of --file PLAN_DRAFT.json or --stdin.');
     const raw = args.includes('--stdin') ? readFileSync(0, 'utf8') : readFileSync(resolve(file!), 'utf8');
@@ -686,12 +727,22 @@ ${advancedUsage}`);
     }
   }
   if (group === 'run') {
-    if (!['show', 'report', 'step', 'evidence', 'cleanup', 'recover', 'observe', 'complete'].includes(action ?? '')) throw new Error(`Unsupported command.\n\n${advancedUsage}`);
+    if (!['show', 'report', 'guide-approve', 'guide-verdict', 'step', 'evidence', 'cleanup', 'recover', 'observe', 'complete'].includes(action ?? '')) throw new Error(`Unsupported command.\n\n${advancedUsage}`);
     const projectRoot = root();
     if (!subject) throw new Error('run id is required. Start a Task with task run TASK --module MODULE.');
     const run = readRunById(projectRoot, subject);
     if (action === 'show') return output(run);
     if (action === 'report') return output(taskSourceRunReportPath(projectRoot, run.moduleId, run.taskId));
+    if (action === 'guide-approve') {
+      const updated = approveGuidedAction(projectRoot, subject, { scenarioId: flag('--scenario'), plannedStepId: flag('--planned-step'), action: flag('--action'), expected: flag('--expected'), confirmedBy: requiredFlag('--confirmed-by'), confirmationSource: (flag('--confirmation-source') as 'current-chat-explicit-approval' | 'external-review-record' | undefined), statement: requiredFlag('--confirmation-text') });
+      output(executionEnvelope(updated)); return;
+    }
+    if (action === 'guide-verdict') {
+      const status = requiredFlag('--status') as 'passed' | 'failed' | 'blocked' | 'paused' | 'inconclusive' | 'adapted';
+      if (!['passed', 'failed', 'blocked', 'paused', 'inconclusive', 'adapted'].includes(status)) throw new Error('--status is invalid for a Guided verdict.');
+      const updated = recordGuidedVerdict(projectRoot, subject, { stepId: requiredFlag('--step'), status, confirmedBy: requiredFlag('--confirmed-by'), confirmationSource: (flag('--confirmation-source') as 'current-chat-explicit-approval' | 'external-review-record' | undefined), statement: requiredFlag('--confirmation-text'), note: flag('--note') });
+      output(executionEnvelope(updated)); return;
+    }
     if (action === 'step') {
       const executionMode = (flag('--execution-mode') ?? 'host-automated') as StepExecutionMode;
       if (!['host-automated', 'user-assisted', 'system-component-blocked', 'preseeded-test-data'].includes(executionMode)) throw new Error('--execution-mode is invalid.');

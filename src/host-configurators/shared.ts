@@ -47,8 +47,8 @@ export function copyMainSkill(destination: string, force: boolean): void {
   if (existsSync(legacySubskills)) rmSync(legacySubskills, { recursive: true, force: true });
 }
 
-export const QA_SUBSKILLS = ['plan', 'regression-test'] as const;
-const LEGACY_PHASE_SUBSKILLS = ['quick', 'start', 'review', 'test', 'result', 'finish', 'operation', 'recovery', 'archive', 'regression'] as const;
+export const QA_SUBSKILLS = ['guided', 'regression-test'] as const;
+const LEGACY_PHASE_SUBSKILLS = ['quick', 'start', 'review', 'test', 'result', 'finish', 'operation', 'recovery', 'archive', 'regression', 'plan'] as const;
 
 export function copySubSkills(parent: string, force: boolean): string[] {
   const sourceRoot = skillSource();
@@ -93,14 +93,15 @@ export const sharedGuidance = `# QA Agent
 
 Load the installed qa-agent Skill and references/workflow.md.
 
-- For testing, check/start creates the Task only. Inspect the project, apply ordered Scenario steps, and present Task prd.md.
-- Require “确认开始测试”; then call review and test to create the Task's single Source Run. Vague approval never authorizes UI.
+- check/start creates planning assets only. Inspect the project, apply ordered Scenario steps, and present the complete Task prd.md.
+- Ask the QA about every unresolved requirement, environment, account, expected-result, or safety question. Persist answers in confirmedDecisions and reapply the plan.
+- Require exact “确认测试方案” through plan review, then a separate exact “确认开始测试” through review. Vague approval never authorizes UI.
 - Runtime owns state, evidence, reports, approvals, publication, and results. Never edit Runtime JSON or write competing reports.
+- Load qa-agent-guided for QA-led testing. It requires one QA-approved action, one UI operation with screenshot, then one QA verdict before the next action.
 - Later call qa-agent continue. Use UI tools only with uiExecutionAllowed=true, mustStop=false, and runId. Pass --session or QA_AGENT_SESSION_KEY when available.
-- After an eligible report, offer Python from the executed flow. Consent creates a draft only. Show the full script or diff and publish only after separate approval; publication freezes the Source Run. Runtime never authors Python.
-- Load qa-agent-regression-test for later regression-runs. Use qa-agent-plan only for strict planning. Task, Module, and Release regression select validated Python scripts.
-- Ask at most one question, infer internal IDs, use the user's language, and call qa-agent finish only on explicit closure.
-- Never bypass safety or approval checks or fabricate evidence or results.
+- After an eligible report, consent creates a Python draft only. Show the full script or diff and publish only after separate approval; publication freezes the Source Run.
+- Load qa-agent-regression-test for later regression-runs. Strict matrices and release planning stay in the main Skill.
+- Ask at most one user-owned question per turn. Never bypass safety or fabricate evidence, decisions, or results.
 `;
 
 export function renderGuidance(config: HostPlatformConfig): string {
