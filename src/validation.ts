@@ -9,6 +9,7 @@ import type { RegressionRun, TaskLifecycleState, TestRun } from './types.ts';
 import { readTaskEvents } from './events.ts';
 import { normalizeTaskState } from './workflow-model.ts';
 import { inspectPythonRegressionEligibility } from './python-regression.ts';
+import { inspectManagedRuntimeAssets } from './managed-assets.ts';
 
 export interface ValidationResult { valid: boolean; errors: string[]; checked: number }
 function textHash(value: string): string { return createHash('sha256').update(value).digest('hex'); }
@@ -23,7 +24,7 @@ function validateDomainObject(path: string): string[] {
     const statuses = ['draft', 'planning', 'awaiting_approval', 'ready', 'running', 'reviewing_result', 'completed', 'archived', 'needs_input', 'blocked', 'paused', 'deprecated', 'superseded', 'active', 'needs_review', 'finalizing', 'regression_ready'];
     if (!statuses.includes(value.metadata?.status)) errors.push(`${path}: invalid Task lifecycle state ${value.metadata?.status}.`);
     const quick = value.metadata?.mode === 'quick' && value.metadata?.approvalPolicy === 'side-effect-only';
-    if (value.metadata?.mode && !['quick', 'regression', 'release'].includes(value.metadata.mode)) errors.push(`${path}: invalid QA mode ${value.metadata.mode}.`);
+    if (value.metadata?.mode && !['quick', 'regression'].includes(value.metadata.mode)) errors.push(`${path}: invalid QA mode ${value.metadata.mode}.`);
     if (value.metadata?.mode === 'quick' && value.metadata?.approvalPolicy !== 'side-effect-only') errors.push(`${path}: Quick Tasks must use approvalPolicy=side-effect-only.`);
     if (['ready', 'running', 'reviewing_result', 'completed', 'archived', 'active'].includes(value.metadata?.status) && !quick && (!isHumanApprover(value.metadata.approval?.confirmedBy) || !value.metadata.approval?.confirmedAt || !value.metadata.approval?.confirmationSource || !value.metadata.approval?.planHash)) errors.push(`${path}: executable or completed strict Task requires explicit human approval.`);
     if (!Array.isArray(value.scenarioRefs) || !value.scenarioRefs.length || value.scenarioRefs.some((ref: unknown) => typeof ref !== 'string' || !/^scenarios\/[a-z0-9][a-z0-9-]{0,62}\.json$/.test(ref))) errors.push(`${path}: invalid scenarioRefs.`);
@@ -105,12 +106,15 @@ export function validateProject(root: string): ValidationResult {
   const current = qaPath(root, '.runtime', 'current-task.json'); if (existsSync(current)) files.push([current, ['apiVersion', 'storageKey', 'moduleId', 'taskId']]);
   const errors = files.filter(([path]) => !existsSync(path)).map(([path]) => `${path}: not found`);
   for (const [path, fields] of files) if (existsSync(path)) { errors.push(...validateObject(path, fields)); try { errors.push(...validateDomainObject(path)); } catch (error) { errors.push(`${path}: ${(error as Error).message}`); } }
+  errors.push(...inspectManagedRuntimeAssets(qaPath(root)));
   for (const legacy of listFiles(qaPath(root, 'modules'), path => path.includes('/operation-plans/') || path.endsWith('/regression-suite.json'))) errors.push(`${legacy}: legacy OperationPlan asset remains; run qa-agent migrate.`);
+  for (const name of ['archive', 'cache', 'evidence', 'runs']) if (existsSync(qaPath(root, name))) errors.push(`${qaPath(root, name)}: legacy project-level Runtime directory remains; run qa-agent update --migrate.`);
 
   const validStates = new Set<TaskLifecycleState>(['draft', 'planning', 'awaiting_approval', 'ready', 'running', 'reviewing_result', 'completed', 'archived', 'needs_input', 'blocked', 'paused', 'deprecated', 'superseded']);
   for (const manifestPath of listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/task\.json$/.test(path))) {
     const manifest = readJson<Record<string, any>>(manifestPath); const moduleId = manifest.metadata?.moduleId; const taskId = manifest.metadata?.id; if (!moduleId || !taskId) continue;
     const taskDir = dirname(manifestPath); const task = readTask(root, moduleId, taskId);
+    if (existsSync(join(taskDir, 'reports'))) errors.push(`${join(taskDir, 'reports')}: legacy Task reports directory remains; run qa-agent update --migrate.`);
     try { const events = readTaskEvents(root, moduleId, taskId); const ids = new Set<string>(); const keys = new Set<string>(); for (const [index, event] of events.entries()) { if (event.seq !== index + 1) errors.push(`${manifestPath}: invalid event sequence.`); if (!event.id || ids.has(event.id)) errors.push(`${manifestPath}: duplicate event id.`); else ids.add(event.id); if (!event.idempotencyKey || keys.has(event.idempotencyKey)) errors.push(`${manifestPath}: duplicate event idempotencyKey.`); else keys.add(event.idempotencyKey); if (event.fromState && !validStates.has(normalizeTaskState(event.fromState))) errors.push(`${manifestPath}: invalid event fromState.`); if (event.toState && !validStates.has(normalizeTaskState(event.toState))) errors.push(`${manifestPath}: invalid event toState.`); } } catch (error) { errors.push((error as Error).message); }
     const taskRuns = listFiles(join(taskDir, 'runs'), path => path.endsWith('/run.json')).map(path => readJson<TestRun>(path));
     if (taskRuns.filter(run => run.status === 'running').length > 1) errors.push(`${manifestPath}: multiple active Runs.`);
@@ -131,7 +135,6 @@ export function validateProject(root: string): ValidationResult {
     }
   }
 
-  for (const path of listFiles(qaPath(root, 'modules'), item => /\/tasks\/[^/]+\/reports\/.+\.md$/.test(item))) errors.push(`${path}: legacy Task report is outside runs/<run-id>/; run qa-agent migrate.`);
   for (const path of listFiles(qaPath(root, 'reports'), item => item.endsWith('.md'))) { const id = basename(path, '.md'); let owner = existsSync(qaPath(root, 'release-checks', `${id}.json`)); if (!owner && existsSync(qaPath(root, 'regression-runs', `${id}.json`))) { try { owner = readJson<RegressionRun>(qaPath(root, 'regression-runs', `${id}.json`)).selectionScope === 'release'; } catch { owner = false; } } if (!owner) errors.push(`${path}: orphan Runtime report.`); }
   return { valid: errors.length === 0, errors, checked: files.length };
 }

@@ -9,6 +9,7 @@ import { inspectPythonRegressionEligibility } from './python-regression.ts';
 import { RUNTIME_REPORT_GENERATOR, runtimeReportMarker } from './report-contract.ts';
 import { listFiles, now, readJson, writeJsonAtomic, writeTextAtomic } from './store.ts';
 import type { RegressionRun, TestRun, TestTask } from './types.ts';
+import { syncManagedRuntimeAssets } from './managed-assets.ts';
 
 export interface MigrationResult {
   migratedTaskReports: number;
@@ -28,6 +29,12 @@ export interface MigrationResult {
   migratedPythonRegressions: number;
   migratedPythonDrafts: number;
   removedLegacyRegressionRuns: number;
+  synchronizedSchemas: number;
+  removedLegacySchemas: number;
+  synchronizedBuiltInSkills: number;
+  removedLegacyBuiltInSkills: number;
+  updatedProjectVersion: number;
+  removedLegacyRuntimeDirectories: number;
   warnings: string[];
 }
 
@@ -93,7 +100,8 @@ function migratePythonAsset(root: string, task: TestTask, manifestPath: string, 
 }
 
 export function migrateProjectArtifacts(root: string): MigrationResult {
-  const result: MigrationResult = { migratedTaskReports: 0, migratedRunIndexes: 0, updatedRuns: 0, updatedTasks: 0, quarantinedOrphanReports: 0, normalizedTaskStates: 0, createdTaskEventLogs: 0, backfilledScenarioAssertions: 0, backfilledScenarioPlanning: 0, backfilledRequirementTrace: 0, rehashedApprovedPlans: 0, backfilledRunPlanHashes: 0, removedOperationPlanDirectories: 0, removedRegressionSuites: 0, migratedPythonRegressions: 0, migratedPythonDrafts: 0, removedLegacyRegressionRuns: 0, warnings: [] };
+  const managed = syncManagedRuntimeAssets(qaPath(root));
+  const result: MigrationResult = { migratedTaskReports: 0, migratedRunIndexes: 0, updatedRuns: 0, updatedTasks: 0, quarantinedOrphanReports: 0, normalizedTaskStates: 0, createdTaskEventLogs: 0, backfilledScenarioAssertions: 0, backfilledScenarioPlanning: 0, backfilledRequirementTrace: 0, rehashedApprovedPlans: 0, backfilledRunPlanHashes: 0, removedOperationPlanDirectories: 0, removedRegressionSuites: 0, migratedPythonRegressions: 0, migratedPythonDrafts: 0, removedLegacyRegressionRuns: 0, ...managed, removedLegacyRuntimeDirectories: 0, warnings: [] };
   const taskPaths = listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/task\.json$/.test(path));
   for (const taskPath of taskPaths) {
     const raw = readJson<Record<string, any>>(taskPath);
@@ -169,5 +177,16 @@ export function migrateProjectArtifacts(root: string): MigrationResult {
 
   const globalReports = qaPath(root, 'reports');
   for (const reportPath of listFiles(globalReports, path => path.endsWith('.md'))) { if (validGlobalReport(root, reportPath)) continue; copyThenRemove(reportPath, qaPath(root, 'orphans', 'reports', relative(globalReports, reportPath))); result.quarantinedOrphanReports += 1; }
+
+  for (const name of ['archive', 'cache', 'evidence', 'runs']) {
+    const path = qaPath(root, name);
+    if (!existsSync(path)) continue;
+    if (listFiles(path, () => true).length) {
+      result.warnings.push(`Legacy Runtime directory contains files and was preserved for manual review: ${path}`);
+      continue;
+    }
+    rmSync(path, { recursive: true, force: true });
+    result.removedLegacyRuntimeDirectories += 1;
+  }
   return result;
 }

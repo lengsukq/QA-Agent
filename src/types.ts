@@ -15,7 +15,7 @@ export type PermissionStatus = 'verified' | 'missing' | 'unknown';
 export type TestPriority = 'p0' | 'p1' | 'p2' | 'p3';
 export type RegressionFrequency = 'every-change' | 'every-release' | 'scheduled' | 'manual';
 export type RegressionProfile = 'fast' | 'normal' | 'full';
-export type QaMode = 'quick' | 'regression' | 'release';
+export type QaMode = 'quick' | 'regression';
 export type ApprovalPolicy = 'side-effect-only' | 'test-plan-and-side-effects';
 export type RegressionSelectionScope = 'task' | 'module' | 'release';
 export type RegressionSelectionPolicy = 'all-validated-python-regressions' | 'priority-filtered' | 'release-gate-plus-impact';
@@ -323,7 +323,7 @@ export interface TestPlan {
   capabilities: { required: string[]; optional: string[] };
   safety: { safeMode: boolean; stopBefore: string[] };
   evidencePolicy: EvidencePolicy;
-  recoveryPolicy: { maxRetries: number; maxRecoveryAttempts: number; allowSandboxDataReset: boolean };
+  recoveryPolicy: { maxRecoveryAttempts: number; allowSandboxDataReset: boolean };
   status: 'draft' | 'awaiting_confirmation' | 'approved' | 'superseded';
   approvedBy?: string;
   approvedAt?: string;
@@ -491,7 +491,7 @@ export interface TestTask {
   safety: { safeMode: boolean; stopBefore: string[] };
   evidence: { required: string[] };
   evidencePolicy: EvidencePolicy;
-  recoveryPolicy: { maxRetries: number; maxRecoveryAttempts: number; allowSandboxDataReset: boolean };
+  recoveryPolicy: { maxRecoveryAttempts: number; allowSandboxDataReset: boolean };
   regression: { triggers: string[] };
   createdAt: string;
   updatedAt: string;

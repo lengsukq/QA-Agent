@@ -4,9 +4,8 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendJsonl, assertSafeId, ensureDir, listFiles, now, readJson, withFileLock, writeJsonAtomic } from './store.ts';
 import type { ModuleSnapshot, ProjectConfig, QaModule, TestPlan, TestRequirements, TestRun, TestTask } from './types.ts';
-import { schemas } from './schemas.ts';
-import { builtInSkills } from './built-in-skills.ts';
 import { approvalIsCurrent, requiresTestPlanApproval, testPlanHash } from './approval.ts';
+import { syncManagedRuntimeAssets } from './managed-assets.ts';
 
 export const QA_DIRECTORY = '.qa-agent';
 
@@ -42,21 +41,14 @@ export function initializeProject(root: string, options: { id?: string; name?: s
     source: { mode: 'host-provided', root: '' }, storage: { format: 'json', runIndexFormat: 'jsonl' }, createdAt: timestamp, updatedAt: timestamp,
   };
   writeJsonAtomic(existing, project);
-  writeJsonAtomic(qaPath(root, '.version'), { version: '0.3.2', initializedAt: timestamp });
   writeJsonAtomic(qaPath(root, '.template-hashes.json'), { version: 1, hashes: {} });
   writeJsonAtomic(qaPath(root, '.configured-hosts.json'), {});
   writeJsonAtomic(qaPath(root, 'policies.json'), defaultPolicies());
   writeJsonAtomic(qaPath(root, 'mcp.json'), { version: 1, connections: [] });
   writeJsonAtomic(qaPath(root, 'accounts.example.json'), { version: 1, accounts: [{ id: 'example-staging-user', secretRef: 'env:QA_EXAMPLE_PASSWORD' }] });
-  for (const name of ['modules', 'tasks', 'memories', 'skills']) writeJsonAtomic(qaPath(root, 'index', `${name}.json`), { version: 1, updatedAt: timestamp, [name]: [] });
+  for (const name of ['modules', 'tasks', 'memories']) writeJsonAtomic(qaPath(root, 'index', `${name}.json`), { version: 1, updatedAt: timestamp, [name]: [] });
   writeJsonAtomic(qaPath(root, 'shared-memory', 'project-profile.json'), { version: 1, entries: [] });
-  for (const [name, schema] of Object.entries(schemas)) writeJsonAtomic(qaPath(root, 'schemas', name), schema);
-  for (const skill of builtInSkills) writeJsonAtomic(qaPath(root, 'skills', 'built-in', `${skill.metadata.name.replace(/\./g, '-')}.json`), skill);
-  writeJsonAtomic(qaPath(root, 'index', 'skills.json'), {
-    version: 1,
-    updatedAt: timestamp,
-    skills: builtInSkills.map(skill => ({ name: skill.metadata.name, version: skill.metadata.version, description: skill.metadata.description, lifecycle: skill.metadata.lifecycle, path: `skills/built-in/${skill.metadata.name.replace(/\./g, '-')}.json`, capabilities: skill.requirements.capabilities })),
-  });
+  syncManagedRuntimeAssets(qaPath(root));
   return project;
 }
 
@@ -85,7 +77,6 @@ export function taskRunPath(root: string, moduleId: string, taskId: string, runI
 export function taskRunReportPath(root: string, moduleId: string, taskId: string, runId: string): string { return join(taskRunDirectory(root, moduleId, taskId, runId), 'report.md'); }
 export function taskRunIndexPath(root: string, moduleId: string, taskId: string): string { return join(taskDirectory(root, moduleId, taskId), 'runs', 'index.json'); }
 export function taskRunLatestPath(root: string, moduleId: string, taskId: string): string { return join(taskDirectory(root, moduleId, taskId), 'runs', 'latest.json'); }
-export function taskReportDirectory(root: string, moduleId: string, taskId: string): string { return join(taskDirectory(root, moduleId, taskId), 'reports'); }
 export function moduleReportDirectory(root: string, moduleId: string): string { return join(modulePath(root, moduleId), 'reports'); }
 export function taskEvidenceDirectory(root: string, moduleId: string, taskId: string, runId: string): string { return join(taskRunDirectory(root, moduleId, taskId, runId), 'evidence'); }
 
@@ -137,7 +128,7 @@ export function saveTask(root: string, task: TestTask): void {
   withFileLock(qaPath(root, '.locks', 'tasks.lock'), () => {
     const module = readModule(root, task.metadata.moduleId);
     const directory = taskDirectory(root, task.metadata.moduleId, task.metadata.id);
-    for (const child of ['scenarios', 'runs', 'reports', 'memory']) ensureDir(join(directory, child));
+    for (const child of ['scenarios', 'runs', 'memory']) ensureDir(join(directory, child));
     task.moduleSnapshot ??= buildModuleSnapshot(module); task.requirements ??= buildRequirements(task, module);
     task.scenarioRefs = task.scenarios.map(scenario => `scenarios/${scenario.id}.json`);
     const approvalCurrent = approvalIsCurrent(task);

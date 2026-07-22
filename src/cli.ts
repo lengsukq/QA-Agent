@@ -41,9 +41,10 @@ import {
   markPythonRegressionsStaleForPlanHash,
 } from './python-regression.ts';
 import { recommendedRegressionStackDiagnosis } from './recommended-stack.ts';
+import { syncManagedRuntimeAssets } from './managed-assets.ts';
+import { QA_AGENT_VERSION } from './version.ts';
 
 const args = process.argv.slice(2);
-const packageMetadata = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
 const hostFlags = supportedHosts.map(host => `--${HOST_PLATFORMS[host].cliFlag}`).join(' ');
 const hostNames = supportedHosts.join('|');
 const advancedUsage = `qa-agent — local-first QA Agent MVP
@@ -257,7 +258,7 @@ function reviewTask(projectRoot: string, moduleId: string, taskId: string): Test
 async function main(): Promise<void> {
   const [group, action, subject] = args;
   if (!group || group === '--help' || group === '-h' || group === 'help') return output(args.includes('--advanced') ? advancedUsage : usage);
-  if (group === '--version' || group === '-v' || group === 'version') return output(packageMetadata.version);
+  if (group === '--version' || group === '-v' || group === 'version') return output(QA_AGENT_VERSION);
   if (group === 'init') {
     const projectRoot = process.cwd(); const projectFile = join(projectRoot, '.qa-agent', 'project.json');
     const initialized = existsSync(projectFile);
@@ -313,9 +314,9 @@ async function main(): Promise<void> {
   if (group === 'update') {
     const projectRoot = root();
     const migration = args.includes('--migrate') ? migrateProjectArtifacts(projectRoot) : undefined;
+    const managedAssets = migration ? undefined : syncManagedRuntimeAssets(qaPath(projectRoot));
     const hostUpdate = updateHostIntegrations(projectRoot, { force: args.includes('--force'), migrate: args.includes('--migrate') });
-    writeJsonAtomic(qaPath(projectRoot, '.version'), { version: packageMetadata.version, updatedAt: now() });
-    output({ projectRoot, migration, hostUpdate, migrated: args.includes('--migrate'), next: hostUpdate.conflicts.length ? 'Review conflicts or rerun qa-agent update --force.' : 'Project integrations are current.' }); return;
+    output({ projectRoot, migration, managedAssets, hostUpdate, migrated: args.includes('--migrate'), next: hostUpdate.conflicts.length ? 'Review conflicts or rerun qa-agent update --force.' : 'Project integrations are current.' }); return;
   }
   if (group === 'check') {
     const projectRoot = root();
