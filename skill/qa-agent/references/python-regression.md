@@ -24,9 +24,7 @@ Agent-assisted iOS exploration
 → ios-simulator-mcp
 ```
 
-This recommendation is not a mandatory Runtime dependency. Reuse an existing project framework when it already supports direct command-line execution, the QA Agent result contract, screenshots, UI state evidence, logs or Trace, JUnit XML, and Cleanup.
-
-Allure output is optional. `result.json`, screenshots, and the Runtime-generated report remain authoritative.
+This recommendation is not a mandatory Runtime dependency. Reuse an existing project framework when it already supports direct command-line execution, the QA Agent result contract, screenshots, Cleanup, and Runtime reporting. Formal outputs must remain inside the Runtime-provided Task Run directories.
 
 ## Approval boundaries
 

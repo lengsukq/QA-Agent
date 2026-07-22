@@ -11,7 +11,7 @@
 | `qa-agent doctor` | Inspect project and host-tool readiness. |
 | `qa-agent update --migrate` | Update managed host files and migrate legacy assets. |
 
-`qa-agent doctor` also reports the advisory Web and iOS regression stack from `references/recommended-regression-stack.md`, including Python, pytest, Playwright, simctl, fb-idb, idb_companion, optional ios-simulator-mcp, and optional Allure availability. Missing recommended tools do not block QA Agent when another approved adapter satisfies the result contract.
+`qa-agent doctor` also reports the advisory Web and iOS regression stack from `references/recommended-regression-stack.md`, including Python, pytest, Playwright, simctl, fb-idb, idb_companion, optional ios-simulator-mcp availability. Missing recommended tools do not block QA Agent when another approved adapter satisfies the result contract.
 
 ## Planning and execution
 
@@ -72,4 +72,4 @@ regression-runs/<run-id>/...
 | `qa-agent index rebuild` | Rebuild project indexes. |
 | `qa-agent skill validate` | Validate the installable three-Skill package. |
 
-v0.3.0 uses one reusable execution model: approved Python scripts. Source Runs remain immutable evidence; `sourceFlowHash` provides direct traceability from a script to the exact completed business flow.
+v0.3.2 uses one reusable execution model: approved Python scripts. Source Runs remain immutable evidence; `sourceFlowHash` provides direct traceability from a script to the exact completed business flow.

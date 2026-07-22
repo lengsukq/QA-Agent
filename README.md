@@ -2,9 +2,9 @@
 
 QA Agent 是一个项目级 AI 测试运行时。它让开发者直接用自然语言发起真实 UI 检查，同时自动保存 Task、Run、截图、业务观察、Cleanup 和测试报告。
 
-当前版本：**v0.3.0**
+当前版本：**v0.3.2**
 
-v0.3.0 将 Python 脚本生成和回归执行进一步拆开：
+v0.3.2 将 Python 脚本生成和回归执行进一步拆开：
 
 - Agent 先展示简短业务测试流程，用户同意后才执行真实 UI；
 - Runtime 生成带截图的正式报告；
@@ -52,7 +52,7 @@ qa-agent --version
 应输出：
 
 ```text
-0.3.0
+0.3.2
 ```
 
 ## 初始化项目
@@ -98,69 +98,84 @@ qa-agent configure \
 
 普通用户不需要手动修改其中的 JSON 文件。
 
-## 推荐回归技术栈
+## 首次运行检查（推荐）
 
-这是 QA Agent 的默认推荐方案，不是强制依赖。项目已有自动化框架时，只要能够直接命令行执行、输出 QA Agent `result.json` 并保留必要证据，就可以继续使用现有方案。
-
-### Web 外部端
-
-```text
-Python 3.12+
-+ pytest
-+ pytest-playwright
-+ Playwright
-```
-
-推荐用于浏览器操作、DOM 定位、截图、视频、网络与控制台证据以及 Playwright Trace。
-
-### iOS 模拟器端
-
-```text
-Python 3.12+
-+ pytest
-+ xcrun simctl
-+ fb-idb CLI
-+ idb_companion
-```
-
-建议由 `simctl` 管理模拟器、应用、权限、截图和视频，由 `fb-idb` 与 `idb_companion` 提供 UI 查询和自动化能力，由 pytest 管理 Fixture、断言、参数化、Cleanup 和报告。
-
-### Agent 辅助探索
-
-```text
-ios-simulator-mcp
-```
-
-它用于首次 Agent 探索、截图和 UI 层级检查，不作为正式 Python 回归脚本的唯一运行依赖。
-
-### 统一输出
-
-```text
-截图
-+ DOM / Accessibility UI Tree
-+ Playwright Trace 或 iOS 执行日志
-+ QA Agent result.json
-+ JUnit XML
-+ Allure Results（可选）
-```
-
-执行：
+项目初始化完成后，建议先运行：
 
 ```bash
 qa-agent doctor
 ```
 
-可以查看当前项目平台对应的推荐环境、已安装工具和缺失项。推荐工具缺失不会自动阻止 QA Agent；已有 Host Bridge 满足结果与证据协议时仍可继续使用。
+Doctor 会检查：
+
+- `.qa-agent/` 项目是否初始化完整；
+- 当前宿主、浏览器、模拟器或设备能力是否可用；
+- 已配置平台对应的推荐 Python 回归环境；
+- 缺失的工具、权限和可能阻止真实 UI 执行的问题。
+
+推荐技术栈缺失只会作为建议提示，不会自动阻止 QA Agent。浏览器、模拟器、设备或必要权限等真实执行能力缺失时，应先按 Doctor 的提示修复，再开始第一次测试。
+
+推荐的首次使用顺序：
+
+```text
+安装 QA Agent
+→ 初始化被测项目和 Agent 宿主
+→ qa-agent doctor
+→ 修复必要的能力或权限问题
+→ 在 Agent 对话中发起第一次测试
+```
+
+## 推荐回归技术栈
+
+这是 QA Agent 的默认推荐方案，不是强制依赖。项目已有自动化框架时，只要能够直接命令行执行、输出 QA Agent `result.json`、生成 Runtime 报告并保存必要截图，就可以继续使用现有方案。
+
+### Web 外部端
+
+```text
+Python 3.12+ + pytest + pytest-playwright + Playwright
+```
+
+用于浏览器操作、稳定定位、断言和截图。
+
+### iOS 模拟器端
+
+```text
+Python 3.12+ + pytest + xcrun simctl + fb-idb CLI + idb_companion
+```
+
+由 `simctl` 管理模拟器、应用、权限和截图，由 `fb-idb` 与 `idb_companion` 执行 UI 自动化，由 pytest 管理 Fixture、断言、参数化和 Cleanup。
+
+### Agent 辅助探索
+
+`ios-simulator-mcp` 可用于首次探索和截图，但不作为正式 Python 回归脚本的唯一依赖。
+
+### 正式输出
+
+```text
+result.json
++ report.md
++ screenshots/
++ stdout.log
++ stderr.log
++ evidence/（按需）
+```
+
+Doctor 的首次运行说明见上文。推荐工具缺失不会自动阻止 QA Agent。
 
 完整说明见：
 
 ```text
 skill/qa-agent/references/recommended-regression-stack.md
 ```
-
 ## 最简单的使用方式
 
-在 Agent 对话中直接说：
+首次使用时，先在被测项目目录执行：
+
+```bash
+qa-agent doctor
+```
+
+确认没有必须处理的执行能力或权限问题后，再在 Agent 对话中直接说：
 
 ```text
 帮我测试登录流程。
@@ -256,7 +271,7 @@ Quick Check 不要求完整 TestPlan 审批，但仍然遵守：
 - `screenshots/`：真实截图；
 - `evidence/`：其他证据。
 
-v0.3.0 延续精简资产模型，不生成重复的 `summary.md`、Quick 观察场景 JSON 或 Session Journal。
+v0.3.2 延续精简资产模型，不生成重复的 `summary.md`、Quick 观察场景 JSON 或 Session Journal。
 
 ## Python 回归脚本
 
@@ -429,12 +444,12 @@ qa-agent help --advanced
 
 高级命令包括严格计划、Run 证据写入、Python Regression、Release、Archive、Migration 和验证命令。
 
-## 升级到 v0.3.0
+## 升级到 v0.3.2
 
 升级 CLI：
 
 ```bash
-npm install -g qa-agent-skill@0.3.0
+npm install -g qa-agent-skill@0.3.2
 ```
 
 进入已有项目：
@@ -464,7 +479,7 @@ npm run pack:check
 
 ## 三个 Skill
 
-v0.3.0 安装结构：
+v0.3.2 安装结构：
 
 ```text
 qa-agent

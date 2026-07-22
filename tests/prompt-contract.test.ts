@@ -40,11 +40,21 @@ test('uses installed workflow references without a project Prompt Bundle', () =>
 
 test('documents one advisory recommended regression stack for Web and iOS', () => {
   const stack = readFileSync(join(skillRoot, 'references', 'recommended-regression-stack.md'), 'utf8');
-  for (const phrase of ['recommended, not mandatory', 'Python 3.12', 'pytest-playwright', 'Playwright Trace', 'xcrun simctl', 'fb-idb', 'idb_companion', 'ios-simulator-mcp', 'result.json', 'junit.xml', 'allure-results']) assert.match(stack, new RegExp(phrase, 'i'));
+  for (const phrase of ['recommended, not mandatory', 'Python 3.12', 'pytest-playwright', 'xcrun simctl', 'fb-idb', 'idb_companion', 'ios-simulator-mcp', 'result.json', 'report.md', 'screenshots/', 'stdout.log', 'stderr.log', 'evidence/']) assert.match(stack, new RegExp(phrase, 'i'));
+  assert.doesNotMatch(stack, /junit|allure|ui-tree|Playwright Trace|videos?\//i);
   const main = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
   const python = readFileSync(join(skillRoot, 'references', 'python-regression.md'), 'utf8');
   assert.match(main, /recommended-regression-stack\.md/);
   assert.match(python, /recommended-regression-stack\.md/);
+});
+
+test('guides first-time users to run Doctor after initialization', () => {
+  const readme = readFileSync(join(repository, 'README.md'), 'utf8');
+  const englishReadme = readFileSync(join(repository, 'README.en.md'), 'utf8');
+  assert.match(readme, /## 首次运行检查（推荐）[\s\S]*qa-agent doctor[\s\S]*初始化被测项目和 Agent 宿主[\s\S]*发起第一次测试/);
+  assert.match(readme, /推荐技术栈缺失只会作为建议提示，不会自动阻止 QA Agent/);
+  assert.match(englishReadme, /## First-run check \(recommended\)[\s\S]*qa-agent doctor[\s\S]*initialize the tested project and Agent host[\s\S]*start the first test/);
+  assert.match(englishReadme, /Missing recommended tools are advisory and do not automatically block QA Agent/);
 });
 
 test('keeps one compact ordinary QA Skill with Python draft and publication ownership', () => {
@@ -101,9 +111,9 @@ test('removes the OperationPlan and RegressionSuite product model completely', (
   assert.doesNotMatch(production, /OperationPlan|operation-plans|RegressionSuite|regression-suite|sourceOperationPlanIds|replayStatus|replayStage|replayCursor/);
 });
 
-test('publishes v0.3.0 without source and lockfile implementation payloads', () => {
+test('publishes v0.3.2 without source and lockfile implementation payloads', () => {
   const pkg = JSON.parse(readFileSync(join(repository, 'package.json'), 'utf8')) as { version: string; files: string[] };
-  assert.equal(pkg.version, '0.3.0');
+  assert.equal(pkg.version, '0.3.2');
   assert.equal(pkg.files.includes('src/'), false);
   assert.equal(pkg.files.includes('package-lock.json'), false);
 });

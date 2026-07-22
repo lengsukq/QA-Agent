@@ -2,7 +2,7 @@
 
 This document is the single source of truth for QA Agent's recommended Python regression environment.
 
-The stack is **recommended, not mandatory**. A project may use another approved framework or Host Bridge as long as the formal Python script writes the QA Agent result contract and preserves required evidence.
+The stack is **recommended, not mandatory**. A project may use another approved framework or Host Bridge as long as the formal Python script is directly runnable, writes the QA Agent result contract, captures required screenshots, and preserves only useful evidence.
 
 ## Web external testing
 
@@ -22,23 +22,7 @@ python3.12 -m pip install pytest pytest-playwright
 python3.12 -m playwright install chromium
 ```
 
-Use Playwright for:
-
-- browser lifecycle and isolation;
-- role, label, text, test-id, and CSS locators;
-- screenshots and videos;
-- DOM or page-state snapshots;
-- console and network evidence;
-- Playwright Trace.
-
-Suggested pytest execution:
-
-```bash
-python3.12 -m pytest qa-regression/web \
-  --junitxml=artifacts/junit.xml \
-  --tracing=retain-on-failure \
-  --screenshot=only-on-failure
-```
+Use Playwright for browser lifecycle, stable locators, UI actions, assertions, and screenshots. Use pytest for fixtures, parameterization, assertions, cleanup, and execution control.
 
 Official references:
 
@@ -62,13 +46,13 @@ Recommended responsibilities:
 
 ```text
 xcrun simctl
-→ simulator lifecycle, app install/launch, permissions, screenshots, and video
+→ simulator lifecycle, app install/launch, permissions, and screenshots
 
 fb-idb + idb_companion
-→ simulator UI queries, input, app control, and accessibility-oriented automation
+→ simulator UI queries, input, and app control
 
 pytest
-→ fixtures, parameterization, assertions, cleanup, JUnit XML, and execution control
+→ fixtures, parameterization, assertions, cleanup, and execution control
 ```
 
 Recommended setup:
@@ -93,13 +77,7 @@ Recommended optional exploration tool:
 ios-simulator-mcp
 ```
 
-Use it for the first Agent-guided business run:
-
-- inspect available simulators;
-- launch and explore the app;
-- capture screenshots;
-- inspect UI hierarchy or targeted elements;
-- verify the business flow before generating Python.
+Use it to inspect available simulators, launch and explore the app, capture screenshots, and verify the business flow before generating Python.
 
 Do not make it the only dependency of a formal regression script. The reviewed Python file should remain directly runnable from the command line through the selected adapter.
 
@@ -107,78 +85,29 @@ Project reference:
 
 - <https://github.com/joshuayoes/ios-simulator-mcp>
 
-## Unified output contract
+## Formal output contract
 
-Recommended run output:
+The official regression assets remain inside the corresponding Task:
 
 ```text
-artifacts/<run-id>/
+.qa-agent/modules/<module>/tasks/<task>/regression-runs/<run-id>/
+├── run.json
 ├── result.json
 ├── report.md
-├── junit.xml
-├── allure-results/
+├── stdout.log
+├── stderr.log
 ├── screenshots/
-├── ui-tree/
-├── traces/
-├── logs/
-├── videos/
-└── raw/
+└── evidence/
 ```
 
-Platform-specific evidence may differ:
+Required outputs:
 
-### Web
+- `result.json`: structured business and execution-contract result;
+- `report.md`: Runtime-generated human-readable report;
+- `screenshots/`: screenshots referenced by the result;
+- `stdout.log` and `stderr.log`: captured process output.
 
-```text
-screenshots/
-ui-tree/dom-snapshot.html
-traces/playwright-trace.zip
-logs/console.log
-logs/network.json
-videos/
-```
-
-### iOS Simulator
-
-```text
-screenshots/
-ui-tree/accessibility-tree.json
-logs/simctl.log
-logs/idb.log
-videos/simulator.mp4
-raw/
-```
-
-Do not require iOS to produce a Playwright-compatible Trace. The formal result may reference an iOS command log, accessibility tree, video, or other platform-native evidence instead.
-
-## Reporting
-
-The formal script must always write:
-
-```text
-result.json
-```
-
-using the QA Agent Python result contract.
-
-Recommended additional outputs:
-
-- `report.md`: Runtime-generated human-readable summary;
-- `junit.xml`: CI and test-platform integration;
-- `allure-results/`: optional rich report data and attachments;
-- screenshots and UI Tree: evidence tied to test steps;
-- Trace or platform execution logs: debugging evidence.
-
-Optional Allure integration:
-
-```bash
-python3.12 -m pip install allure-pytest
-python3.12 -m pytest --alluredir allure-results
-```
-
-Official reference:
-
-- <https://allurereport.org/docs/pytest/>
+`evidence/` is optional. Use it only for a small number of diagnostic files that materially help explain a failure, such as a browser console error or an idb command error. Do not create extra formal artifact categories.
 
 ## Agent generation rules
 
@@ -186,11 +115,11 @@ When generating a Python regression draft:
 
 1. Read the source Run and this recommendation.
 2. Prefer pytest plus the platform adapter listed above when the project has no established framework.
-3. Reuse an existing project framework when it already satisfies the result and evidence contracts.
+3. Reuse an existing project framework when it already satisfies direct command-line execution, `result.json`, screenshots, cleanup, and Runtime reporting.
 4. Do not introduce an unapproved dependency silently.
 5. Show required packages, commands, environment variables, and Host Bridge requirements with the draft.
-6. Preserve direct command-line execution.
-7. Keep Allure optional; `result.json`, screenshots, and Runtime reporting remain authoritative.
+6. Write all formal execution outputs to the Runtime-provided Task Run directories.
+7. Do not add unrelated reporting or diagnostic frameworks by default.
 
 ## Doctor behavior
 

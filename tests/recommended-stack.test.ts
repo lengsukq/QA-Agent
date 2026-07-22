@@ -25,7 +25,6 @@ test('diagnoses the recommended Web stack without making it mandatory', () => {
     'python3.12 -m pytest --version': { stdout: 'pytest 8.4.0' },
     'python3.12 -m pip show pytest-playwright': { stdout: 'Name: pytest-playwright\nVersion: 0.7.1' },
     'python3.12 -m playwright install --list': { stdout: 'chromium-1187' },
-    'python3.12 -m pip show allure-pytest': { stdout: 'Name: allure-pytest\nVersion: 2.15.0' },
   });
   const diagnosis = recommendedRegressionStackDiagnosis(root, undefined, probe);
   assert.equal(diagnosis.policy, 'recommended-not-required');
@@ -37,8 +36,9 @@ test('diagnoses the recommended Web stack without making it mandatory', () => {
   assert.equal(web.tools.find(item => item.id === 'python-3-12')?.status, 'available');
   assert.equal(web.tools.find(item => item.id === 'pytest-playwright')?.status, 'available');
   assert.equal(web.tools.find(item => item.id === 'playwright-browsers')?.status, 'available');
-  assert.equal(web.tools.find(item => item.id === 'allure-pytest')?.level, 'optional');
-  assert.ok(diagnosis.unifiedOutput.includes('junit.xml'));
+  assert.equal(web.tools.some(item => item.id === 'allure-pytest'), false);
+  assert.deepEqual(diagnosis.unifiedOutput, ['result.json', 'report.md', 'screenshots/', 'stdout.log', 'stderr.log', 'evidence/ (optional)']);
+  assert.deepEqual(web.outputContract, diagnosis.unifiedOutput);
 });
 
 test('diagnoses iOS recommendations and keeps optional exploration non-blocking', () => {
@@ -48,7 +48,6 @@ test('diagnoses iOS recommendations and keeps optional exploration non-blocking'
     'which python3.12': { stdout: '/opt/homebrew/bin/python3.12' },
     'python3.12 --version': { stdout: 'Python 3.12.6' },
     'python3.12 -m pytest --version': { stdout: 'pytest 8.4.0' },
-    'python3.12 -m pip show allure-pytest': { ok: false, stderr: 'not installed' },
     'which xcrun': { stdout: '/usr/bin/xcrun' },
     'xcrun simctl help': { stdout: 'usage: simctl' },
     'which idb': { stdout: '/opt/homebrew/bin/idb' },
@@ -65,7 +64,8 @@ test('diagnoses iOS recommendations and keeps optional exploration non-blocking'
   assert.equal(ios.tools.find(item => item.id === 'idb-companion')?.status, 'available');
   assert.equal(ios.tools.find(item => item.id === 'ios-simulator-mcp')?.status, 'missing');
   assert.equal(ios.tools.find(item => item.id === 'ios-simulator-mcp')?.level, 'optional');
-  assert.equal(ios.tools.find(item => item.id === 'allure-pytest')?.status, 'missing');
+  assert.equal(ios.tools.some(item => item.id === 'allure-pytest'), false);
+  assert.deepEqual(ios.outputContract, diagnosis.unifiedOutput);
   assert.equal(ios.recommendedReady, true);
 });
 

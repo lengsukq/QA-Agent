@@ -95,10 +95,10 @@ function strictTaskWithRun(root: string, moduleId: string, taskId: string, risk:
   return { task: readTask(root, moduleId, taskId), run: completed };
 }
 
-test('initializes v0.3.0 without replay directories and exposes simplified help', () => {
+test('initializes v0.3.2 without replay directories and exposes simplified help', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-init-'));
   run(root, 'init', '--id', 'fixture');
-  assert.equal(run(root, '--version').trim(), '0.3.0');
+  assert.equal(run(root, '--version').trim(), '0.3.2');
   const help = run(root, 'help');
   for (const commandName of ['init', 'check', 'continue', 'finish', 'doctor', 'update']) assert.match(help, new RegExp(commandName));
   assert.doesNotMatch(help, /operation plan|operation replay/i);

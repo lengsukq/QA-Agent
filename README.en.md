@@ -2,9 +2,9 @@
 
 QA Agent is a project-local AI testing runtime. Developers can request real UI checks in natural language while the Runtime persists Tasks, Runs, screenshots, business observations, cleanup, and reports.
 
-Current version: **v0.3.0**
+Current version: **v0.3.2**
 
-v0.3.0 separates Python script creation from regression execution:
+v0.3.2 separates Python script creation from regression execution:
 
 - the Agent presents a concise business test flow before real UI execution;
 - Runtime generates the screenshot-backed report;
@@ -52,7 +52,7 @@ qa-agent --version
 Expected output:
 
 ```text
-0.3.0
+0.3.2
 ```
 
 ## Initialize a project
@@ -98,69 +98,84 @@ Runtime data is stored under:
 
 Users should not edit Runtime-owned JSON manually.
 
-## Recommended regression stack
+## First-run check (recommended)
 
-This is QA Agent's default recommendation, not a mandatory dependency. An existing automation framework may remain in use when it supports direct command-line execution, the QA Agent `result.json` contract, and the required evidence.
-
-### Web external testing
-
-```text
-Python 3.12+
-+ pytest
-+ pytest-playwright
-+ Playwright
-```
-
-Recommended for browser automation, DOM locators, screenshots, video, console and network evidence, and Playwright Trace.
-
-### iOS Simulator testing
-
-```text
-Python 3.12+
-+ pytest
-+ xcrun simctl
-+ fb-idb CLI
-+ idb_companion
-```
-
-Use `simctl` for simulator, app, permission, screenshot, and video management; use `fb-idb` with `idb_companion` for UI queries and automation; use pytest for fixtures, assertions, parameterization, cleanup, and reports.
-
-### Agent-assisted exploration
-
-```text
-ios-simulator-mcp
-```
-
-Use it for the first Agent-guided exploration, screenshots, and UI hierarchy inspection. It should not be the only execution dependency of a formal Python regression script.
-
-### Unified output
-
-```text
-screenshots
-+ DOM / Accessibility UI Tree
-+ Playwright Trace or iOS execution logs
-+ QA Agent result.json
-+ JUnit XML
-+ Allure Results (optional)
-```
-
-Run:
+After project initialization, run:
 
 ```bash
 qa-agent doctor
 ```
 
-to inspect the recommended environment, detected tools, and missing items for the project's configured platforms. Missing recommended tools do not automatically block QA Agent when another Host Bridge satisfies the result and evidence contracts.
+Doctor checks:
+
+- whether the `.qa-agent/` project is initialized correctly;
+- whether the current host, browser, simulator, or device capabilities are available;
+- the recommended Python regression environment for the configured platforms;
+- missing tools, permissions, and issues that may block real UI execution.
+
+Missing recommended tools are advisory and do not automatically block QA Agent. Missing browser, simulator, device, or required permission capabilities should be resolved before the first real test.
+
+Recommended first-use order:
+
+```text
+Install QA Agent
+→ initialize the tested project and Agent host
+→ qa-agent doctor
+→ resolve required capability or permission issues
+→ start the first test in the Agent conversation
+```
+
+## Recommended regression stack
+
+This is QA Agent's default recommendation, not a mandatory dependency. An existing automation framework may remain in use when it can run directly from the command line, write the QA Agent `result.json`, produce the Runtime report, and preserve required screenshots.
+
+### Web external testing
+
+```text
+Python 3.12+ + pytest + pytest-playwright + Playwright
+```
+
+Use it for browser actions, stable locators, assertions, and screenshots.
+
+### iOS Simulator testing
+
+```text
+Python 3.12+ + pytest + xcrun simctl + fb-idb CLI + idb_companion
+```
+
+Use `simctl` for simulator, app, permission, and screenshot management; use `fb-idb` with `idb_companion` for UI automation; use pytest for fixtures, assertions, parameterization, and cleanup.
+
+### Agent-assisted exploration
+
+`ios-simulator-mcp` may assist the first exploratory run and screenshots, but it is not the only dependency of a formal Python regression script.
+
+### Formal output
+
+```text
+result.json
++ report.md
++ screenshots/
++ stdout.log
++ stderr.log
++ evidence/ (when useful)
+```
+
+See the first-run Doctor guidance above. Missing recommendations do not automatically block QA Agent.
 
 Full reference:
 
 ```text
 skill/qa-agent/references/recommended-regression-stack.md
 ```
-
 ## Simplest interaction
 
-In the Agent conversation, say:
+For the first use, run this from the tested project:
+
+```bash
+qa-agent doctor
+```
+
+After resolving any required execution-capability or permission issue, say in the Agent conversation:
 
 ```text
 Test the login flow.
@@ -254,7 +269,7 @@ A completed Quick Task keeps:
 - `prd.md` stores the long-lived Task goal and latest result;
 - `screenshots/` and `evidence/` contain real artifacts.
 
-v0.3.0 keeps the minimal asset model and does not create duplicate `summary.md`, Quick observed-Scenario JSON, or Session Journal files.
+v0.3.2 keeps the minimal asset model and does not create duplicate `summary.md`, Quick observed-Scenario JSON, or Session Journal files.
 
 ## Python regression scripts
 
@@ -413,12 +428,12 @@ Show strict regression, release, and administration commands with:
 qa-agent help --advanced
 ```
 
-## Upgrade to v0.3.0
+## Upgrade to v0.3.2
 
 Upgrade the CLI:
 
 ```bash
-npm install -g qa-agent-skill@0.3.0
+npm install -g qa-agent-skill@0.3.2
 ```
 
 Then update an existing project:
@@ -446,7 +461,7 @@ npm run pack:check
 
 ## Three Skills
 
-v0.3.0 installs:
+v0.3.2 installs:
 
 ```text
 qa-agent

@@ -182,23 +182,18 @@ function iosMcpCheck(root: string): RecommendedToolCheck {
     level: 'optional',
     status: connection ? 'available' : 'missing',
     version: connection?.version,
-    purpose: 'Agent-assisted first-run exploration, screenshots, and UI hierarchy inspection; not the formal regression runner.',
+    purpose: 'Agent-assisted first-run exploration and screenshots; not the formal regression runner.',
     installHint: 'Configure ios-simulator-mcp in the Agent host and import its capability snapshot.',
     detail: connection ? `Detected host connection ${connection.id}.` : undefined,
   };
 }
 
-function allureCheck(python: string | undefined, probe: CommandProbe): RecommendedToolCheck {
-  return pythonPackageCheck({ python, packageName: 'allure-pytest', id: 'allure-pytest', name: 'allure-pytest', level: 'optional', purpose: 'Optional rich human-readable report attachments and history.', installHint: 'python3.12 -m pip install allure-pytest', probe });
-}
-
 function webStack(python: ReturnType<typeof pythonCheck>, probe: CommandProbe): RecommendedPlatformStack {
   const tools = [
     python.tool,
-    pythonModuleCheck({ python: python.command, module: 'pytest', id: 'pytest', name: 'pytest', purpose: 'Test collection, fixtures, assertions, parameterization, and JUnit XML output.', installHint: 'python3.12 -m pip install pytest', probe }),
-    pythonPackageCheck({ python: python.command, packageName: 'pytest-playwright', id: 'pytest-playwright', name: 'pytest-playwright', purpose: 'Official pytest integration for Playwright fixtures, browser isolation, screenshots, video, and Trace.', installHint: 'python3.12 -m pip install pytest-playwright', probe }),
+    pythonModuleCheck({ python: python.command, module: 'pytest', id: 'pytest', name: 'pytest', purpose: 'Test collection, fixtures, assertions, parameterization, and cleanup.', installHint: 'python3.12 -m pip install pytest', probe }),
+    pythonPackageCheck({ python: python.command, packageName: 'pytest-playwright', id: 'pytest-playwright', name: 'pytest-playwright', purpose: 'Official pytest integration for Playwright fixtures, browser isolation, locators, actions, and screenshots.', installHint: 'python3.12 -m pip install pytest-playwright', probe }),
     playwrightBrowsersCheck(python.command, probe),
-    allureCheck(python.command, probe),
   ];
   return {
     platform: 'web',
@@ -206,20 +201,19 @@ function webStack(python: ReturnType<typeof pythonCheck>, probe: CommandProbe): 
     mandatory: false,
     recommendedReady: tools.filter(item => item.level === 'recommended').every(item => item.status === 'available'),
     tools,
-    setupCommands: ['python3.12 -m pip install pytest pytest-playwright', 'python3.12 -m playwright install chromium', 'python3.12 -m pip install allure-pytest  # optional'],
-    outputContract: ['screenshots/', 'ui-tree/dom-snapshot.html', 'traces/playwright-trace.zip', 'result.json', 'junit.xml', 'allure-results/'],
+    setupCommands: ['python3.12 -m pip install pytest pytest-playwright', 'python3.12 -m playwright install chromium'],
+    outputContract: ['result.json', 'report.md', 'screenshots/', 'stdout.log', 'stderr.log', 'evidence/ (optional)'],
   };
 }
 
 function iosStack(root: string, python: ReturnType<typeof pythonCheck>, probe: CommandProbe): RecommendedPlatformStack {
   const tools = [
     python.tool,
-    pythonModuleCheck({ python: python.command, module: 'pytest', id: 'pytest', name: 'pytest', purpose: 'Test collection, fixtures, assertions, parameterization, and JUnit XML output.', installHint: 'python3.12 -m pip install pytest', probe }),
-    commandCheck({ id: 'xcrun-simctl', name: 'xcrun simctl', command: 'xcrun', args: ['simctl', 'help'], purpose: 'Simulator lifecycle, app install/launch, permissions, screenshots, and video.', installHint: 'Install the full Xcode application and select its developer directory.', probe }),
+    pythonModuleCheck({ python: python.command, module: 'pytest', id: 'pytest', name: 'pytest', purpose: 'Test collection, fixtures, assertions, parameterization, and cleanup.', installHint: 'python3.12 -m pip install pytest', probe }),
+    commandCheck({ id: 'xcrun-simctl', name: 'xcrun simctl', command: 'xcrun', args: ['simctl', 'help'], purpose: 'Simulator lifecycle, app install/launch, permissions, and screenshots.', installHint: 'Install the full Xcode application and select its developer directory.', probe }),
     commandCheck({ id: 'fb-idb', name: 'fb-idb CLI', command: 'idb', args: ['-h'], purpose: 'Python-accessible iOS simulator UI and app automation client.', installHint: 'python3.12 -m pip install fb-idb', probe }),
     commandCheck({ id: 'idb-companion', name: 'idb_companion', command: 'idb_companion', purpose: 'Native companion process used by fb-idb to communicate with the simulator.', installHint: 'brew tap facebook/fb && brew install idb-companion', probe, existenceOnly: true }),
     iosMcpCheck(root),
-    allureCheck(python.command, probe),
   ];
   return {
     platform: 'ios',
@@ -227,8 +221,8 @@ function iosStack(root: string, python: ReturnType<typeof pythonCheck>, probe: C
     mandatory: false,
     recommendedReady: tools.filter(item => item.level === 'recommended').every(item => item.status === 'available'),
     tools,
-    setupCommands: ['python3.12 -m pip install pytest fb-idb', 'brew tap facebook/fb', 'brew install idb-companion', 'python3.12 -m pip install allure-pytest  # optional'],
-    outputContract: ['screenshots/', 'ui-tree/accessibility-tree.json', 'logs/simctl.log', 'logs/idb.log', 'videos/simulator.mp4', 'result.json', 'junit.xml', 'allure-results/'],
+    setupCommands: ['python3.12 -m pip install pytest fb-idb', 'brew tap facebook/fb', 'brew install idb-companion'],
+    outputContract: ['result.json', 'report.md', 'screenshots/', 'stdout.log', 'stderr.log', 'evidence/ (optional)'],
   };
 }
 
@@ -240,7 +234,7 @@ export function recommendedRegressionStackDiagnosis(root: string, requestedPlatf
     policy: 'recommended-not-required',
     message: platforms.length ? 'These tools are the recommended regression stack. Missing recommended or optional tools do not block QA Agent when another approved Host Bridge and the result contract are available.' : 'No Web or iOS platform is configured, so no platform-specific regression stack is recommended. Existing approved adapters may continue to use the result contract.',
     platforms: platforms.map(platform => platform === 'ios' ? iosStack(root, python, probe) : webStack(python, probe)),
-    unifiedOutput: ['screenshots/', 'ui-tree/', 'traces/ or platform execution logs', 'result.json', 'junit.xml', 'allure-results/'],
+    unifiedOutput: ['result.json', 'report.md', 'screenshots/', 'stdout.log', 'stderr.log', 'evidence/ (optional)'],
     reference: 'references/recommended-regression-stack.md',
   };
 }
