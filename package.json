@@ -1,6 +1,6 @@
 {
   "name": "qa-agent-skill",
-  "version": "0.2.8",
+  "version": "0.6.0",
   "type": "module",
   "description": "CLI-first local QA Agent with Codex, Cursor, and other host Skill integrations",
   "bin": {
@@ -9,12 +9,10 @@
   "files": [
     "bin/",
     "dist/",
-    "src/",
     "skill/",
     "README.md",
     "README.en.md",
-    "package.json",
-    "package-lock.json"
+    "package.json"
   ],
   "scripts": {
     "build": "npm run clean && node node_modules/typescript/bin/tsc -p tsconfig.build.json",
@@ -24,7 +22,7 @@
     "validate": "npm run cli -- skill validate",
     "pack:check": "npm run verify && npm pack --dry-run",
     "typecheck": "node node_modules/typescript/bin/tsc -p tsconfig.typecheck.json",
-    "verify": "npm run typecheck && npm test && npm run build",
+    "verify": "npm run typecheck && npm run build && npm test",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
   },
   "repository": {

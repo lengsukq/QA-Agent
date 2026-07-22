@@ -2,7 +2,7 @@ import { now } from './store.ts';
 import { createHash } from 'node:crypto';
 import type { ModuleSnapshot, ProjectMemory, QaModule, TestRequirements, TestScenario, TestTask } from './types.ts';
 import { platformCapabilities } from './capabilities.ts';
-import { approvalIsCurrent, testPlanHash } from './approval.ts';
+import { approvalIsCurrent, requiresTestPlanApproval, testPlanHash } from './approval.ts';
 
 const coverageDimensions = [
   ['core-flow', '完成核心业务流程'], ['boundary', '覆盖输入、金额、数量、时间等边界'], ['permission', '覆盖不同角色的可见性和操作权限'],
@@ -36,22 +36,50 @@ export function createTaskSkeleton(module: QaModule, id: string, name?: string):
   const requirements: TestRequirements = { $schema: '../../../../schemas/requirements.schema.json', apiVersion: 'qa-agent/v2', kind: 'TestRequirements', taskId: id, moduleId: module.id, businessGoals: businessObjectives.length ? businessObjectives : [`完成 ${module.name} 核心业务流程`], actors: module.roles, flows: module.coreFlows ?? [], rules: businessRules.map((statement, index) => ({ id: `rule-${index + 1}`, statement, knowledgeLevel: 'inferred' as const, source: 'module definition' })), scope: { included: businessObjectives, excluded: [] }, preconditions: [], testDataRefs: [], environments: ['local'], sourceRefs: module.sourceHints ?? [], risks: [], userQuestions: [], confirmedDecisions: [], requirementTrace: [{ requirementId: 'requirement-1', scenarioIds: ['happy-path'], assertionIds: ['business-outcome'], sourceRefs: module.sourceHints ?? [], status: 'covered' }], createdAt: timestamp, updatedAt: timestamp };
   return {
     $schema: '../../../../schemas/task.schema.json', apiVersion: 'qa-agent/v2', kind: 'TestTask',
-    metadata: { id, name: name ?? `${module.name} 核心流程`, moduleId: module.id, version: 1, status: 'draft', priority: module.riskLevel === 'critical' ? 'p0' : 'p1', tags: [module.id, 'regression'], frequency: ['critical', 'high'].includes(module.riskLevel) ? 'every-release' : 'manual', releaseGate: module.riskLevel === 'critical', estimatedDurationMinutes: 5 },
-    moduleSnapshotRef: 'module-snapshot.json', requirementsRef: 'requirements.json', testPlanRef: 'test-plan.json', scenarioRefs: ['scenarios/happy-path.json'], regressionSuiteRef: 'regression-suite.json', reportIndexRef: 'runs/index.json', runRefs: [],
+    metadata: { id, name: name ?? `${module.name} 核心流程`, moduleId: module.id, version: 1, status: 'draft', priority: module.riskLevel === 'critical' ? 'p0' : 'p1', tags: [module.id, 'regression'], mode: 'regression', approvalPolicy: 'test-plan-and-side-effects', frequency: ['critical', 'high'].includes(module.riskLevel) ? 'every-release' : 'manual', releaseGate: module.riskLevel === 'critical', estimatedDurationMinutes: 5 },
+    moduleSnapshotRef: 'module-snapshot.json', requirementsRef: 'requirements.json', testPlanRef: 'test-plan.json', scenarioRefs: ['scenarios/happy-path.json'], reportIndexRef: 'runs/index.json', runRefs: [],
     description: `验证 ${module.name} 的核心业务目标。`, objectives: businessObjectives.length ? businessObjectives : [`完成 ${module.name} 核心业务流程`],
     scope: { platforms: module.platforms, environments: ['local'], roles: module.roles }, preconditions: module.entryPoints?.length ? [`Entry points: ${module.entryPoints.join(', ')}`] : [], memoryRefs: [], scenarios: [scenario],
-    requiredSkills: ['execution.contract', 'evidence.record', 'operation.replay'], capabilities: { required: [...new Set(module.platforms.flatMap(platformCapabilities))], optional: ['network.read', 'source.readonly', 'logs.read'] },
+    requiredSkills: ['execution.contract', 'evidence.record', 'python.regression'], capabilities: { required: [...new Set(module.platforms.flatMap(platformCapabilities))], optional: ['network.read', 'source.readonly', 'logs.read'] },
     safety: { safeMode: true, stopBefore: ['payment.submit', 'refund.submit', 'data.delete', 'notification.send'] }, evidence: { required: scenario.evidence },
     evidencePolicy: { capture: 'every-action', visual: 'adaptive', required: ['baseline', 'key-business-state', 'failure', 'final-result'] },
-    operationPlanRefs: [], recoveryPolicy: { maxRetries: 1, maxRecoveryAttempts: 3, allowSandboxDataReset: true }, regression: { triggers: [] }, createdAt: timestamp, updatedAt: timestamp,
+    recoveryPolicy: { maxRetries: 1, maxRecoveryAttempts: 3, allowSandboxDataReset: true }, regression: { triggers: [] }, createdAt: timestamp, updatedAt: timestamp,
     moduleSnapshot, requirements,
   };
 }
 
+export function createQuickTaskShell(module: QaModule, id: string, request: string, name?: string): TestTask {
+  const normalizedRequest = request.trim();
+  if (!normalizedRequest) throw new Error('Quick Task request is required.');
+  const task = createTaskSkeleton(module, id, name ?? normalizedRequest.slice(0, 80));
+  const scenario = task.scenarios[0]!;
+  task.metadata.mode = 'quick';
+  task.metadata.approvalPolicy = 'side-effect-only';
+  task.metadata.tags = [module.id, 'quick'];
+  task.metadata.frequency = 'manual';
+  task.metadata.releaseGate = false;
+  task.description = normalizedRequest;
+  task.objectives = [normalizedRequest];
+  scenario.id = 'exploration';
+  scenario.title = normalizedRequest.slice(0, 80);
+  scenario.intent = normalizedRequest;
+  scenario.expected = { outcome: `Observe and evaluate the requested business behavior: ${normalizedRequest}` };
+  scenario.requirementRefs = ['request-goal'];
+  scenario.visualAssertions = [{ id: 'observed-outcome', expected: `The visible behavior can be evaluated against the request: ${normalizedRequest}`, importance: scenario.risk }];
+  task.scenarioRefs = ['scenarios/exploration.json'];
+  task.evidence.required = scenario.evidence;
+  if (task.requirements) {
+    task.requirements.businessGoals = [normalizedRequest];
+    task.requirements.scope.included = [normalizedRequest];
+    task.requirements.requirementTrace = [{ requirementId: 'request-goal', scenarioIds: ['exploration'], assertionIds: ['observed-outcome'], sourceRefs: task.requirements.sourceRefs, status: 'covered' }];
+  }
+  return task;
+}
+
 export function taskPlan(task: TestTask): object {
   return {
-    apiVersion: 'qa-agent/v2', taskId: task.metadata.id, planHash: testPlanHash(task), businessLogic: { description: task.description, objectives: task.objectives, memoryRefs: task.memoryRefs }, approvalRequired: !approvalIsCurrent(task), approval: task.metadata.approval,
+    apiVersion: 'qa-agent/v2', taskId: task.metadata.id, mode: task.metadata.mode ?? 'regression', planHash: testPlanHash(task), businessLogic: { description: task.description, objectives: task.objectives, memoryRefs: task.memoryRefs }, approvalRequired: requiresTestPlanApproval(task) && !approvalIsCurrent(task), approval: task.metadata.approval,
     preconditions: task.preconditions, scenarios: task.scenarios.map(scenario => ({ id: scenario.id, title: scenario.title, intent: scenario.intent, preconditions: scenario.preconditions, input: scenario.input, expected: scenario.expected, planningStatus: scenario.planningStatus ?? 'applicable', priority: scenario.priority ?? task.metadata.priority, requirementRefs: scenario.requirementRefs ?? [], sourceRefs: scenario.sourceRefs ?? [], visualAssertions: scenario.visualAssertions ?? [], evidence: scenario.evidence })),
-    coverage: { requirementTrace: task.requirements?.requirementTrace ?? [], covered: (task.requirements?.requirementTrace ?? []).filter(item => item.status === 'covered').length, total: task.requirements?.requirementTrace?.length ?? 0 }, requiredSkills: task.requiredSkills, requiredCapabilities: task.capabilities, safety: task.safety, stopConditions: task.safety.stopBefore, cleanup: task.scenarios.flatMap(scenario => scenario.cleanup), evidencePolicy: task.evidencePolicy, operationPlanRefs: task.operationPlanRefs, recoveryPolicy: task.recoveryPolicy,
+    coverage: { requirementTrace: task.requirements?.requirementTrace ?? [], covered: (task.requirements?.requirementTrace ?? []).filter(item => item.status === 'covered').length, total: task.requirements?.requirementTrace?.length ?? 0 }, requiredSkills: task.requiredSkills, requiredCapabilities: task.capabilities, safety: task.safety, stopConditions: task.safety.stopBefore, cleanup: task.scenarios.flatMap(scenario => scenario.cleanup), evidencePolicy: task.evidencePolicy, recoveryPolicy: task.recoveryPolicy,
   };
 }

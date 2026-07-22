@@ -1,13 +1,12 @@
-import { existsSync, readFileSync, unlinkSync } from 'node:fs';
+import { existsSync, unlinkSync } from 'node:fs';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendJsonl, assertSafeId, ensureDir, listFiles, now, readJson, withFileLock, writeJsonAtomic, writeTextAtomic } from './store.ts';
+import { appendJsonl, assertSafeId, ensureDir, listFiles, now, readJson, withFileLock, writeJsonAtomic } from './store.ts';
 import type { ModuleSnapshot, ProjectConfig, QaModule, TestPlan, TestRequirements, TestRun, TestTask } from './types.ts';
 import { schemas } from './schemas.ts';
-import { prompts } from './prompts.ts';
 import { builtInSkills } from './built-in-skills.ts';
-import { approvalIsCurrent, testPlanHash } from './approval.ts';
+import { approvalIsCurrent, requiresTestPlanApproval, testPlanHash } from './approval.ts';
 
 export const QA_DIRECTORY = '.qa-agent';
 
@@ -29,47 +28,12 @@ export function requireProjectRoot(start = process.cwd()): string {
 
 export function qaPath(root: string, ...parts: string[]): string { return join(root, QA_DIRECTORY, ...parts); }
 
-export function syncProjectPrompts(root: string): string[] {
-  const written: string[] = [];
-  ensureDir(qaPath(root, 'prompts'));
-  const obsolete = ['qa-main.md', 'module-planner.md', 'task-planner.md', 'execution.md', 'assertion.md', 'impact-analysis.md', 'source-verification.md', 'memory-curator.md'];
-  for (const name of obsolete) {
-    const path = qaPath(root, 'prompts', name);
-    if (existsSync(path)) unlinkSync(path);
-  }
-  for (const [name, prompt] of Object.entries(prompts)) {
-    const path = qaPath(root, 'prompts', name);
-    writeTextAtomic(path, `${prompt}\n`);
-    written.push(path);
-  }
-  return written;
-}
-
-
-export function readProjectPromptBundle(root: string): {
-  apiVersion: 'qa-agent/v2'; kind: 'PromptBundle'; bundleHash: string; current: boolean; missing: string[]; stale: string[]; prompts: Record<string, string>;
-} {
-  const entries = Object.keys(prompts).sort().map(name => {
-    const path = qaPath(root, 'prompts', name);
-    const content = existsSync(path) ? readFileSync(path, 'utf8').trimEnd() : '';
-    return { name, content, expected: prompts[name] ?? '' };
-  });
-  const missing = entries.filter(entry => !entry.content).map(entry => entry.name);
-  const stale = entries.filter(entry => entry.content && entry.content !== entry.expected).map(entry => entry.name);
-  const promptMap = Object.fromEntries(entries.map(entry => [entry.name, entry.content]));
-  return {
-    apiVersion: 'qa-agent/v2', kind: 'PromptBundle',
-    bundleHash: createHash('sha256').update(JSON.stringify(promptMap)).digest('hex'),
-    current: !missing.length && !stale.length, missing, stale, prompts: promptMap,
-  };
-}
-
 export function initializeProject(root: string, options: { id?: string; name?: string; description?: string; platforms?: string[] } = {}): ProjectConfig {
   const existing = qaPath(root, 'project.json');
   if (existsSync(existing)) throw new Error('.qa-agent is already initialized in this project.');
   const id = options.id ?? basename(resolve(root)).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   assertSafeId(id, 'project id');
-  for (const path of ['index', 'modules', 'shared-memory', 'skills/built-in', 'skills/project', 'skills/generated', 'prompts', 'schemas', 'runs', 'reports', 'evidence', 'regression-runs', 'impact-analysis', 'release-checks', 'cache', 'archive', '.locks']) ensureDir(qaPath(root, path));
+  for (const path of ['index', 'modules', 'shared-memory', 'skills/built-in', 'schemas', '.runtime/sessions', '.locks']) ensureDir(qaPath(root, path));
   const timestamp = now();
   const project: ProjectConfig = {
     $schema: './schemas/project.schema.json', version: 1,
@@ -78,7 +42,7 @@ export function initializeProject(root: string, options: { id?: string; name?: s
     source: { mode: 'host-provided', root: '' }, storage: { format: 'json', runIndexFormat: 'jsonl' }, createdAt: timestamp, updatedAt: timestamp,
   };
   writeJsonAtomic(existing, project);
-  writeJsonAtomic(qaPath(root, '.version'), { version: '0.2.8', initializedAt: timestamp });
+  writeJsonAtomic(qaPath(root, '.version'), { version: '0.6.0', initializedAt: timestamp });
   writeJsonAtomic(qaPath(root, '.template-hashes.json'), { version: 1, hashes: {} });
   writeJsonAtomic(qaPath(root, '.configured-hosts.json'), {});
   writeJsonAtomic(qaPath(root, 'policies.json'), defaultPolicies());
@@ -87,7 +51,6 @@ export function initializeProject(root: string, options: { id?: string; name?: s
   for (const name of ['modules', 'tasks', 'memories', 'skills']) writeJsonAtomic(qaPath(root, 'index', `${name}.json`), { version: 1, updatedAt: timestamp, [name]: [] });
   writeJsonAtomic(qaPath(root, 'shared-memory', 'project-profile.json'), { version: 1, entries: [] });
   for (const [name, schema] of Object.entries(schemas)) writeJsonAtomic(qaPath(root, 'schemas', name), schema);
-  syncProjectPrompts(root);
   for (const skill of builtInSkills) writeJsonAtomic(qaPath(root, 'skills', 'built-in', `${skill.metadata.name.replace(/\./g, '-')}.json`), skill);
   writeJsonAtomic(qaPath(root, 'index', 'skills.json'), {
     version: 1,
@@ -115,8 +78,7 @@ export function taskRequirementsPath(root: string, moduleId: string, taskId: str
 export function taskPlanPath(root: string, moduleId: string, taskId: string): string { return join(taskDirectory(root, moduleId, taskId), 'test-plan.json'); }
 export function taskModuleSnapshotPath(root: string, moduleId: string, taskId: string): string { return join(taskDirectory(root, moduleId, taskId), 'module-snapshot.json'); }
 export function taskScenarioPath(root: string, moduleId: string, taskId: string, scenarioId: string): string { assertSafeId(scenarioId, 'scenario id'); return join(taskDirectory(root, moduleId, taskId), 'scenarios', `${scenarioId}.json`); }
-export function taskOperationDirectory(root: string, moduleId: string, taskId: string, scenarioId?: string): string { return join(taskDirectory(root, moduleId, taskId), 'operation-plans', ...(scenarioId ? [scenarioId] : [])); }
-export function taskRegressionSuitePath(root: string, moduleId: string, taskId: string): string { return join(taskDirectory(root, moduleId, taskId), 'regression-suite.json'); }
+export function taskPrdPath(root: string, moduleId: string, taskId: string): string { return join(taskDirectory(root, moduleId, taskId), 'prd.md'); }
 export function taskRunDirectory(root: string, moduleId: string, taskId: string, runId: string): string { assertSafeId(runId, 'run id'); return join(taskDirectory(root, moduleId, taskId), 'runs', runId); }
 export function taskRunPath(root: string, moduleId: string, taskId: string, runId: string): string { return join(taskRunDirectory(root, moduleId, taskId, runId), 'run.json'); }
 /** Compatibility paths for the self-contained Runtime Run package contract. */
@@ -175,7 +137,7 @@ export function saveTask(root: string, task: TestTask): void {
   withFileLock(qaPath(root, '.locks', 'tasks.lock'), () => {
     const module = readModule(root, task.metadata.moduleId);
     const directory = taskDirectory(root, task.metadata.moduleId, task.metadata.id);
-    for (const child of ['scenarios', 'operation-plans', 'runs', 'reports', 'memory']) ensureDir(join(directory, child));
+    for (const child of ['scenarios', 'runs', 'reports', 'memory']) ensureDir(join(directory, child));
     task.moduleSnapshot ??= buildModuleSnapshot(module); task.requirements ??= buildRequirements(task, module);
     task.scenarioRefs = task.scenarios.map(scenario => `scenarios/${scenario.id}.json`);
     const approvalCurrent = approvalIsCurrent(task);
@@ -191,7 +153,7 @@ export function saveTask(root: string, task: TestTask): void {
     task.testPlan.safety = task.safety;
     task.testPlan.evidencePolicy = task.evidencePolicy;
     task.testPlan.recoveryPolicy = task.recoveryPolicy;
-    task.testPlan.status = approvalCurrent ? 'approved' : ['draft', 'planning'].includes(task.metadata.status) ? 'draft' : 'awaiting_confirmation';
+    task.testPlan.status = approvalCurrent ? 'approved' : !requiresTestPlanApproval(task) || ['draft', 'planning'].includes(task.metadata.status) ? 'draft' : 'awaiting_confirmation';
     task.testPlan.approvedBy = approvalCurrent ? task.metadata.approval!.confirmedBy : undefined;
     task.testPlan.approvedAt = approvalCurrent ? task.metadata.approval!.confirmedAt : undefined;
     task.testPlan.updatedAt = task.updatedAt;

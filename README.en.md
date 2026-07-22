@@ -1,749 +1,401 @@
 # QA Agent
 
-[简体中文](README.md)
+QA Agent is a project-local AI testing runtime. Developers can request real UI checks in natural language while the Runtime persists Tasks, Runs, screenshots, business observations, cleanup, and reports.
 
-AI-powered QA Engineer CLI for business validation and regression testing.
+Current version: **v0.6.0**
 
-QA Agent is a CLI-first AI QA Engineer designed for real business validation and regression testing. The CLI initializes projects, plans Tasks, executes Runs, generates reports, and runs regressions; Codex, Cursor, and other host Skills connect host tools to that CLI workflow.
+v0.6.0 separates Python script creation from regression execution:
 
-## Install QA Agent into another project
+- the Agent presents a concise business test flow before real UI execution;
+- Runtime generates the screenshot-backed report;
+- after testing, the Agent may ask whether to generate Python from the exact executed flow;
+- the first confirmation permits a temporary draft only;
+- a second explicit approval is required after the user reviews the complete script or diff;
+- the main `qa-agent` Skill keeps draft creation and publication;
+- the dedicated `qa-agent-regression-test` Skill only runs already published scripts and reviews the Runtime-generated regression report;
+- ordinary testing still defaults to Quick Check and the installation remains three Skills;
+- safety gates, real evidence, strict release checks, and archive remain intact.
 
-The typical setup is to initialize `.qa-agent/` inside the project under test and inject the host Skill into Codex, Cursor, or another IDE. You then ask the host Agent for QA in the IDE conversation; the host Skill calls the CLI for planning, execution, reports, and archiving.
+## What QA Agent is for
 
-### Install the CLI globally from npm (recommended)
+Use QA Agent to:
+
+- test Web, Android, or iOS features;
+- let an Agent inspect source before selecting test entry points;
+- persist actual actions, screenshots, and business results;
+- resume interrupted testing;
+- promote a proven flow into reusable regression;
+- run impact-aware release GO/NO-GO checks.
+
+QA Agent does not replace browser, simulator, or device tooling. The host Agent calls tools such as Playwright, ADB, or iOS Simulator MCP. QA Agent owns state, safety, evidence, reports, and regression assets.
+
+## Install
+
+Requirements:
+
+- Node.js 22.6 or newer;
+- an Agent host that supports Skills, commands, or project rules;
+- browser, simulator, or device capabilities for real UI execution.
+
+Install globally:
 
 ```bash
-npm install --global qa-agent-skill
+npm install -g qa-agent-skill
+```
+
+Confirm the version:
+
+```bash
 qa-agent --version
-qa-agent --help
 ```
 
-Upgrade to the latest release:
+Expected output:
 
-```bash
-npm update --global qa-agent-skill
+```text
+0.6.0
 ```
 
-Uninstall:
+## Initialize a project
+
+From the tested project:
 
 ```bash
-npm uninstall --global qa-agent-skill
+cd /path/to/project
+qa-agent init
 ```
 
-If your npm global directory is not writable, install it locally and run it with `npx`:
+Initialize and configure a host:
 
 ```bash
-npm install --save-dev qa-agent-skill
-npx qa-agent --help
-```
-
-### Initialize a target project in one step
-
-Assume the project under test is `/path/to/your-app`:
-
-```bash
-qa-agent configure \
-  --project /path/to/your-app \
-  --host cursor \
-  --scope project \
-  --id my-app \
-  --name "My App" \
-  --description "My application QA project"
-```
-
-This does two things:
-
-- Creates the target project's `.qa-agent/` runtime directory, Prompt Bundle, built-in Runtime Skills, and indexes.
-- Writes `.cursor/rules/qa-agent.mdc`, the main Skill, and the `/qa-agent-cli` Command into the target project.
-
-For Codex, install the user-level Skill while initializing the target project:
-
-```bash
-qa-agent configure \
-  --project /path/to/your-app \
-  --host codex \
-  --scope user \
-  --id my-app \
-  --name "My App"
-```
-
-After setup, open `/path/to/your-app` in the IDE and ask the host Agent: “Test the Checkout core flow.” The host will call `qa-agent start`, wait for your conversation approval, call `qa-agent test`, and finally call `qa-agent archive`.
-
-Other host examples:
-
-```bash
-# Claude Code / OpenCode / Agents: project Skill
-qa-agent configure --project /path/to/your-app --host claude --scope project
-qa-agent configure --project /path/to/your-app --host opencode --scope project
-qa-agent configure --project /path/to/your-app --host agents --scope project
-
-# GitHub Copilot: project Skill + Custom Agent
-qa-agent configure --project /path/to/your-app --host copilot --scope project
-
-# Gemini CLI: project Command
-qa-agent configure --project /path/to/your-app --host gemini --scope project
-```
-
-`configure` does not overwrite existing `.qa-agent/` project data. If host files already exist, pass `--force` explicitly to replace the injected host files.
-
-You can inject several hosts into one tested project. The flags are generated from the single platform registry:
-
-```bash
-cd /path/to/your-app
-qa-agent init \
-  --id my-app \
-  --name "My App" \
-  --codex --cursor --claude --opencode --copilot --gemini --agents
-```
-
-This creates `.qa-agent/` once and writes the selected host files. Repeating `init` is idempotent; pass a new host flag to add only that host.
-
-Project-level injection paths are:
-
-| Host | Project files |
-| --- | --- |
-| Codex | `.codex/skills/qa-agent/` and shared `.agents/skills/qa-agent/` |
-| Cursor | `.cursor/rules/qa-agent.mdc`, `.cursor/commands/qa-agent-cli.md`, `.cursor/skills/qa-agent-*` |
-| Claude Code | `.claude/skills/qa-agent/`, `.claude/commands/qa-agent.md` |
-| OpenCode | `.opencode/skills/qa-agent/`, `.opencode/commands/qa-agent.md` |
-| Gemini CLI | `.gemini/commands/qa-agent.toml` and shared `.agents/skills/qa-agent/` |
-| GitHub Copilot | `.github/skills/qa-agent/`, `.github/agents/qa-agent.agent.md`, `.github/prompts/qa-agent.prompt.md` |
-| Agent Skills standard | `.agents/skills/qa-agent/` |
-
-After upgrading the global CLI, synchronize templates in each initialized project:
-
-```bash
-npm install --global qa-agent-skill@latest
-cd /path/to/your-app
-qa-agent update
-```
-
-`update` changes only QA-Agent-managed files that users have not modified. It reports conflicts instead of silently overwriting custom host files. Use `qa-agent update --force` to replace them, or `qa-agent update --migrate` for legacy path migration. Tasks, Runs, screenshots, reports, OperationPlans, RegressionSuites, and Memory are preserved.
-
-### Upgrade an existing project
-
-QA Agent upgrades have two layers: upgrade the global npm CLI, then upgrade the `.qa-agent/` templates and host injection files in each tested project. Upgrading npm alone does not modify any project; run `qa-agent update` only in the projects you want to upgrade.
-
-```bash
-# 1. Upgrade the global CLI
-npm install --global qa-agent-skill@latest
-qa-agent --version
-
-# 2. Upgrade one existing project's QA Agent templates
-cd /path/to/your-app
-qa-agent update
-
-# 3. Validate project data, reports, OperationPlans, and host templates
-qa-agent validate
-qa-agent doctor
-```
-
-`qa-agent update` synchronizes the eight phase prompts, the main Skill, all installed phase subskills, and platform Rule/Command/Agent/Prompt files. It updates `.qa-agent/.version` and `.template-hashes.json`. It does not recreate the Project, Modules, or Tasks, and does not delete Tasks, Runs, screenshots, reports, OperationPlans, RegressionSuites, or Memory.
-
-For projects using legacy directories or report formats, run the explicit migration:
-
-```bash
-cd /path/to/your-app
-qa-agent update --migrate
-qa-agent validate
-```
-
-If you manually edited a host file, a normal update reports a conflict and preserves your file. Use `--force` only when you explicitly want to replace host templates:
-
-```bash
-qa-agent update --force
-```
-
-To add a new host to an existing project, run the corresponding platform initialization. Already configured hosts are skipped automatically:
-
-```bash
-cd /path/to/your-app
+qa-agent init --cursor
+qa-agent init --codex
+qa-agent init --claude
+qa-agent init --copilot
 qa-agent init --gemini
+qa-agent init --opencode
+qa-agent init --agents
 ```
 
-Without global install permissions, install the CLI in the project and update that project locally:
+Multiple hosts may be configured together:
 
 ```bash
-cd /path/to/your-app
-npm install --save-dev qa-agent-skill@latest
-npx qa-agent update
+qa-agent init --cursor --codex --claude
 ```
 
-### Initialize in separate steps
-
-To initialize the project runtime without injecting a host integration:
+Or configure a specific project directly:
 
 ```bash
-cd /path/to/your-app
-qa-agent init --id my-app --name "My App"
-qa-agent install-host cursor --project /path/to/your-app --scope project
-```
-
-`init` only creates `.qa-agent/`; `install-host` or `configure` injects the host Skill, Rule, or Command.
-
-Use the CLI from a source checkout:
-
-```bash
-cd /path/to/QA-Agent
-npm install
-npm link
-qa-agent --help
-```
-
-Initialize the tested project:
-
-```bash
-cd /path/to/your-app
-qa-agent init --id my-app --name "My App" --description "Business application QA project"
-qa-agent doctor
-```
-
-You can also initialize the project and inject the host Skill/prompts in one command:
-
-```bash
-# Cursor: writes the project .cursor/ Rule and Command
 qa-agent configure \
-  --project /path/to/your-app \
-  --host cursor \
-  --scope project \
-  --id my-app \
-  --name "My App"
-
-# Codex: installs the user-level Codex Skill and initializes project data
-qa-agent configure \
-  --project /path/to/your-app \
-  --host codex \
-  --scope user \
-  --id my-app \
-  --name "My App"
+  --project /path/to/project \
+  --host cursor
 ```
 
-`configure` only initializes the project and injects the host integration. Use `qa-agent start`, `qa-agent review`, `qa-agent test`, `qa-agent task regression`, and `qa-agent archive` for the QA lifecycle afterward. Runtime automatically generates eligible OperationPlan candidates when a successful exploratory Run completes. In Cursor, `/qa-agent` is the main Skill and `/qa-agent-cli` is the explicit Command; they no longer share the same name.
-
-The CLI is the execution entry point. Host Skills tell Codex, Cursor, and other Agents when to call the CLI and how to use approved browser, simulator, and diagnostic tools. Project data, Tasks, Runs, screenshots, and reports always remain inside the tested project's `.qa-agent/` boundary.
-
-## Recommended workflow: start → review → test → replay validation → archive
-
-```bash
-qa-agent configure --project /path/to/your-app --host cursor --scope project
-qa-agent start --request "Validate the Checkout core flow" --module checkout --task checkout-basic-flow
-# Review planHash, Scenarios, evidence, and safety boundaries in the Codex/Cursor conversation
-qa-agent review --module checkout --task checkout-basic-flow --approve --confirmed-by "qa-reviewer"
-qa-agent test --module checkout --task checkout-basic-flow
-# After the Runtime creates a successful report, screenshots, and OperationPlan:
-qa-agent archive --module checkout --task checkout-basic-flow
-```
-
-`start` creates or reuses the Module/Task skeleton and stops at `approval_required`. Before approval, the host Agent inspects the project and applies a structured `qa-agent/plan-draft/v1` document through `qa-agent plan apply`; it never edits Runtime-owned Task or Scenario JSON directly. `review` persists explicit TestPlan approval without starting a Run. `test` automatically selects first-run Explore or compatible Replay. Runtime creates a `candidate`; separate promotion changes it to `approved_unverified`, and a completely executed structured replay contract changes it to `validated`; a business FAIL remains a Run result. `archive` is a strict regression-readiness gate: it checks background, a validated current-hash OperationPlan for every Scenario, RegressionSuite coverage, Runtime-owned reports, existing screenshots, Markdown image evidence, and project validation. Failed checks do not change Task state.
-
-`init` only initializes the tested project's `.qa-agent/` runtime boundary and does not inject a host Skill. `configure` performs project initialization plus host Skill/prompt injection and never overwrites an existing `.qa-agent` data set. The host Skill owns conversation approval, TodoList mirroring, and UI tools; the CLI Runtime owns state, evidence, reports, and archiving.
-
-The lower-level commands `workflow bootstrap`, `task explore`, `task run`, `operation replay`, `operation generate`, `task review`, and `task archive` remain available for compatibility and automation.
-
-### Injected Skill responsibilities
-
-All hosts share the same business state machine, while the host renderer changes how the workflow is invoked:
-
-- `qa-agent`: the main entry point for `start → review → test → archive` and safety gates.
-- `qa-agent-start` / `qa-agent-review`: inspect project context, build Scenario coverage, and persist separate TestPlan approval.
-- `qa-agent-test`: executes approved Tasks and selects Explore or compatible Replay; Runtime creates candidates automatically.
-- `qa-agent-result` / `qa-agent-operation`: present and promote candidates, then require real replay validation.
-- `qa-agent-recovery`: resume blocked or interrupted work only through Runtime `nextActions`.
-- `qa-agent-regression`: runs only approved, context-compatible OperationPlans and RegressionSuites.
-- `qa-agent-archive`: checks Task background, plans, reports, screenshots, suites, and OperationPlans before archiving.
-
-Business rules and CLI instructions are maintained once. Codex uses Skills, Cursor/Gemini use Commands, Cursor also uses a Rule, and Copilot uses a Custom Agent plus Prompt. Every host ultimately calls the same CLI Runtime.
-
-It is not a traditional test script runner. It helps teams work like real QA engineers: understand projects, analyze impact, design test plans, validate business workflows, collect evidence, generate reports, and continuously build regression knowledge.
-
-## Why QA Agent
-
-Traditional automation usually focuses on:
-
-- API responses
-- DOM selectors
-- Fixed test scripts
-
-Real QA needs to answer different questions:
-
-- Does the user actually experience the correct workflow?
-- Do business rules behave as expected?
-- Did a code change break existing features?
-- Can a failure be reproduced and investigated?
-- Can previous QA knowledge be reused for regression testing?
-
-QA Agent is not a replacement for Playwright, Appium, or other execution tools. It provides the AI QA reasoning layer.
-
-```text
-Requirement / Code Change
-          |
-          v
-    Impact Analysis
-          |
-          v
-     Test Planning
-          |
-          v
- Business Validation
-          |
-          v
- Evidence + Report
-          |
-          v
- Regression Memory
-```
-
-## Core Model
-
-QA Agent manages QA assets through a project-level lifecycle:
-
-```text
-Project
-  |
-  ├── Module
-  ├── Test Task
-  ├── Scenario
-  ├── Test Run
-  ├── Evidence
-  ├── Report
-  └── Regression Memory
-```
-
-## What it solves
-
-Traditional automation often checks selectors, APIs, or fixed scripts. QA Agent also checks what a user can actually see, whether the business flow follows its rules, whether failures are understandable, and whether every conclusion is supported by reviewable evidence.
-
-```text
-Project → Module → Test Task → Scenario → Run → Step / Evidence / Report / Memory
-```
-
-- **Project / Module**: business boundaries, roles, risk, and objectives.
-- **Test Task / Scenario**: reviewable business test plans and expectations.
-- **Run**: real actions, screenshots, trace/log/network evidence, and outcome.
-- **Report**: an automatically generated Markdown report with images.
-- **Memory**: reviewed business rules, regressions, and project knowledge under `.qa-agent/`.
-
-Source code, DOM state, and logs support diagnosis only. The rendered business outcome is the primary evidence.
-
-## Supported Agent hosts
-
-| Host | Integration |
-| --- | --- |
-| Codex | Native Skill |
-| Claude Code | Project Skill |
-| Cursor | Rule and `/qa-agent` command |
-| OpenCode | Project Skill |
-| GitHub Copilot | Skill and Custom Agent |
-| Gemini CLI | `/qa-agent` command |
-| Compatible hosts | `.agents/skills/qa-agent` Skill |
-
-The host supplies and invokes browser, simulator, device, log, database, and source tools. `qa-agent` supplies the shared planning, approval, evidence, reporting, and project-memory workflow. It is a QA brain, not a browser or simulator framework; real Web, Android, and iOS operations always use the host Agent's approved tools.
-
-## Prerequisites
-
-- Node.js `>= 22.6`
-- npm
-- A host with the relevant browser, simulator, or device-control capability for real UI execution
-
-## Start the runtime
-
-```bash
-cd /path/to/QA-Agent
-npm install
-npm test
-npm run qa-agent -- help
-```
-
-The test suite verifies host capability snapshots, imported artifacts, visual assertions, replay, reports, mobile preflight, approval invalidation, and host integrations.
-
-## Install a host integration
-
-Use `--scope project` for a version-controlled repository integration. Use `--scope user` for a personal installation that applies to all of a developer's projects. Codex defaults to `user`; other hosts default to `project`.
-
-> A user-scoped installation contains reusable instructions only. Business memory, credential references, Tasks, Runs, screenshots, evidence, and reports always remain inside the active project's `.qa-agent/` directory.
-
-```bash
-# Codex user-level installation
-node bin/qa-agent.mjs install-host codex --scope user
-
-# Project-level installations
-node bin/qa-agent.mjs install-host claude --scope project --project /path/to/your-app
-node bin/qa-agent.mjs install-host cursor --scope project --project /path/to/your-app
-node bin/qa-agent.mjs install-host opencode --scope project --project /path/to/your-app
-node bin/qa-agent.mjs install-host copilot --scope project --project /path/to/your-app
-node bin/qa-agent.mjs install-host gemini --scope project --project /path/to/your-app
-
-# User-level installations where supported
-node bin/qa-agent.mjs install-host claude --scope user
-node bin/qa-agent.mjs install-host opencode --scope user
-node bin/qa-agent.mjs install-host copilot --scope user
-node bin/qa-agent.mjs install-host gemini --scope user
-node bin/qa-agent.mjs install-host agents --scope user
-```
-
-Use `--force` only when replacing an existing integration is intended. After installing the Gemini command, run `/commands reload`. Cursor user rules are managed through **Cursor Settings > Rules**, so the CLI only creates its version-controlled project Rule and Command.
-
-### Codex installation example
-
-Install the Skill for the current developer and make it available across projects:
-
-```bash
-cd /path/to/QA-Agent
-npm install
-node bin/qa-agent.mjs install-host codex --scope user
-```
-
-Open the tested project in Codex, then initialize its project-local QA-Agent data boundary:
-
-```bash
-cd /path/to/your-app
-node /path/to/QA-Agent/bin/qa-agent.mjs init \
-  --id my-app \
-  --name "My App" \
-  --description "Business application QA project"
-node /path/to/QA-Agent/bin/qa-agent.mjs doctor
-```
-
-To commit a project-level Skill with the tested project, use the generic Agent Skills integration:
-
-```bash
-cd /path/to/QA-Agent
-node bin/qa-agent.mjs install-host agents --scope project --project /path/to/your-app
-```
-
-Verify the project-level Codex-compatible file at `/path/to/your-app/.agents/skills/qa-agent/SKILL.md`.
-
-### Cursor installation example
-
-Cursor uses a project-level Rule and Command. From the QA-Agent repository, run:
-
-```bash
-cd /path/to/QA-Agent
-npm install
-node bin/qa-agent.mjs install-host cursor \
-  --scope project \
-  --project /path/to/your-app
-```
-
-Open `/path/to/your-app` in Cursor and verify these files were created:
-
-```text
-/path/to/your-app/.cursor/rules/qa-agent.mdc
-/path/to/your-app/.cursor/commands/qa-agent-cli.md
-```
-
-Run `/qa-agent` in Cursor to start the QA workflow. The tested project must still be initialized once:
-
-```bash
-cd /path/to/your-app
-node /path/to/QA-Agent/bin/qa-agent.mjs init --id my-app --name "My App"
-node /path/to/QA-Agent/bin/qa-agent.mjs doctor
-```
-
-Cursor user-level Rules must be managed in **Cursor Settings > Rules**; this CLI only creates the version-controlled project Rule and Command.
-
-## Initialize a tested project
-
-Initialize each tested project separately. All project memory, evidence, and reports stay in that project's `.qa-agent/` boundary.
-
-```bash
-cd /path/to/your-app
-node /path/to/QA-Agent/bin/qa-agent.mjs init \
-  --id my-app \
-  --name "My App" \
-  --description "Business application QA project"
-
-node /path/to/QA-Agent/bin/qa-agent.mjs doctor
-```
+Runtime data is stored under:
 
 ```text
 .qa-agent/
-├── modules/          # Module assets; each Task owns its runs, evidence, reports, and memory
-├── index/            # Project-level search/index projections, including runs.jsonl
-├── regression-runs/  # Cross-task/module suite orchestration records
-├── shared-memory/    # Reviewed project knowledge
-├── policies.json     # Safety policy
-└── mcp.json          # Host capability snapshot and health state
 ```
 
-## Recommended workflow
+Users should not edit Runtime-owned JSON manually.
 
-The examples below assume `qa-agent` is on `PATH`. During local development, replace it with `node /path/to/QA-Agent/bin/qa-agent.mjs`.
+## Simplest interaction
 
-### The QA Agent closed loop
+In the Agent conversation, say:
 
 ```text
-Load the active project's memory and Module
-  → use read-only source/MCP tools to understand routes, APIs, permissions, and states (inferred context only)
-  → generate business-logic test cases
-  → obtain user confirmation for the current plan version
-  → use the host Agent's Browser / Mobile MCP to operate the real business flow
-  → capture each consequential state and assertion, recording expected versus actual
-  → classify the real UI outcome as PASS / FAIL / BLOCKED / etc.
-  → generate an image-rich report
-  → create observed-business-rule or known-issue candidate memory
-  → promote it to active knowledge only after user review in the same project
+Test the login flow.
 ```
 
-Source code can reveal candidate rules and aid diagnosis, but never replaces real business validation. Candidate memory always enters the active project's review queue; it never becomes cross-project or global knowledge automatically.
+The Agent follows this order:
 
-### 1. Start the Task and Test Plan
+1. inspect relevant source, routes, tests, and configuration;
+2. present a concise business test flow;
+3. wait for the user to approve that flow;
+4. create or reuse a Quick Task;
+5. verify browser, simulator, or device capability;
+6. execute real UI actions;
+7. save screenshots and business observations;
+8. perform cleanup;
+9. generate the Runtime report;
+10. update the Task PRD automatically;
+11. return a concise result;
+12. when the flow is suitable for reuse, ask whether to generate a Python regression script.
 
-Every new QA request starts with `qa-agent start`. Mirror the returned `todoList` into the host IDE TodoList. Browser, simulator, device, and UI tools are forbidden until the runtime returns `uiExecutionAllowed: true`, `mustStop: false`, and a `runId`. `start` immediately creates and returns `bootstrap.taskDirectory` and `bootstrap.taskAssets`.
+After an interruption, say:
+
+```text
+Continue.
+```
+
+To end the current QA session, say:
+
+```text
+Finish this test.
+```
+
+Users do not need to know Module, Task, Run, hash, or gate identifiers.
+
+## Quick Check
+
+The CLI can also be used directly:
 
 ```bash
-qa-agent start \
-  --request "Verify that the user can review and submit correct checkout information" \
-  --module checkout \
-  --task checkout-basic-flow \
-  --module-name "Checkout" \
-  --task-name "Basic checkout flow" \
-  --platforms web \
-  --risk high
+qa-agent check "Test the login flow"
 ```
 
-The first response is an approval gate:
-
-```json
-{
-  "workflowStatus": "approval_required",
-  "uiExecutionAllowed": false,
-  "mustStop": true,
-  "manualReportAllowed": false,
-  "taskDirectory": ".qa-agent/modules/checkout/tasks/checkout-basic-flow",
-  "bootstrap": { "taskCreated": true, "taskAssets": [] },
-  "todoList": [],
-  "plan": {}
-}
-```
-
-The host may use read-only source analysis to refine the plan, then presents the current `plan` and `planHash`. A real human reviewer must approve it before any UI operation:
+Compatible form:
 
 ```bash
-qa-agent review \
-  --module checkout \
-  --task checkout-basic-flow \
-  --approve \
-  --confirmed-by "qa-reviewer"
+qa-agent check --request "Test the login flow"
 ```
 
-After the host capability snapshot is verified, start the Run:
+Continue:
 
 ```bash
-qa-agent test --module checkout --task checkout-basic-flow
+qa-agent continue
 ```
 
-```json
-{
-  "uiExecutionAllowed": true,
-  "mustStop": false,
-  "manualReportAllowed": false,
-  "runId": "run-...",
-  "workflow": { "workflowStatus": "running" }
-}
-```
-
-When the plan, approval, capabilities, or Prompt Bundle are not current, the response contains `uiExecutionAllowed: false` and `mustStop: true`. The host must stop UI execution and must not write a separate PASS report.
-
-### 3. Import a host capability snapshot
-
-The host Agent confirms its connected tools and permissions before a Run, then imports that attestation into the project. `qa-agent` never connects MCPs or verifies system permissions itself.
+Finish the session:
 
 ```bash
-qa-agent host attest --id browser-mcp \
-  --capabilities browser.interact,browser.inspect \
-  --permission-status verified \
-  --host cursor
-
-# Or import a complete snapshot
-qa-agent host import --file /absolute/path/host-capabilities.json
+qa-agent finish
 ```
 
-### 4. Agent-guided real UI QA
+Quick Check does not require full TestPlan approval. It still enforces:
 
-This is the preferred business-QA mode. The runtime uses the `qa-agent/v2` data contract. The host Agent opens the real browser or simulator and observes the current screen before selecting an action. It captures a screenshot after every real UI action, but invokes visual recognition adaptively at key business assertions, amounts, permissions, state/result changes, unexpected screens, locator adaptations, failures, and the final state. Reports distinguish `Screenshot captured`, `Visual inspection performed`, and `Visual inspection not required`. It must not ask the user to click, capture screenshots, or create the report.
+- confirmation before real side effects;
+- capability and permission checks;
+- screenshot and business-assertion requirements;
+- cleanup;
+- Runtime-owned reports;
+- policies that stop real payment, refund, production write, and similar actions.
 
-```bash
-qa-agent context module checkout
-qa-agent test --module checkout --task checkout-basic-flow
-qa-agent run step <run-id> --action "Open checkout" --detail "The Agent opened the real checkout screen." --screenshot /absolute/path/checkout-open.png --visual-inspection not-required
-qa-agent run evidence <run-id> --type console --summary "Host browser console output" --file /absolute/path/console.log
-qa-agent run observe <run-id> \
-  --scenario happy-path \
-  --assertion business-outcome \
-  --expected "The total, address, and checkout entry point are correct" \
-  --actual "The screen shows $199.00, the default address, and an enabled checkout button" \
-  --status passed \
-  --screenshot /absolute/path/checkout-result.png
-qa-agent run complete <run-id>
-```
+## Minimal Quick Task assets
 
-`run complete` first enforces a strict closure check: every declared `visualAssertions` id for every selected Scenario must have a matching `run observe`. A PASSED `run step`, including one recorded with `operationAction=assert`, does not replace a business assertion. When an assertion is missing, completion is rejected and the Run remains `running`, so the host can record the missing observations and retry. Only then is the report written to `runs/<run-id>/report.md`, while `runs/index.json` and `runs/latest.json` are updated. A formal report contains a Runtime ownership marker, Run ID, evidence counts, and inline checkpoint screenshots. `.qa-agent/reports/<name>.md` and `Task/reports/` are not formal Task reports.
-
-A successful first Run also receives an OperationPlan replay-quality check. `navigate/click/input/fill` steps need explicit actions and locators, while `input/fill` steps also need structured redacted `inputRefs`. Business verification may PASS while replay readiness fails; in that case the report lists `OperationPlan candidate issues` instead of generating an unstable JSON contract. Existing projects can run `qa-agent prompts sync` to refresh `.qa-agent/prompts/`.
-
-When upgrading an existing project, first run `qa-agent migrate` to move legacy `Task/reports/` assets into `runs/<run-id>/report.md` and quarantine reports that cannot be tied to a Run under `.qa-agent/orphans/reports/`; then run `qa-agent prompts sync`. Legacy approvals without `confirmationSource` must be reviewed again by a real human through `qa-agent review --approve --confirmed-by <reviewer>`; automated identities such as `qa-agent`, `assistant`, or `system` cannot approve their own plans. A state-mutating Scenario should declare Cleanup and persist its result through `run cleanup` before completion. Human interaction with a system picker must use `--execution-mode user-assisted`; it remains valid business evidence but cannot produce a fully automated OperationPlan.
-
-Each Task is a self-contained test asset directory:
+A completed Quick Task keeps:
 
 ```text
 .qa-agent/modules/<module>/tasks/<task>/
 ├── task.json
-├── module-snapshot.json
+├── prd.md
 ├── requirements.json
 ├── test-plan.json
 ├── scenarios/
-├── operation-plans/
-├── regression-suite.json
-├── runs/
-│   ├── index.json
-│   ├── latest.json
-│   └── <run-id>/
-│       ├── run.json
-│       ├── report.md
-│       ├── screenshots/
-│       └── evidence/
-└── memory/
+└── runs/
+    └── <run-id>/
+        ├── run.json
+        ├── report.md
+        ├── screenshots/
+        └── evidence/
 ```
 
-### 5. Fast regression replay
+- `run.json` contains structured facts for one execution;
+- `report.md` is the authoritative report for that Run;
+- `prd.md` stores the long-lived Task goal and latest result;
+- `screenshots/` and `evidence/` contain real artifacts.
 
-After the first Explore Run passes and its OperationPlan is approved, later runs do not re-plan or review source. Execute the JSON directly:
+v0.6.0 keeps the minimal asset model and does not create duplicate `summary.md`, Quick observed-Scenario JSON, or Session Journal files.
+
+## Python regression scripts
+
+After testing produces a screenshot-backed report, the Agent may ask whether to generate Python when Runtime confirms that the source Run has stable steps, locators, input references, assertions, screenshots, and cleanup.
+
+There are two independent approvals:
+
+```text
+approve draft generation
+≠
+approve publication into the Task
+```
+
+After the first approval, the Agent writes Python from the source Run's actual steps, final locators, input references, business assertions, screenshot points, and cleanup, then saves a Session draft:
 
 ```bash
-qa-agent operation replay OPERATION_ID \
-  --module checkout \
-  --task checkout-basic-flow
+qa-agent regression draft \
+  --module <module> \
+  --task <task> \
+  --run <source-run> \
+  --file <temporary-script.py> \
+  --id <script-id>
 ```
 
-The response contains the complete `operationPlan`, `nextOperationStep`, `remainingOperationSteps`, and `checkpoints`. The host follows the order strictly. Every Replay still creates a new Run, report, and checkpoint screenshots.
+The draft remains under:
 
+```text
+.qa-agent/.runtime/drafts/<session>/<script-id>/
+```
 
-When a successful exploratory Run completes, Runtime automatically creates an OperationPlan `candidate` from structurally complete steps, screenshots, assertions, and Cleanup. The Agent presents it and requests separate promotion approval. `operation generate` remains only as a repair or migration command for older Runs.
+It does not enter the Task, formal regression, or release selection. The Agent must show the complete script or complete diff and explain environment variables, the host bridge, assertions, screenshots, and cleanup.
 
-The candidate is stored under `.qa-agent/modules/<module>/tasks/<task>/operation-plans/<scenario>/`. Promotion changes it to `approved_unverified`; another `qa-agent test` must perform a real replay before the lifecycle becomes `validated` and the plan can enter formal regression or archive gates:
+Only after the user explicitly approves the reviewed script may Runtime publish it:
 
 ```bash
-qa-agent task operation list checkout-basic-flow --module checkout
-qa-agent task operation review checkout-basic-flow --module checkout --operation OPERATION_ID --approve --confirmed-by qa-reviewer
-qa-agent test --module checkout --task checkout-basic-flow
-qa-agent run recover <run-id> --reason "Element was not ready" --action wait --detail "Element appeared; resume from checkpoint" --outcome continued
-qa-agent task regression sync checkout-basic-flow --module checkout
-qa-agent task regression run checkout-basic-flow --module checkout
-qa-agent module regression run checkout
-qa-agent archive --module checkout --task checkout-basic-flow
+qa-agent regression publish \
+  --module <module> \
+  --task <task> \
+  --draft <script-id> \
+  --confirmed-by <human>
 ```
 
-Replay is permitted only when the Task plan hash and user approval, an `approved_unverified` or `validated` OperationPlan, platform/device/app or Web version, environment/role, test data, required MCPs, and verified macOS permissions are compatible. It skips rediscovery, not business assertions. Outcomes are `PASS`, `FAIL`, `ADAPTED`, `BLOCKED`, or `NEEDS_CONFIRMATION`. Recovery is limited to `wait`, `refresh`, `back`, `restart-app`, `reset-sandbox-data`, `reconnect-mcp`, `fallback-locator`, and `resume-checkpoint`; never modify source code, bypass permissions, or fabricate results.
+Formal assets are stored under:
 
-OperationPlans are Scenario-specific. Each step stores an operation action, primary and fallback locators, redacted input references, preconditions, expected state, assertion references, screenshot and visual-inspection policies, safety action, and checkpoint. During replay every `run step` must reference the next `operationStepId`; steps cannot be skipped or duplicated.
-The lifecycle is `candidate → approved_unverified → validated`. When the structured replay contract executes completely, the OperationPlan becomes or remains `validated` even if a business assertion fails; the FAIL belongs to the Run result and must not invalidate the script. Incomplete or incompatible replay does not automatically validate the plan, and `stale` is reserved for explicit contract drift or invalidation. Rejected and replaced plans become `rejected` and `superseded`. Only `validated` plans satisfy formal regression, release, and archive gates.
+```text
+.qa-agent/modules/<module>/tasks/<task>/
+├── regression/
+│   ├── <script-id>.py
+│   └── <script-id>.json
+└── regression-runs/
+    └── <run-id>/
+        ├── run.json
+        ├── result.json
+        ├── report.md
+        ├── stdout.log
+        ├── stderr.log
+        ├── screenshots/
+        └── evidence/
+```
 
-A Task-level RegressionSuite organizes all validated OperationPlans for one Task. Module replay dynamically aggregates validated OperationPlans across Tasks at start, instead of persisting a second Module Suite. It runs independent flows serially, continues after an isolated business failure, and produces an aggregate report. `run.json` is a result record; OperationPlan is the executable operation definition.
-
-### 5. Fast pre-release regression
-
-Mark critical end-to-end flows as Golden Paths and release gates:
+Run the formal script from the command line:
 
 ```bash
-qa-agent task update buyer-purchase --module checkout --golden-path --estimated-minutes 8
+qa-agent regression run <script-id> \
+  --module <module> \
+  --task <task> \
+  --bridge '<host bridge command>'
 ```
 
-Inspect change impact and the proposed execution scope:
+Python fixes the execution order and the host bridge performs real browser, simulator, or device operations. Runtime stores the structured result and report. The Agent reviews the result, screenshots, stdout, stderr, and cleanup without replanning the steps.
+
+A completed script contract becomes `validated`. A genuine business assertion may fail while the script contract remains valid; the Run still records the business FAIL.
+
+## Sessions and continuation
+
+`check`, `start`, `review`, and `test` bind a Task to the current QA Session.
+
+When the host has a stable conversation or window identifier, use:
 
 ```bash
-qa-agent impact analyze --base origin/main --head HEAD
-qa-agent release check --profile fast --base origin/main --head HEAD --plan-only
+qa-agent continue --session cursor-window-a
 ```
 
-Start the release regression directly:
+or:
 
 ```bash
-qa-agent release check --profile fast --base origin/main --head HEAD
-# The host Agent completes the returned child Runs automatically.
-qa-agent release complete RELEASE_CHECK_ID
+export QA_AGENT_SESSION_KEY=cursor-window-a
 ```
 
-Profiles:
+Different windows may work on different Tasks. Runtime automatically resumes the only unfinished Task when safe; with multiple candidates it requests a selection and never guesses.
 
-- `fast`: global release gates, Golden Paths, `every-release` Tasks, and impacted P0 flows.
-- `normal`: fast plus impacted P1 flows.
-- `full`: every reviewed validated OperationPlan.
+`qa-agent finish` closes the current Session while preserving Task assets. It does not archive a strict regression Task.
 
-ImpactAnalysis uses Module ids, source hints, entry points, dependencies, and Task triggers, while preserving unmatched files and selection reasons. ReleaseCheck returns `GO`, `NO-GO`, or `REVIEW`. Its report is stored at `.qa-agent/reports/<release-check-id>.md` and references child Task reports and screenshot evidence without duplicating every image.
+## Strict regression and release validation
 
-## APP and simulator QA
+Strict planning is used only when the user explicitly requests:
 
-Declare the platform when initializing the project or creating a module:
+- a fixed reviewed Scenario matrix before execution;
+- a fixed and reviewed release test scope;
+- release readiness;
+- GO/NO-GO;
+- a Release Gate.
 
-```bash
-qa-agent init --id my-app --name "My App" --platforms android,ios
-qa-agent module create checkout --name "Checkout" --platforms android
+The host loads:
+
+```text
+qa-agent-plan
 ```
 
-Before an APP run, the runtime requires Android `android.adb` and `android.screenshot`, or iOS `ios.simulator.interact` and `ios.screenshot`.
+After planning and explicit human approval, the main `qa-agent` performs the first real business test. Later Task, Module, and Release regression select validated Python scripts directly.
 
-On macOS, the host app also needs **Screen Recording** (screenshots/visual evidence) and **Accessibility** (clicks, input, and simulator control). iOS simulator automation may additionally require Developer Mode. The Agent cannot grant system permissions; `host doctor --platform` reports the required permissions, validation steps, and the System Settings → Privacy & Security location from the host-imported snapshot.
+Strict capabilities remain available:
 
-```bash
-qa-agent host doctor --platform android
-```
+- PlanDraft;
+- human TestPlan approval;
+- plan hashes;
+- user-reviewed Python scripts;
+- real Python execution validation;
+- Task, Module, and Release script selection;
+- impact analysis;
+- release GO/NO-GO;
+- archive gates.
 
-If a capability is missing, the Run is `BLOCKED`. The Agent must ask the user to approve connecting or installing the least-privilege Android Emulator/ADB or iOS Simulator/Appium MCP. It never installs an MCP automatically.
-
-After approval and connection, import a fresh host capability snapshot:
-
-```bash
-qa-agent host import --file /absolute/path/android-host-capabilities.json
-qa-agent host doctor --platform android
-```
-
-The host Agent then operates the simulator, captures visual evidence, and creates the same automatic report.
-
-## Reports and project memory
-
-Each report includes context, the approved plan, scenario results, expected versus actual outcomes, visual assertions, embedded screenshots, traces/logs/network evidence, blocker recovery conditions, defect candidates, release guidance, and candidate memory. Passed evidence-backed visual runs automatically create `observed` business-outcome candidates; failed runs create known-issue candidates. Both require review before becoming active project knowledge.
-
-Store a confirmed rule or regression lesson inside its project:
-
-```bash
-qa-agent memory add checkout-total-rule \
-  --module checkout \
-  --title "Checkout total rule" \
-  --content "Before confirmation, buyers must see item cost, shipping, discounts, and the payable total."
-
-qa-agent memory review checkout-total-rule --module checkout --approve
-```
+These protocol details remain hidden during ordinary Quick Checks.
 
 ## Safety
 
-- Stop before real payments, refunds, deletion, notifications, and production permission changes.
-- Default source and data access is read-only; the QA Agent does not modify source, commit Git changes, or alter production configuration.
-- Never persist passwords, tokens, cookies, private keys, payment data, or unredacted production data.
-- Missing capabilities, credentials, approvals, or clear business rules produce `blocked` or `paused`, never a fabricated pass.
+Runtime stops before:
 
-Configure project policy in `.qa-agent/policies.json`.
+- real payment or refund;
+- production deletion or database write;
+- real SMS, email, or notification delivery;
+- production permission changes;
+- unsafe production-account or raw production-data use;
+- missing tool or OS permission;
+- execution-contract drift.
+
+The Agent must never fabricate screenshots, UI actions, observations, cleanup, approvals, regression outcomes, or formal reports.
 
 ## Common commands
 
+Default help shows only six commands:
+
 ```bash
+qa-agent init
+qa-agent check --request TEXT
+qa-agent continue
+qa-agent finish
 qa-agent doctor
-qa-agent host doctor --platform android
-qa-agent host list
-qa-agent context module <module-id>
-qa-agent module coverage <module-id>
-qa-agent task list
-qa-agent run show <run-id>
-qa-agent run report <run-id>
-qa-agent memory list
-qa-agent help
+qa-agent update --migrate
+```
+
+Show strict regression, release, and administration commands with:
+
+```bash
 qa-agent help --advanced
 ```
 
-## Development and verification
+## Upgrade to v0.6.0
+
+Upgrade the CLI:
 
 ```bash
-npm test
-npm run qa-agent -- skill validate
-npm pack --dry-run
+npm install -g qa-agent-skill@0.6.0
 ```
+
+Then update an existing project:
+
+```bash
+qa-agent update --migrate --force
+```
+
+Migration continues to read v0.2 assets and maps the legacy `finalizing` state to `reviewing_result`. Existing Runs, reports, and screenshots are preserved.
+
+## Validate a project
+
+```bash
+qa-agent doctor
+qa-agent validate
+```
+
+Develop this repository:
+
+```bash
+npm install
+npm run verify
+npm run pack:check
+```
+
+## Three Skills
+
+v0.6.0 installs:
+
+```text
+qa-agent
+qa-agent-plan
+qa-agent-regression-test
+```
+
+- `qa-agent`: ordinary testing, continuation, recovery, result presentation, Python draft/publication, and strict Runtime execution;
+- `qa-agent-plan`: strict regression or release planning and human approval;
+- `qa-agent-regression-test`: only runs approved Python regression scripts already stored in a Task and reviews the Runtime-generated regression report.
+
+Runtime complexity remains internal. Users should only see the goal, progress, result, and any decision they must make.

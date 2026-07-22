@@ -34,15 +34,29 @@ export function copyMainSkill(destination: string, force: boolean): void {
   mkdirSync(destination, { recursive: true });
   if (!existsSync(target) || force) cpSync(source, target, { force });
 
+  const sourceReferences = join(skillSource(), 'references');
+  const targetReferences = join(destination, 'references');
+  if (existsSync(targetReferences) && !force && contentHash(targetReferences) !== contentHash(sourceReferences)) {
+    throw new Error(`Host Skill references already exist at ${targetReferences}. Use --force only if replacing them is intended.`);
+  }
+  if (force && existsSync(targetReferences)) rmSync(targetReferences, { recursive: true, force: true });
+  if (!existsSync(targetReferences) || force) cpSync(sourceReferences, targetReferences, { recursive: true, force, errorOnExist: !force });
+
   // Clean up nested subskills produced by older installations.
   const legacySubskills = join(destination, 'skills');
   if (existsSync(legacySubskills)) rmSync(legacySubskills, { recursive: true, force: true });
 }
 
-export const QA_SUBSKILLS = ['start', 'review', 'test', 'result', 'operation', 'regression', 'recovery', 'archive'] as const;
+export const QA_SUBSKILLS = ['plan', 'regression-test'] as const;
+const LEGACY_PHASE_SUBSKILLS = ['quick', 'start', 'review', 'test', 'result', 'finish', 'operation', 'recovery', 'archive', 'regression'] as const;
 
 export function copySubSkills(parent: string, force: boolean): string[] {
   const sourceRoot = skillSource();
+  for (const name of LEGACY_PHASE_SUBSKILLS) {
+    const legacy = join(parent, `qa-agent-${name}`);
+    const manifest = join(legacy, 'SKILL.md');
+    if (existsSync(manifest) && new RegExp(`^---\\nname: qa-agent-${name}\\n`, 's').test(readFileSync(manifest, 'utf8'))) rmSync(legacy, { recursive: true, force: true });
+  }
   return QA_SUBSKILLS.map(name => {
     const destination = join(parent, `qa-agent-${name}`);
     const source = join(sourceRoot, 'skills', name);
@@ -77,18 +91,18 @@ export function detected(config: HostPlatformConfig, projectRoot: string): boole
 
 export const sharedGuidance = `# QA Agent
 
-Use the qa-agent CLI as the only persistent state and Runtime entry point.
-1. Run qa-agent start --request "<request>" --module <module> --task <task>. Inspect relevant source, reviewed memory, historical Runs, and existing OperationPlans before asking the user; ask at most one user-owned decision per turn.
-2. Build a qa-agent/plan-draft/v1 document and apply it with qa-agent plan apply --file <plan-draft.json>. Never edit Runtime-owned Task or Scenario JSON directly.
-3. Present the Runtime-generated plan, planHash, Scenario coverage, evidence, safety, and cleanup. Wait for explicit human approval.
-4. Persist TestPlan approval with qa-agent review --module <module> --task <task> --approve --confirmed-by <human>. Approval must not start a Run.
-5. Run qa-agent test --module <module> --task <task>. Follow only returned gates, allowedActions, nextActions, breadcrumb, resumeToken, and runId.
-6. Use UI tools only when uiExecutionAllowed=true and mustStop=false. Persist every action, screenshot, assertion, cleanup, evidence, recovery attempt, and completion through Runtime commands.
-7. Treat an OperationPlan as a persisted, Scenario-specific and repeatable business operation path. It fixes the ordered actions, locators, inputs, expected states, assertions, evidence, and cleanup. Runtime stores each generated plan under its owning Task at .qa-agent/modules/<module>/tasks/<task>/operation-plans/<scenario>/; never create a standalone OperationPlan outside the Task directory. The path may be executed manually, with Agent assistance, or by a dedicated browser/device executor such as Playwright, Python plus fb-idb, or ADB. Every replay must begin from the application's home page or defined initial entry point, with the approved initial state restored or confirmed; never start from an intermediate page or leftover state. When an approved OperationPlan exists, replay it; do not start over with discovery or re-planning.
-8. Runtime automatically creates eligible OperationPlan candidates after a successful exploratory Run. Present candidates and request separate promotion approval; do not call operation generate in the normal workflow.
-9. After promotion approval, use qa-agent task operation review ... --approve --confirmed-by <human>, then qa-agent test for a real replay. The executor must follow the persisted path in order and must not skip, duplicate, or replace it with a newly designed flow. Only validated OperationPlans enter formal RegressionSuites and archive gates.
-10. Use qa-agent archive only after all validated regression, Runtime report, screenshot, assertion, cleanup, and memory gates pass.
-11. Never write a manual formal report, bypass a blocking Gate, fabricate evidence, or claim PASS before Runtime completion.
+Load the installed qa-agent Skill and references/workflow.md before acting.
+
+- Answer informational questions directly. Before a new ordinary test, inspect, present a concise business flow, and wait for user approval.
+- Runtime is the only state, evidence, report, approval, script-publication, and regression-result owner. Never edit Runtime JSON or write a competing report.
+- On later turns call qa-agent continue. Use UI tools only when uiExecutionAllowed=true, mustStop=false, and runId exists. Pass --session or QA_AGENT_SESSION_KEY when available.
+- After an eligible real report, offer Python from the exact executed flow. The first confirmation permits a draft only.
+- Generate the draft as the Agent, save it with qa-agent regression draft, show the complete script or diff, and publish only after a second explicit approval. Runtime never authors Python.
+- For an already published Python script, load qa-agent-regression-test. It runs the existing script and reviews the Runtime report without generating, editing, approving, or publishing code.
+- Use qa-agent-plan only for strict pre-execution planning. Task, Module, and Release regression select validated Python scripts directly.
+- Ask at most one question per turn, infer internal IDs, and use the user's language.
+- Call qa-agent finish only on explicit session closure. Hide protocol unless troubleshooting.
+- Never bypass safety or approval checks, and never fabricate evidence or results.
 `;
 
 export function renderGuidance(config: HostPlatformConfig): string {

@@ -3,13 +3,12 @@ import { now } from './store.ts';
 import type { TaskLifecycleState, TestTask } from './types.ts';
 
 const allowedTransitions: Record<TaskLifecycleState, TaskLifecycleState[]> = {
-  draft: ['planning', 'awaiting_approval', 'needs_input', 'deprecated', 'superseded'],
+  draft: ['planning', 'awaiting_approval', 'ready', 'needs_input', 'deprecated', 'superseded'],
   planning: ['awaiting_approval', 'needs_input', 'blocked', 'paused', 'deprecated', 'superseded'],
   awaiting_approval: ['planning', 'ready', 'needs_input', 'blocked', 'paused', 'deprecated', 'superseded'],
   ready: ['planning', 'awaiting_approval', 'running', 'blocked', 'paused', 'deprecated', 'superseded'],
-  running: ['reviewing_result', 'regression_ready', 'blocked', 'paused'],
-  reviewing_result: ['planning', 'awaiting_approval', 'running', 'regression_ready', 'completed', 'blocked', 'paused', 'deprecated', 'superseded'],
-  regression_ready: ['planning', 'awaiting_approval', 'running', 'completed', 'blocked', 'paused', 'deprecated', 'superseded'],
+  running: ['reviewing_result', 'blocked', 'paused'],
+  reviewing_result: ['planning', 'awaiting_approval', 'running', 'completed', 'blocked', 'paused', 'deprecated', 'superseded'],
   completed: ['planning', 'awaiting_approval', 'running', 'archived', 'deprecated', 'superseded'],
   archived: [],
   needs_input: ['planning', 'awaiting_approval', 'blocked', 'paused', 'deprecated', 'superseded'],
@@ -22,6 +21,7 @@ const allowedTransitions: Record<TaskLifecycleState, TaskLifecycleState[]> = {
 export function normalizeTaskState(status: TestTask['metadata']['status'] | undefined): TaskLifecycleState {
   if (status === 'active') return 'ready';
   if (status === 'needs_review') return 'awaiting_approval';
+  if (status === 'finalizing' || status === 'regression_ready') return 'reviewing_result';
   return status ?? 'draft';
 }
 

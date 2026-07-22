@@ -34,6 +34,15 @@ export function approvalIsCurrent(task: TestTask): boolean {
   return Boolean(task.metadata.approval?.planHash && task.metadata.approval.confirmationSource && isHumanApprover(task.metadata.approval.confirmedBy) && task.metadata.approval.planHash === testPlanHash(task));
 }
 
+export function requiresTestPlanApproval(task: TestTask): boolean {
+  return !(task.metadata.mode === 'quick' && task.metadata.approvalPolicy === 'side-effect-only');
+}
+
+export function executionContractIsCurrent(task: TestTask, planHash?: string): boolean {
+  if (planHash && planHash !== testPlanHash(task)) return false;
+  return !requiresTestPlanApproval(task) || approvalIsCurrent(task);
+}
+
 export function invalidateApproval(task: TestTask): boolean {
   if (!task.metadata.approval) return false;
   delete task.metadata.approval;

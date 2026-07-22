@@ -1,14 +1,12 @@
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
-export type TaskLifecycleState = 'draft' | 'planning' | 'awaiting_approval' | 'ready' | 'running' | 'reviewing_result' | 'regression_ready' | 'completed' | 'archived' | 'needs_input' | 'blocked' | 'paused' | 'deprecated' | 'superseded';
-/** Legacy states remain readable during the v0.2.x migration window. */
-export type TaskStatus = TaskLifecycleState | 'active' | 'needs_review';
+export type TaskLifecycleState = 'draft' | 'planning' | 'awaiting_approval' | 'ready' | 'running' | 'reviewing_result' | 'completed' | 'archived' | 'needs_input' | 'blocked' | 'paused' | 'deprecated' | 'superseded';
+/** Legacy states remain readable during migration and normalize into the simplified lifecycle. */
+export type TaskStatus = TaskLifecycleState | 'active' | 'needs_review' | 'finalizing' | 'regression_ready';
 export type RunStatus = 'pending' | 'running' | 'passed' | 'failed' | 'blocked' | 'paused' | 'inconclusive' | 'not_applicable' | 'needs_confirmation' | 'adapted';
-export type ReplayStatus = 'not_replay' | 'replayed' | 'adapted';
-export type RunMode = 'explore' | 'replay';
+export type RunMode = 'explore';
 export type VisualInspectionStatus = 'performed' | 'not-required' | 'not-applicable' | 'skipped';
-export type ReplayStage = 'idle' | 'ready' | 'preflight_passed' | 'step_pending' | 'executing' | 'screenshot_captured' | 'visual_check_optional' | 'assertion_checked' | 'next_step' | 'completed' | 'blocked' | 'needs_confirmation';
 export type KnowledgeLevel = 'confirmed' | 'observed' | 'inferred' | 'suspected' | 'deprecated';
-export type OperationAction = 'launch' | 'navigate' | 'click' | 'input' | 'fill' | 'swipe' | 'back' | 'wait' | 'assert' | 'screenshot' | 'reset' | 'restart-app';
+export type UiAction = 'launch' | 'navigate' | 'click' | 'input' | 'fill' | 'swipe' | 'back' | 'wait' | 'assert' | 'screenshot' | 'reset' | 'restart-app';
 export type StepExecutionMode = 'host-automated' | 'user-assisted' | 'system-component-blocked' | 'preseeded-test-data';
 export type LocatorStrategy = 'test-id' | 'accessibility' | 'role' | 'label' | 'text' | 'css' | 'xpath' | 'coordinate' | 'semantic' | 'none';
 export type ScreenshotPolicy = 'after-action' | 'on-state-change' | 'none';
@@ -17,17 +15,207 @@ export type PermissionStatus = 'verified' | 'missing' | 'unknown';
 export type TestPriority = 'p0' | 'p1' | 'p2' | 'p3';
 export type RegressionFrequency = 'every-change' | 'every-release' | 'scheduled' | 'manual';
 export type RegressionProfile = 'fast' | 'normal' | 'full';
-export type RegressionSuiteScope = 'task' | 'module' | 'release';
-export type RegressionSuiteStatus = 'draft' | 'active' | 'stale' | 'superseded';
-export type RegressionSelectionPolicy = 'all-validated-operation-plans' | 'all-active-operation-plans' | 'priority-filtered' | 'impact-filtered' | 'release-gate-plus-impact';
-export type WorkflowStatus = 'setup_required' | 'approval_required' | 'ready_to_run' | 'running' | 'completed' | 'blocked';
-export type WorkflowPhase = 'intake' | 'discovery' | 'planning' | 'approval' | 'preflight' | 'execution' | 'assertion' | 'result_review' | 'operation_promotion' | 'regression' | 'recovery' | 'archive';
+export type QaMode = 'quick' | 'regression' | 'release';
+export type ApprovalPolicy = 'side-effect-only' | 'test-plan-and-side-effects';
+export type RegressionSelectionScope = 'task' | 'module' | 'release';
+export type RegressionSelectionPolicy = 'all-validated-python-regressions' | 'priority-filtered' | 'release-gate-plus-impact';
+export type PythonRegressionStatus = 'approved_unverified' | 'validated' | 'stale' | 'deprecated';
+export type PythonRegressionBusinessStatus = 'passed' | 'failed' | 'blocked' | 'inconclusive';
+export type PythonRegressionContractStatus = 'completed' | 'blocked' | 'invalid_result' | 'failed_to_start';
+export type WorkflowStatus = 'setup_required' | 'approval_required' | 'ready_to_run' | 'running' | 'result_ready' | 'completed' | 'blocked';
+export type WorkflowPhase = 'intake' | 'discovery' | 'planning' | 'approval' | 'preflight' | 'execution' | 'assertion' | 'result_review' | 'regression' | 'recovery' | 'archive';
 export type WorkflowGateStatus = 'satisfied' | 'blocking' | 'not_required';
 export interface WorkflowGate { id: string; status: WorkflowGateStatus; reasonCode?: string; requiredActor?: 'human' | 'runtime' | 'host'; artifactHash?: string; }
 export interface NextAction { id: string; description: string; command?: string; requiresHuman: boolean; requiredActor?: 'agent' | 'human' | 'runtime' | 'host'; blockingGate?: string; deprecatedAlias?: boolean; canonicalCommand?: string; }
 export type WorkflowTodoStatus = 'pending' | 'in_progress' | 'blocked' | 'completed';
 
 export interface WorkflowTodo { id: string; title: string; status: WorkflowTodoStatus; blocking?: boolean; }
+
+export interface QaSessionBinding {
+  apiVersion: 'qa-agent/session/v1';
+  sessionKey: string;
+  storageKey: string;
+  host?: string;
+  moduleId: string;
+  taskId: string;
+  runId?: string;
+  boundAt: string;
+  lastActiveAt: string;
+}
+
+export interface QaSessionClosure {
+  apiVersion: 'qa-agent/session-closure/v1';
+  sessionKey: string;
+  storageKey: string;
+  host?: string;
+  moduleId: string;
+  taskId: string;
+  runId?: string;
+  reason: 'finish';
+  closedAt: string;
+}
+
+export interface SessionTaskCandidate {
+  moduleId: string;
+  taskId: string;
+  title: string;
+  taskState: TaskLifecycleState;
+  mode?: QaMode;
+  updatedAt: string;
+}
+
+export type ContinueStatus = 'action_ready' | 'human_decision_required' | 'blocked' | 'result_ready' | 'completed' | 'no_active_task' | 'task_selection_required';
+
+export type FinishStatus = 'finished' | 'task_preserved' | 'blocked' | 'no_active_task' | 'task_selection_required';
+
+export interface FinishResult {
+  apiVersion: 'qa-agent/finish/v1';
+  kind: 'FinishResult';
+  status: FinishStatus;
+  session?: QaSessionBinding;
+  closure?: QaSessionClosure;
+  task?: SessionTaskCandidate;
+  candidates?: SessionTaskCandidate[];
+  workflow?: QaWorkflowState;
+  finalization?: TaskFinalizationResult;
+  userMessage: string;
+}
+
+export interface TaskFinalizationState {
+  status: 'pending' | 'in_progress' | 'completed' | 'failed';
+  sourceRunId: string;
+  prdRef: 'prd.md';
+  startedAt?: string;
+  finalizedAt?: string;
+  updatedAt: string;
+  artifactHash?: string;
+  error?: string;
+}
+
+export interface TaskFinalizationResult {
+  apiVersion: 'qa-agent/task-finalization/v1';
+  kind: 'TaskFinalizationResult';
+  status: 'completed' | 'failed';
+  moduleId: string;
+  taskId: string;
+  sourceRunId: string;
+  prdPath?: string;
+  artifactHash?: string;
+  error?: string;
+}
+
+export interface PythonRegressionDraft {
+  apiVersion: 'qa-agent/python-regression-draft/v2';
+  kind: 'PythonRegressionDraft';
+  id: string;
+  moduleId: string;
+  taskId: string;
+  sessionKey: string;
+  sourceRunId: string;
+  sourceReportRef: string;
+  sourcePlanHash: string;
+  sourceStepIds: string[];
+  scenarioIds: string[];
+  sourceFlowHash: string;
+  scriptRef: string;
+  scriptHash: string;
+  status: 'draft';
+  createdBy: 'agent';
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PythonRegressionManifest {
+  apiVersion: 'qa-agent/python-regression/v2';
+  kind: 'PythonRegression';
+  id: string;
+  version: number;
+  name: string;
+  moduleId: string;
+  taskId: string;
+  scriptRef: string;
+  sourceRunId: string;
+  sourceReportRef: string;
+  sourcePlanHash: string;
+  sourceStepIds: string[];
+  scenarioIds: string[];
+  sourceFlowHash: string;
+  scriptHash: string;
+  status: PythonRegressionStatus;
+  approvedBy: string;
+  approvalSource: 'current-chat-explicit-approval' | 'external-review-record';
+  approvedAt: string;
+  validatedByRunId?: string;
+  validatedAt?: string;
+  lastRunId?: string;
+  lastRunStatus?: PythonRegressionBusinessStatus;
+  staleReason?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PythonRegressionScriptResult {
+  apiVersion: 'qa-agent/python-regression-result/v1';
+  status: PythonRegressionBusinessStatus;
+  contractStatus: 'completed' | 'blocked';
+  conclusion: string;
+  steps: Array<{
+    id: string;
+    name: string;
+    status: PythonRegressionBusinessStatus;
+    expected?: string;
+    actual?: string;
+    screenshot?: string;
+  }>;
+  cleanup?: Array<{
+    name: string;
+    status: PythonRegressionBusinessStatus;
+    actual?: string;
+    screenshot?: string;
+  }>;
+  evidence?: Array<{ type: string; path?: string; summary: string }>;
+}
+
+export interface PythonRegressionRun {
+  apiVersion: 'qa-agent/python-regression-run/v1';
+  kind: 'PythonRegressionRun';
+  id: string;
+  regressionId: string;
+  moduleId: string;
+  taskId: string;
+  scriptRef: string;
+  scriptHash: string;
+  sourceRunId: string;
+  status: PythonRegressionBusinessStatus;
+  contractStatus: PythonRegressionContractStatus;
+  exitCode?: number;
+  resultRef?: string;
+  reportRef: string;
+  stdoutRef: string;
+  stderrRef: string;
+  screenshots: string[];
+  conclusion: string;
+  startedAt: string;
+  completedAt: string;
+}
+
+export interface ContinueResult {
+  apiVersion: 'qa-agent/continue/v1';
+  kind: 'ContinueResult';
+  status: ContinueStatus;
+  session?: QaSessionBinding;
+  task?: SessionTaskCandidate;
+  candidates?: SessionTaskCandidate[];
+  workflow?: QaWorkflowState;
+  finalization?: TaskFinalizationResult;
+  nextAction?: {
+    id: string;
+    owner: 'runtime' | 'agent' | 'host' | 'human';
+    description: string;
+    command?: string;
+  };
+  userMessage: string;
+}
 
 export interface QaWorkflowState {
   apiVersion: 'qa-agent/v3';
@@ -48,7 +236,6 @@ export interface QaWorkflowState {
   manualReportAllowed: false;
   runId?: string;
   plan?: object;
-  promptBundle: { bundleHash: string; current: boolean; missing: string[]; stale: string[] };
   todoList: WorkflowTodo[];
   allowedActions: string[];
   forbiddenActions: string[];
@@ -165,66 +352,6 @@ export interface EvidencePolicy {
   required: string[];
 }
 
-export interface OperationCheckpoint {
-  id: string;
-  description: string;
-  screenshotRequired: boolean;
-  reportVisible: boolean;
-}
-
-export interface OperationStep {
-  id: string;
-  scenarioId: string;
-  action: OperationAction;
-  intent: string;
-  preconditions: string[];
-  locator?: Locator;
-  fallbackLocators?: Locator[];
-  inputRefs?: Record<string, string>;
-  expectedState?: string;
-  assertionRefs?: string[];
-  screenshotPolicy: ScreenshotPolicy;
-  visualInspectionPolicy: VisualInspectionPolicy;
-  safetyAction?: string;
-  checkpoint?: boolean;
-  executionMode?: StepExecutionMode;
-}
-
-export type OperationPlanStatus = 'candidate' | 'approved_unverified' | 'validated' | 'stale' | 'rejected' | 'superseded';
-
-export interface OperationPlan {
-  $schema: string;
-  apiVersion: 'qa-agent/v2';
-  kind: 'OperationPlan';
-  id: string;
-  version: number;
-  status: OperationPlanStatus;
-  /** Deprecated compatibility field. New code uses status as the complete lifecycle. */
-  validationStatus?: 'unverified' | 'passed' | 'failed' | 'stale';
-  validatedByRunId?: string;
-  validatedAt?: string;
-  approvedBy?: string;
-  approvedAt?: string;
-  rejectedBy?: string;
-  rejectedAt?: string;
-  taskId: string;
-  moduleId: string;
-  scenarioId: string;
-  executionSnapshot: ExecutionSnapshot;
-  planHash: string;
-  steps: OperationStep[];
-  checkpoints?: OperationCheckpoint[];
-  preconditions: string[];
-  cleanup: string[];
-  capabilities: string[];
-  sourceRunId: string;
-  successfulRuns: number;
-  supersedes?: string;
-  adaptationHistory?: Array<{ runId: string; detail: string; at: string }>;
-  createdAt: string;
-  updatedAt: string;
-}
-
 export interface ProjectConfig {
   $schema: string;
   version: 1;
@@ -336,6 +463,8 @@ export interface TestTask {
   metadata: {
     id: string; name: string; moduleId: string; version: number; status: TaskStatus;
     priority: TestPriority; tags: string[];
+    mode?: QaMode;
+    approvalPolicy?: ApprovalPolicy;
     frequency?: RegressionFrequency; releaseGate?: boolean; estimatedDurationMinutes?: number;
     approval?: { confirmedBy: string; confirmedAt: string; confirmationSource: 'current-chat-explicit-approval' | 'external-review-record'; statement: string; planHash: string };
   };
@@ -343,7 +472,9 @@ export interface TestTask {
   requirementsRef: string;
   testPlanRef: string;
   scenarioRefs: string[];
-  regressionSuiteRef: string;
+  prdRef?: 'prd.md';
+  finalization?: TaskFinalizationState;
+  pythonRegressionRefs?: string[];
   reportIndexRef: string;
   runRefs: string[];
   moduleSnapshot?: ModuleSnapshot;
@@ -360,21 +491,20 @@ export interface TestTask {
   safety: { safeMode: boolean; stopBefore: string[] };
   evidence: { required: string[] };
   evidencePolicy: EvidencePolicy;
-  operationPlanRefs: string[];
   recoveryPolicy: { maxRetries: number; maxRecoveryAttempts: number; allowSandboxDataReset: boolean };
   regression: { triggers: string[] };
   createdAt: string;
   updatedAt: string;
 }
 
-export interface RegressionSuiteMember {
+export interface PythonRegressionSelectionMember {
   taskId: string;
   moduleId: string;
-  scenarioId: string;
-  operationPlanId: string;
-  operationPlanRef: string;
-  operationVersion: number;
-  taskPlanHash: string;
+  regressionId: string;
+  scriptRef: string;
+  scriptHash: string;
+  sourcePlanHash: string;
+  scenarioIds: string[];
   priority: TestPriority;
   frequency: RegressionFrequency;
   releaseGate: boolean;
@@ -384,19 +514,17 @@ export interface RegressionSuiteMember {
   order: number;
 }
 
-export interface RegressionSuite {
-  $schema: string;
-  apiVersion: 'qa-agent/v2';
-  kind: 'RegressionSuite';
+export interface PythonRegressionSelection {
+  apiVersion: 'qa-agent/python-regression-selection/v1';
+  kind: 'PythonRegressionSelection';
   id: string;
-  version: number;
-  scope: RegressionSuiteScope;
+  scope: RegressionSelectionScope;
   name: string;
   purpose: string;
   moduleId: string;
   moduleIds: string[];
   taskId?: string;
-  members: RegressionSuiteMember[];
+  members: PythonRegressionSelectionMember[];
   selectionPolicy: RegressionSelectionPolicy;
   priorityThreshold: TestPriority;
   releaseGate: boolean;
@@ -404,34 +532,40 @@ export interface RegressionSuite {
   impactedModules?: string[];
   selectionReasons?: string[];
   requiredAssetGaps?: Array<{ moduleId: string; taskId: string; priority: TestPriority; releaseGate: boolean; goldenPath: boolean; reason: string }>;
-  failurePolicy: 'continue-independent';
-  contextPolicy: 'current-context';
-  suiteHash: string;
-  status: RegressionSuiteStatus;
-  createdAt: string;
-  updatedAt: string;
+  selectionHash: string;
+  status: 'ready' | 'blocked';
+  generatedAt: string;
 }
 
 export interface RegressionRun {
-  $schema: string;
-  apiVersion: 'qa-agent/v2';
-  kind: 'RegressionRun';
+  apiVersion: 'qa-agent/python-regression-batch-run/v1';
+  kind: 'PythonRegressionBatchRun';
   id: string;
-  suiteId: string;
-  suiteName: string;
-  suiteScope: RegressionSuiteScope;
-  suiteVersion: number;
-  suiteHash: string;
+  selectionId: string;
+  selectionName: string;
+  selectionScope: RegressionSelectionScope;
+  selectionHash: string;
   moduleId: string;
   moduleIds: string[];
   priorityThreshold: TestPriority;
   releaseGate: boolean;
-  context: ExecutionSnapshot;
-  status: RunStatus;
-  childRuns: Array<{ runId: string; taskId: string; moduleId: string; scenarioId: string; operationPlanId: string; priority: TestPriority; releaseGate: boolean; status: RunStatus; reportPath?: string; detail?: string }>;
+  status: PythonRegressionBusinessStatus;
+  childRuns: Array<{
+    regressionRunId?: string;
+    regressionId: string;
+    taskId: string;
+    moduleId: string;
+    scenarioIds: string[];
+    priority: TestPriority;
+    releaseGate: boolean;
+    status: PythonRegressionBusinessStatus;
+    contractStatus: PythonRegressionContractStatus;
+    reportPath?: string;
+    detail?: string;
+  }>;
   failurePolicy: 'continue-independent';
   startedAt: string;
-  completedAt?: string;
+  completedAt: string;
   reportPath?: string;
 }
 
@@ -461,11 +595,11 @@ export interface ReleaseCheck {
   head?: string;
   priorityThreshold: TestPriority;
   impactAnalysis: ImpactAnalysis;
-  suite: RegressionSuite;
+  selection: PythonRegressionSelection;
   regressionRunId?: string;
   status: 'planned' | 'running' | 'passed' | 'failed' | 'blocked' | 'needs_confirmation' | 'review';
   releaseDecision: 'pending' | 'go' | 'no-go' | 'review';
-  blockers: Array<{ moduleId: string; taskId: string; scenarioId: string; status: RunStatus; detail?: string }>;
+  blockers: Array<{ moduleId: string; taskId: string; regressionId: string; scenarioIds: string[]; status: PythonRegressionBusinessStatus; detail?: string }>;
   requiredAssetGaps: Array<{ moduleId: string; taskId: string; priority: TestPriority; releaseGate: boolean; goldenPath: boolean; reason: string }>;
   createdAt: string;
   updatedAt: string;
@@ -504,8 +638,8 @@ export interface TestRun {
   git: { branch?: string; commit?: string; dirtyWorkspace: boolean; changedFiles: string[] };
   status: RunStatus;
   safeMode: boolean;
-  mode: RunMode;
-  steps: Array<{ id: string; action: string; operationAction?: OperationAction; safetyAction?: string; status: RunStatus; detail: string; at: string; scenarioId?: string; screenshotPath?: string; visualInspection?: VisualInspectionStatus; source?: 'ui' | 'internal' | 'recovery' | 'operation-replay'; executionMode?: StepExecutionMode; operationStepId?: string; locator?: Locator; actualLocator?: Locator; inputRefs?: Record<string, string>; expectedState?: string; actualState?: string; adaptation?: string }>;
+  mode: 'explore';
+  steps: Array<{ id: string; action: string; uiAction?: UiAction; safetyAction?: string; status: RunStatus; detail: string; at: string; scenarioId?: string; screenshotPath?: string; visualInspection?: VisualInspectionStatus; source?: 'ui' | 'internal' | 'recovery'; executionMode?: StepExecutionMode; locator?: Locator; actualLocator?: Locator; inputRefs?: Record<string, string>; expectedState?: string; actualState?: string; adaptation?: string }>;
   scenarioResults: Array<{ scenarioId: string; status: RunStatus; detail?: string }>;
   evidence: Array<{ type: string; path?: string; summary: string }>;
   conclusion?: string;
@@ -513,17 +647,11 @@ export interface TestRun {
   reportGeneratedBy?: 'qa-agent-runtime';
   reportGeneratedAt?: string;
   retryOf?: string;
-  replayStatus: ReplayStatus;
-  replayStage: ReplayStage;
-  operationPlanId?: string;
-  operationVersion?: number;
   scenarioId?: string;
-  replayCursor?: number;
   screenshots: Array<{ stepId: string; path: string; capturedAt: string; visualInspection: VisualInspectionStatus; summary: string }>;
   recoveryAttempts: Array<{ id: string; reason: string; action: string; outcome: 'continued' | 'blocked' | 'paused' | 'failed'; detail: string; failedStepId?: string; at: string }>;
   cleanupFindings: Array<{ scenarioId: string; cleanup: string; actual: string; status: RunStatus; screenshotPath?: string; at: string }>;
-  operationCandidates?: string[];
-  operationCandidateIssues?: Array<{ scenarioId: string; reasons: string[] }>;
+  pythonRegressionEligibility?: { eligible: boolean; sourceStepIds: string[]; scenarioIds: string[]; flowHash?: string; issues: Array<{ scenarioId: string; reasons: string[] }> };
   memoryCandidates?: string[];
   visualFindings: Array<{ scenarioId: string; assertionId: string; expected: string; actual: string; status: RunStatus; screenshotPath?: string; visualInspection: 'performed'; inspectionProvider?: string; at: string }>;
   startedAt: string;

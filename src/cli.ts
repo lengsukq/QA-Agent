@@ -2,10 +2,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { availableCapabilities, capabilityAdvice } from './capabilities.ts';
-import { beginAgentGuidedRun, beginRegressionRun, buildExecutionSnapshot, completeAgentGuidedRun, completeRegressionRun, recordAgentStep, recordCleanupFinding, recordHostEvidence, recordRecoveryAttempt, recordVisualFinding } from './engine.ts';
+import { beginAgentGuidedRun, completeAgentGuidedRun, recordAgentStep, recordCleanupFinding, recordHostEvidence, recordRecoveryAttempt, recordVisualFinding } from './engine.ts';
 import { readIndex, rebuildIndexes } from './indexer.ts';
 import { createTaskSkeleton, planModule, taskPlan } from './planning.ts';
-import { createModule, findProjectRoot, initializeProject, modulePath, qaPath, readModule, readProjectPromptBundle, readRunById, readTask, requireProjectRoot, saveRun, saveTask, syncProjectPrompts, taskDirectory, taskRunReportPath } from './project.ts';
+import { createModule, findProjectRoot, initializeProject, modulePath, qaPath, readModule, readRunById, readTask, requireProjectRoot, saveRun, saveTask, taskDirectory, taskRunReportPath } from './project.ts';
 import { readProject } from './project.ts';
 import { assertSafeId, listFiles, now, readJson, writeJsonAtomic } from './store.ts';
 import type { ExecutionSnapshot, Locator, PermissionStatus, ProjectMemory, RegressionProfile, RegressionRun, ReleaseCheck, RunStatus, StepExecutionMode, TestPriority, TestRun, TestTask } from './types.ts';
@@ -15,8 +15,7 @@ import { configuredHostRecords, installHostIntegration, recordHostInstall, suppo
 import { detectConfiguredHosts, hostsFromFlags, HOST_PLATFORMS } from './host-configurators/registry.ts';
 import { approvalIsCurrent, assertHumanApprover, invalidateApproval, testPlanHash } from './approval.ts';
 import { hostCapabilityDiagnosis } from './capabilities.ts';
-import { createOperationCandidates, listOperations, markOperationsStaleForPlanHash, operationSummary, readOperation, reviewOperation } from './operations.ts';
-import { buildModuleRegressionSuite, buildReleaseRegressionSuite, readTaskRegressionSuite, syncTaskRegressionSuite } from './regression.ts';
+import { buildModuleRegressionSelection, buildReleaseRegressionSelection, buildTaskRegressionSelection, runRegressionSelection } from './regression.ts';
 import { analyzeProjectImpact } from './impact-analysis.ts';
 import { attachRegressionRun, createReleaseCheck, finalizeReleaseCheck, readReleaseCheck, saveReleaseCheck, writeReleaseReport } from './release.ts';
 import { bootstrapWorkflow, workflowStatus } from './workflow.ts';
@@ -26,6 +25,21 @@ import { appendTaskEvent } from './events.ts';
 import { normalizeTaskState, transitionTaskState } from './workflow-model.ts';
 import { applyPlanDraft } from './plan-draft.ts';
 import type { PlanDraft } from './types.ts';
+import { prepareQuickCheck } from './quick.ts';
+import { continueCurrentTask } from './continue.ts';
+import { bindTaskSession, clearTaskSession, clearTaskSessionIfMatches, listTaskSessions, readTaskSession } from './session.ts';
+import { finalizeTask } from './task-finalizer.ts';
+import { finishCurrentTask } from './finish.ts';
+import {
+  createPythonRegressionDraft,
+  listPythonRegressionDrafts,
+  listPythonRegressions,
+  publishPythonRegression,
+  readPythonRegression,
+  readPythonRegressionDraft,
+  runPythonRegression,
+  markPythonRegressionsStaleForPlanHash,
+} from './python-regression.ts';
 
 const args = process.argv.slice(2);
 const packageMetadata = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
@@ -39,28 +53,35 @@ Commands:
   configure --project PROJECT_DIRECTORY --host <${hostNames}> [--scope project|user] [init options] [--force]
   install-skill [--path SKILLS_DIRECTORY] [--force]   (Codex compatibility alias)
   install-host <${hostNames}> [--scope project|user] [--project PROJECT_DIRECTORY] [--path SKILLS_DIRECTORY] [--force]
-  doctor | validate | migrate | index rebuild | prompts sync
+  doctor | validate | migrate | index rebuild
   update [--force] [--migrate]
+  check --request TEXT [--module ID] [--task ID] [--session SESSION_KEY] [--platforms web,android,ios] [--risk low|medium|high|critical] [execution context flags]
+  continue [--session SESSION_KEY]
+  finish [--session SESSION_KEY]
   plan apply --file PLAN_DRAFT.json | --stdin
-  start --request TEXT --module ID --task ID [--module-name NAME] [--task-name NAME] [--platforms web,android,ios] [--risk low|medium|high|critical]
-  review --module MODULE --task TASK --approve --confirmed-by USER [--confirmation-source current-chat-explicit-approval]
-  test --module MODULE --task TASK [--scenario SCENARIO] [execution context flags]
+  start --request TEXT --module ID --task ID [--session SESSION_KEY] [--module-name NAME] [--task-name NAME] [--platforms web,android,ios] [--risk low|medium|high|critical]
+  review --module MODULE --task TASK --approve --confirmed-by USER [--session SESSION_KEY] [--confirmation-source current-chat-explicit-approval]
+  test --module MODULE --task TASK [--session SESSION_KEY] [--scenario SCENARIO] [execution context flags]
   archive --module MODULE --task TASK
   Compatibility and administration:
   workflow bootstrap --request TEXT --module ID --task ID [--module-name NAME] [--task-name NAME] [--platforms web,android,ios] [--risk low|medium|high|critical]
   workflow status --module ID --task ID
-  operation generate --module MODULE --task TASK [--run RUN_ID] [--scenario SCENARIO]
-  operation replay OPERATION_ID --module MODULE --task TASK [execution context flags]
+  session bind --module MODULE --task TASK [--run RUN] [--session SESSION_KEY] [--session-host HOST] | session current|clear|list [--session SESSION_KEY]
+  regression draft --module MODULE --task TASK --run RUN_ID --file SCRIPT.py [--id SCRIPT_ID] [--session SESSION_KEY] [--python PYTHON]
+  regression drafts [--session SESSION_KEY] | regression draft-show DRAFT_ID [--session SESSION_KEY]
+  regression publish --module MODULE --task TASK --draft DRAFT_ID --confirmed-by HUMAN [--confirmation-source current-chat-explicit-approval] [--replace] [--session SESSION_KEY]
+  regression list --module MODULE --task TASK | regression show SCRIPT_ID --module MODULE --task TASK
+  regression run SCRIPT_ID --module MODULE --task TASK [--python PYTHON] [--bridge HOST_BRIDGE] [--timeout-seconds N]
   impact analyze [--base REF] [--head REF] [--changed-files FILE1,FILE2]
   release check [--profile fast|normal|full] [--base REF] [--head REF] [--changed-files FILE1,FILE2] [--plan-only] [execution context flags]
-  release list | release show|complete|report CHECK_ID
+  release list | release show|report CHECK_ID
   host list | host attest --id ID --capabilities CAP1,CAP2 --permission-status verified|missing|unknown [--host HOST] [--version VERSION] | host import --file HOST_CAPABILITIES.json | host doctor [--platform android|ios]
   context module MODULE
   module list | module create ID --name NAME [--description TEXT] [--platforms web,android,ios] [--source-hints PATHS] [--entry-points PATHS] [--dependencies MODULES] | module update ID [--name NAME] [--description TEXT] [--risk LEVEL] [same mapping flags] | module archive ID | module plan ID | module coverage ID
-  task list | task create ID --module MODULE [--name NAME] [--priority p0|p1|p2|p3] [--frequency every-change|every-release|scheduled|manual] [--release-gate true|false] [--estimated-minutes N] [--tags TAGS] [--triggers PATHS] [--golden-path] | task update ID --module MODULE [same metadata flags] | task plan ID --module MODULE | task explore ID --module MODULE [execution context flags] | task run ID --module MODULE [--operation OPERATION_ID] [--scenario SCENARIO] [--environment ENV] [--platform PLATFORM] [--role ROLE] [--device DEVICE] [--device-model MODEL] [--os-version VERSION] [--app-version VERSION] [--web-build BUILD] [--test-data-fingerprint FINGERPRINT] | task operation generate|list|show|review ID --module MODULE [--run RUN_ID] [--approve|--reject] [--confirmed-by HUMAN] | task regression sync|show|run|complete ID --module MODULE | task review ID --module MODULE --approve --confirmed-by USER [--confirmation-source current-chat-explicit-approval] | task archive ID --module MODULE
-  module regression show|run|complete MODULE [--priority p0|p1|p2|p3]
+  task list | task create ID --module MODULE [metadata flags] | task update ID --module MODULE [metadata flags] | task plan|finalize|explore|run|review|archive ID --module MODULE | task regression show|run ID --module MODULE
+  module regression show|run MODULE [--priority p0|p1|p2|p3]
   memory list | memory search TEXT | memory add ID --module MODULE [--task TASK] --title TEXT --content TEXT | memory review ID --module MODULE [--task TASK] --approve|--reject
-  run step RUN --action TEXT --detail TEXT --screenshot PATH [--operation-action launch|navigate|click|input|fill|swipe|back|wait|assert|screenshot|reset|restart-app] [--safety-action ACTION] [--scenario SCENARIO] [--status passed|failed|paused|blocked|adapted] [--visual-inspection performed|not-required|skipped] [--execution-mode host-automated|user-assisted|system-component-blocked|preseeded-test-data] [--operation-step STEP] [--locator-strategy STRATEGY] [--locator-value VALUE] [--actual-locator-strategy STRATEGY] [--actual-locator-value VALUE] [--input-refs key=ref,key=ref] [--expected-state TEXT] [--actual-state TEXT] [--adaptation TEXT]
+  run step RUN --action TEXT --detail TEXT --screenshot PATH [--ui-action launch|navigate|click|input|fill|swipe|back|wait|assert|screenshot|reset|restart-app] [--safety-action ACTION] [--scenario SCENARIO] [--status passed|failed|paused|blocked|adapted] [--visual-inspection performed|not-required|skipped] [--execution-mode host-automated|user-assisted|system-component-blocked|preseeded-test-data] [--locator-strategy STRATEGY] [--locator-value VALUE] [--actual-locator-strategy STRATEGY] [--actual-locator-value VALUE] [--input-refs key=ref,key=ref] [--expected-state TEXT] [--actual-state TEXT] [--adaptation TEXT]
   run evidence RUN --type TYPE --summary TEXT [--file PATH]
   run cleanup RUN --scenario ID --cleanup TEXT --actual TEXT --status passed|failed|blocked|paused|inconclusive [--screenshot PATH]
   run recover RUN --action wait|refresh|back|restart-app|reset-sandbox-data|reconnect-mcp|fallback-locator|resume-checkpoint --reason TEXT --detail TEXT --outcome continued|blocked|paused|failed [--failed-step STEP]
@@ -69,18 +90,18 @@ Commands:
   skill list | skill validate
 `;
 
-const usage = `QA Agent — AI-guided business validation and regression testing
+const usage = `QA Agent — simple project-aware testing
 
 Common commands:
-  init [host flags]                         Initialize the current project
-  start --request TEXT --module ID --task ID
-  plan apply --file PLAN_DRAFT.json         Materialize the AI-reviewed Scenario matrix
-  review --module MODULE --task TASK --approve --confirmed-by USER
-  test --module MODULE --task TASK
-  archive --module MODULE --task TASK
-  doctor                                    Check project and test-tool readiness
+  init [host flags]       Initialize the current project
+  check --request TEXT    Start or resume an ordinary QA check
+  continue                Continue the active QA task
+  finish                  End the current QA session
+  doctor                  Check project and test-tool readiness
+  update [--migrate]      Update managed integration files
 
-Run qa-agent help --advanced for the complete CLI reference.
+In an Agent conversation, you normally only need to say what to test, “continue”, or “finish”.
+Run qa-agent help --advanced for Python regression, release, and administration commands.
 `;
 
 function flag(name: string): string | undefined { const position = args.indexOf(name); return position === -1 ? undefined : args[position + 1]; }
@@ -148,65 +169,25 @@ function locatorFromFlags(prefix = ''): Locator | undefined {
   return { strategy: strategy as Locator['strategy'], value };
 }
 
-function runContextFromFlags(): Partial<ExecutionSnapshot> & { operationId?: string } {
-  return { environment: flag('--environment'), platform: flag('--platform'), role: flag('--role'), scenarioId: flag('--scenario'), operationId: flag('--operation'), device: flag('--device'), deviceModel: flag('--device-model'), osVersion: flag('--os-version'), appVersion: flag('--app-version'), webBuild: flag('--web-build'), testDataFingerprint: flag('--test-data-fingerprint') };
+function runContextFromFlags(): Partial<ExecutionSnapshot> {
+  return { environment: flag('--environment'), platform: flag('--platform'), role: flag('--role'), scenarioId: flag('--scenario'), device: flag('--device'), deviceModel: flag('--device-model'), osVersion: flag('--os-version'), appVersion: flag('--app-version'), webBuild: flag('--web-build'), testDataFingerprint: flag('--test-data-fingerprint') };
 }
 
-function executionEnvelope(projectRoot: string, run: TestRun): Record<string, unknown> {
-  const mode = run.mode ?? (run.replayStatus === 'not_replay' ? 'explore' : 'replay');
+function executionEnvelope(run: TestRun): Record<string, unknown> {
   const running = run.status === 'running';
   const taskDirectory = `.qa-agent/modules/${run.moduleId}/tasks/${run.taskId}`;
   const runDirectory = `${taskDirectory}/runs/${run.id}`;
-  const assetContract = {
-    taskDirectory,
-    runDirectory,
-    runJson: `${runDirectory}/run.json`,
-    report: `${runDirectory}/report.md`,
-    screenshotsDirectory: `${runDirectory}/screenshots/`,
-    evidenceDirectory: `${runDirectory}/evidence/`,
-  };
-  const common = {
+  return {
     ...run,
-    executionMode: mode,
+    executionMode: 'explore',
     uiExecutionAllowed: running,
     runId: running ? run.id : undefined,
     mustStop: !running,
     manualReportAllowed: false,
     runtimeReportGenerated: run.reportGeneratedBy === 'qa-agent-runtime',
-    assetContract,
-    forbiddenActions: running
-      ? ['manual-report.write', 'pass.claim-before-run-complete']
-      : ['ui.execute', 'manual-report.write', 'pass.claim', 'operation-candidate.fabricate'],
-  };
-  if (mode === 'replay' && run.operationPlanId) {
-    const task = readTask(projectRoot, run.moduleId, run.taskId);
-    const operationPlan = readOperation(projectRoot, task, run.operationPlanId);
-    const cursor = run.replayCursor ?? 0;
-    return {
-      ...common,
-      planningAllowed: false,
-      sourceReviewAllowed: false,
-      strictStepOrder: true,
-      operationPlan,
-      nextOperationStep: operationPlan.steps[cursor],
-      remainingOperationSteps: Math.max(0, operationPlan.steps.length - cursor),
-      checkpoints: operationPlan.checkpoints ?? [],
-      next: running
-        ? (operationPlan.steps[cursor] ? `Execute OperationPlan step ${operationPlan.steps[cursor]!.id}.` : 'Record declared assertions and cleanup, then run complete.')
-        : run.reportGeneratedBy === 'qa-agent-runtime'
-          ? `Stop UI execution. Inspect the Runtime report at ${run.reportPath}.`
-          : run.conclusion,
-    };
-  }
-  return {
-    ...common,
-    planningAllowed: true,
-    sourceReviewAllowed: true,
-    next: running
-      ? 'Execute the approved exploratory flow and persist every UI action, screenshot, assertion, and cleanup.'
-      : run.reportGeneratedBy === 'qa-agent-runtime'
-        ? `Stop UI execution. Inspect the Runtime report at ${run.reportPath}. Do not write a separate report.`
-        : run.conclusion,
+    assetContract: { taskDirectory, runDirectory, runJson: `${runDirectory}/run.json`, report: `${runDirectory}/report.md`, screenshotsDirectory: `${runDirectory}/screenshots/`, evidenceDirectory: `${runDirectory}/evidence/` },
+    forbiddenActions: running ? ['manual-report.write', 'pass.claim-before-run-complete'] : ['ui.execute', 'manual-report.write', 'pass.claim'],
+    next: running ? 'Execute the approved business flow and persist every UI action, screenshot, assertion, and cleanup.' : run.reportGeneratedBy === 'qa-agent-runtime' ? `Stop UI execution. Inspect the Runtime report at ${run.reportPath}.` : run.conclusion,
   };
 }
 
@@ -228,11 +209,13 @@ function root(): string { return requireProjectRoot(); }
 function bootstrapFromFlags(projectRoot: string): void {
   const risk = flag('--risk');
   if (risk && !['low', 'medium', 'high', 'critical'].includes(risk)) throw new Error('--risk must be low, medium, high, or critical.');
-  output(bootstrapWorkflow(projectRoot, {
+  const state = bootstrapWorkflow(projectRoot, {
     request: requiredFlag('--request'), moduleId: requiredFlag('--module'), taskId: requiredFlag('--task'),
     moduleName: flag('--module-name'), taskName: flag('--task-name'), platforms: listFlag('--platforms'),
     riskLevel: risk as 'low' | 'medium' | 'high' | 'critical' | undefined,
-  }));
+  });
+  const session = bindTaskSession(projectRoot, { sessionKey: flag('--session'), host: flag('--session-host'), moduleId: state.moduleId, taskId: state.taskId, runId: state.runId });
+  output({ ...state, session });
 }
 
 function archiveTask(projectRoot: string, moduleId: string, taskId: string): void {
@@ -246,38 +229,8 @@ function archiveTask(projectRoot: string, moduleId: string, taskId: string): voi
   if (normalizeTaskState(task.metadata.status) !== 'completed') transitionTaskState(projectRoot, task, 'completed', 'task_completed', 'archive_gates_satisfied', { idempotencyKey: `task-completed:${task.metadata.id}:${task.metadata.version}` });
   transitionTaskState(projectRoot, task, 'archived', 'task_archived', 'archive_assets_complete', { idempotencyKey: `task-archived:${task.metadata.id}:${task.metadata.version}` });
   task.metadata.version += 1; task.updatedAt = now(); saveTask(projectRoot, task); rebuildIndexes(projectRoot);
-  output({ ...task, archive: completeness, workflow: workflowStatus(projectRoot, moduleId, taskId) });
-}
-
-function generateOperationPlan(projectRoot: string, moduleId: string, taskId: string): void {
-  const task = readTask(projectRoot, moduleId, taskId);
-  const requestedRunId = flag('--run');
-  const requestedScenario = flag('--scenario');
-  let run: TestRun;
-  if (requestedRunId) {
-    run = readRunById(projectRoot, requestedRunId);
-  } else {
-    const runPaths = listFiles(join(taskDirectory(projectRoot, moduleId, taskId), 'runs'), path => path.endsWith('/run.json'));
-    const runs = runPaths.map(path => readJson<TestRun>(path)).filter(item => item.moduleId === moduleId && item.taskId === taskId);
-    run = runs.sort((left, right) => (right.completedAt ?? right.startedAt).localeCompare(left.completedAt ?? left.startedAt))[0]!;
-  }
-  if (!run) throw new Error('No Run was found for this Task. Complete a successful exploratory Run before generating an OperationPlan.');
-  if (run.moduleId !== moduleId || run.taskId !== taskId) throw new Error(`Run ${run.id} does not belong to ${moduleId}/${taskId}.`);
-  if (!['passed', 'adapted'].includes(run.status) || !run.completedAt) throw new Error(`Run ${run.id} is not a completed successful Run; OperationPlan generation requires status passed or adapted.`);
-  if (run.replayStatus === 'replayed') throw new Error(`Run ${run.id} is already a replay Run; generate the OperationPlan from the original successful exploratory Run.`);
-  if (requestedScenario && !task.scenarios.some(scenario => scenario.id === requestedScenario)) throw new Error(`Scenario ${requestedScenario} was not found in Task ${taskId}.`);
-
-  const existing = listOperations(projectRoot, task).filter(plan => plan.sourceRunId === run.id && (!requestedScenario || plan.scenarioId === requestedScenario));
-  if (existing.length) {
-    output({ command: 'operation generate', deprecatedAlias: true, canonicalBehavior: 'Runtime automatically generates OperationPlan candidates when an exploratory Run completes.', generated: false, approvalRequired: true, runId: run.id, operationCandidates: existing.map(plan => plan.id), operationCandidateIssues: run.operationCandidateIssues ?? [], next: 'Present these OperationPlan candidates to the user. After approval, run qa-agent test for a real regression check, then qa-agent archive.' });
-    return;
-  }
-
-  const result = createOperationCandidates(projectRoot, task, run, { scenarioId: requestedScenario });
-  run.operationCandidates = [...new Set([...(run.operationCandidates ?? []), ...result.candidates])];
-  run.operationCandidateIssues = result.issues.length ? result.issues : undefined;
-  saveRun(projectRoot, run); task.updatedAt = now(); saveTask(projectRoot, task); rebuildIndexes(projectRoot);
-  output({ command: 'operation generate', deprecatedAlias: true, canonicalBehavior: 'Runtime automatically generates OperationPlan candidates when an exploratory Run completes.', generated: result.candidates.length > 0, approvalRequired: result.candidates.length > 0, runId: run.id, operationCandidates: result.candidates, operationCandidateIssues: result.issues, next: result.candidates.length ? 'Present the candidates and request explicit approval. After approval, run qa-agent test for a real regression check, then qa-agent archive.' : 'Fix the listed replay contract issues, complete a valid successful Run, and complete a new valid exploratory Run; the Runtime will generate candidates automatically.' });
+  const sessionCleared = clearTaskSessionIfMatches(projectRoot, moduleId, taskId, flag('--session'));
+  output({ ...task, archive: completeness, sessionCleared, workflow: workflowStatus(projectRoot, moduleId, taskId) });
 }
 
 function reviewTask(projectRoot: string, moduleId: string, taskId: string): TestTask {
@@ -295,7 +248,6 @@ function reviewTask(projectRoot: string, moduleId: string, taskId: string): Test
   if (currentState === 'running') throw new Error(`Task ${task.metadata.id} has an active Run; stop or complete it before approving a changed TestPlan.`);
   if (currentState !== 'awaiting_approval') transitionTaskState(projectRoot, task, 'awaiting_approval', 'test_plan_approval_requested', 'current_plan_ready_for_review', { actor: { type: 'agent', id: 'qa-agent' }, artifactHash: currentPlanHash, idempotencyKey: `test-plan-review-requested:${task.metadata.id}:${currentPlanHash}` });
   task.metadata.approval = { confirmedBy, confirmedAt: now(), confirmationSource: confirmationSource as 'current-chat-explicit-approval' | 'external-review-record', statement: 'User confirmed the generated test cases and business logic before execution.', planHash: currentPlanHash };
-  markOperationsStaleForPlanHash(projectRoot, task, currentPlanHash);
   transitionTaskState(projectRoot, task, 'ready', 'test_plan_approved', 'explicit_chat_approval', { actor: { type: 'human', id: confirmedBy }, artifactHash: task.metadata.approval.planHash, idempotencyKey: `test-plan-approved:${task.metadata.id}:${task.metadata.approval.planHash}:${confirmedBy}` });
   task.metadata.version += 1; task.updatedAt = now(); saveTask(projectRoot, task); rebuildIndexes(projectRoot);
   return task;
@@ -349,11 +301,63 @@ async function main(): Promise<void> {
   }
   if (group === 'update') {
     const projectRoot = root();
-    const promptPaths = syncProjectPrompts(projectRoot);
     const migration = args.includes('--migrate') ? migrateProjectArtifacts(projectRoot) : undefined;
     const hostUpdate = updateHostIntegrations(projectRoot, { force: args.includes('--force'), migrate: args.includes('--migrate') });
     writeJsonAtomic(qaPath(projectRoot, '.version'), { version: packageMetadata.version, updatedAt: now() });
-    output({ projectRoot, prompts: promptPaths, migration, hostUpdate, migrated: args.includes('--migrate'), next: hostUpdate.conflicts.length ? 'Review conflicts or rerun qa-agent update --force.' : 'Project templates are current.' }); return;
+    output({ projectRoot, migration, hostUpdate, migrated: args.includes('--migrate'), next: hostUpdate.conflicts.length ? 'Review conflicts or rerun qa-agent update --force.' : 'Project integrations are current.' }); return;
+  }
+  if (group === 'check') {
+    const projectRoot = root();
+    const risk = flag('--risk');
+    if (risk && !['low', 'medium', 'high', 'critical'].includes(risk)) throw new Error('--risk must be low, medium, high, or critical.');
+    const quickRequest = flag('--request') ?? (action && !action.startsWith('--') ? action : undefined);
+    if (!quickRequest) throw new Error('Provide the QA request as qa-agent check "<request>" or with --request.');
+    const prepared = prepareQuickCheck(projectRoot, {
+      request: quickRequest,
+      moduleId: flag('--module'),
+      taskId: flag('--task'),
+      moduleName: flag('--module-name'),
+      taskName: flag('--task-name'),
+      platforms: listFlag('--platforms'),
+      riskLevel: risk as 'low' | 'medium' | 'high' | 'critical' | undefined,
+    });
+    const scenarioId = flag('--scenario') ?? prepared.task.scenarios[0]?.id;
+    const started = beginAgentGuidedRun(projectRoot, prepared.task, { ...runContextFromFlags(), scenarioId });
+    rebuildIndexes(projectRoot);
+    const session = bindTaskSession(projectRoot, { sessionKey: flag('--session'), host: flag('--session-host'), moduleId: prepared.moduleId, taskId: prepared.taskId, runId: started.id });
+    output({
+      message: started.status === 'running' ? 'Quick Check started' : 'Quick Check saved but cannot execute yet',
+      quickCheck: { moduleId: prepared.moduleId, taskId: prepared.taskId, moduleCreated: prepared.moduleCreated, taskCreated: prepared.taskCreated, approvalPolicy: 'side-effect-only' },
+      session,
+      ...executionEnvelope(started),
+      workflow: workflowStatus(projectRoot, prepared.moduleId, prepared.taskId, prepared.task.description),
+    });
+    return;
+  }
+  if (group === 'continue') {
+    output(continueCurrentTask(root(), flag('--session')));
+    return;
+  }
+  if (group === 'finish') {
+    output(finishCurrentTask(root(), flag('--session')));
+    return;
+  }
+  if (group === 'session') {
+    const projectRoot = root();
+    if (action === 'bind') {
+      output(bindTaskSession(projectRoot, {
+        sessionKey: flag('--session'),
+        host: flag('--session-host'),
+        moduleId: requiredFlag('--module'),
+        taskId: requiredFlag('--task'),
+        runId: flag('--run'),
+      }));
+      return;
+    }
+    if (action === 'current') { output(readTaskSession(projectRoot, flag('--session')) ?? { current: false }); return; }
+    if (action === 'clear') { output({ cleared: clearTaskSession(projectRoot, flag('--session')) }); return; }
+    if (action === 'list') { output(listTaskSessions(projectRoot)); return; }
+    throw new Error(`Session command must be bind, current, clear, or list.\n\n${advancedUsage}`);
   }
   if (group === 'plan') {
     if (action !== 'apply') throw new Error(`Plan command must be apply.\n\n${advancedUsage}`);
@@ -367,19 +371,13 @@ async function main(): Promise<void> {
     return;
   }
   if (group === 'start') { bootstrapFromFlags(root()); return; }
-  if (group === 'review') { const projectRoot = root(); const moduleId = requiredFlag('--module'); const taskId = requiredFlag('--task'); const task = reviewTask(projectRoot, moduleId, taskId); output({ task, workflow: workflowStatus(projectRoot, moduleId, taskId) }); return; }
+  if (group === 'review') { const projectRoot = root(); const moduleId = requiredFlag('--module'); const taskId = requiredFlag('--task'); const task = reviewTask(projectRoot, moduleId, taskId); const session = bindTaskSession(projectRoot, { sessionKey: flag('--session'), host: flag('--session-host'), moduleId, taskId }); output({ task, session, workflow: workflowStatus(projectRoot, moduleId, taskId) }); return; }
   if (group === 'test') {
     const projectRoot = root(); const moduleId = requiredFlag('--module'); const taskId = requiredFlag('--task'); const task = readTask(projectRoot, moduleId, taskId);
-    const requestedScenario = flag('--scenario');
-    const replayable = listOperations(projectRoot, task)
-      .filter(plan => ['approved_unverified', 'validated'].includes(plan.status) && plan.planHash === testPlanHash(task) && (!requestedScenario || plan.scenarioId === requestedScenario))
-      .sort((left, right) => Number(right.status === 'approved_unverified') - Number(left.status === 'approved_unverified') || right.version - left.version);
-    const scenarioIds = [...new Set(replayable.map(plan => plan.scenarioId))];
-    if (!requestedScenario && scenarioIds.length > 1) throw new Error('Multiple replayable OperationPlans exist; specify --scenario to select one.');
-    const operation = replayable[0];
-    const started = beginAgentGuidedRun(projectRoot, task, { ...runContextFromFlags(), operationId: operation?.id, scenarioId: operation?.scenarioId ?? requestedScenario });
+    const started = beginAgentGuidedRun(projectRoot, task, runContextFromFlags());
     rebuildIndexes(projectRoot);
-    output({ ...executionEnvelope(projectRoot, started), mode: operation ? 'replay' : 'explore', workflow: workflowStatus(projectRoot, moduleId, taskId), canonicalPrompts: readProjectPromptBundle(projectRoot) });
+    const session = bindTaskSession(projectRoot, { sessionKey: flag('--session'), host: flag('--session-host'), moduleId, taskId, runId: started.id });
+    output({ ...executionEnvelope(started), session, workflow: workflowStatus(projectRoot, moduleId, taskId) });
     return;
   }
   if (group === 'archive') { archiveTask(root(), requiredFlag('--module'), requiredFlag('--task')); return; }
@@ -434,21 +432,78 @@ ${advancedUsage}`);
     config.connections = snapshot.connections.map(connection => ({ id: connection.id, capabilities: [...new Set(connection.capabilities)], status: connection.status ?? 'available', permissionStatus: connection.permissionStatus ?? 'unknown', version: connection.version, host: snapshot.host, attestedAt: snapshot.collectedAt ?? now() }));
     writeJsonAtomic(path, config); output(config); return;
   }
-  if (group === 'operation') {
-    if (action === 'generate') {
-      generateOperationPlan(root(), requiredFlag('--module'), requiredFlag('--task')); return;
-    }
-    if (action !== 'replay') throw new Error(`Unsupported command.\n\n${advancedUsage}`);
+  if (group === 'regression') {
     const projectRoot = root();
-    if (!subject || subject.startsWith('--')) throw new Error('OperationPlan id or Task-relative JSON ref is required.');
-    const moduleId = requiredFlag('--module');
-    const taskId = requiredFlag('--task');
-    const task = readTask(projectRoot, moduleId, taskId);
-    const operationPlan = readOperation(projectRoot, task, subject);
-    const started = beginAgentGuidedRun(projectRoot, task, { ...runContextFromFlags(), operationId: operationPlan.id, scenarioId: operationPlan.scenarioId });
-    rebuildIndexes(projectRoot);
-    output({ ...executionEnvelope(projectRoot, started), canonicalPrompts: readProjectPromptBundle(projectRoot) });
-    return;
+    if (action === 'draft') {
+      const result = createPythonRegressionDraft(projectRoot, {
+        moduleId: requiredFlag('--module'),
+        taskId: requiredFlag('--task'),
+        runId: requiredFlag('--run'),
+        scriptId: flag('--id'),
+        scriptFile: requiredFlag('--file'),
+        sessionKey: flag('--session'),
+        pythonCommand: flag('--python'),
+      });
+      output({
+        ...result,
+        approvalRequired: true,
+        next: 'Show the complete script or diff to the user. Publish only after explicit approval.',
+      });
+      return;
+    }
+    if (action === 'drafts') {
+      output(listPythonRegressionDrafts(projectRoot, flag('--session')));
+      return;
+    }
+    if (action === 'draft-show') {
+      if (!subject || subject.startsWith('--')) throw new Error('Python regression draft id is required.');
+      output(readPythonRegressionDraft(projectRoot, subject, flag('--session')));
+      return;
+    }
+    if (action === 'publish') {
+      const approvalSource = (flag('--confirmation-source') ?? 'current-chat-explicit-approval') as 'current-chat-explicit-approval' | 'external-review-record';
+      if (!['current-chat-explicit-approval', 'external-review-record'].includes(approvalSource)) throw new Error('--confirmation-source must be current-chat-explicit-approval or external-review-record.');
+      const result = publishPythonRegression(projectRoot, {
+        moduleId: requiredFlag('--module'),
+        taskId: requiredFlag('--task'),
+        draftId: requiredFlag('--draft'),
+        confirmedBy: requiredFlag('--confirmed-by'),
+        approvalSource,
+        sessionKey: flag('--session'),
+        pythonCommand: flag('--python'),
+        replace: args.includes('--replace'),
+      });
+      rebuildIndexes(projectRoot);
+      output({ ...result, next: 'Run the approved Python script once. Runtime will mark the script validated when its execution contract completes.' });
+      return;
+    }
+    if (action === 'list') {
+      output(listPythonRegressions(projectRoot, requiredFlag('--module'), requiredFlag('--task')));
+      return;
+    }
+    if (action === 'show') {
+      if (!subject || subject.startsWith('--')) throw new Error('Python regression script id is required.');
+      output(readPythonRegression(projectRoot, requiredFlag('--module'), requiredFlag('--task'), subject));
+      return;
+    }
+    if (action === 'run') {
+      if (!subject || subject.startsWith('--')) throw new Error('Python regression script id is required.');
+      const timeoutSeconds = flag('--timeout-seconds');
+      const timeoutMs = timeoutSeconds === undefined ? undefined : Number(timeoutSeconds) * 1000;
+      if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) throw new Error('--timeout-seconds must be a positive number.');
+      const result = runPythonRegression(projectRoot, {
+        moduleId: requiredFlag('--module'),
+        taskId: requiredFlag('--task'),
+        scriptId: subject,
+        pythonCommand: flag('--python'),
+        bridge: flag('--bridge'),
+        timeoutMs,
+      });
+      rebuildIndexes(projectRoot);
+      output({ ...result, reportPath: join(taskDirectory(projectRoot, result.moduleId, result.taskId), 'regression-runs', result.id, result.reportRef), next: 'Agent should inspect the structured result, report, screenshots, stdout, and stderr without replanning the script steps.' });
+      return;
+    }
+    throw new Error(`Regression command must be draft, drafts, draft-show, publish, list, show, or run.\n\n${advancedUsage}`);
   }
   if (group === 'impact') {
     if (action !== 'analyze') throw new Error(`Unsupported command.
@@ -459,29 +514,18 @@ ${advancedUsage}`);
   }
   if (group === 'release') {
     const projectRoot = root();
-    if (action === 'list') {
-      const checks = listFiles(qaPath(projectRoot, 'release-checks'), path => path.endsWith('.json')).map(path => readJson<ReleaseCheck>(path)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-      output(checks); return;
-    }
+    if (action === 'list') { output(listFiles(qaPath(projectRoot, 'release-checks'), path => path.endsWith('.json')).map(path => readJson<ReleaseCheck>(path)).sort((a, b) => b.createdAt.localeCompare(a.createdAt))); return; }
     if (action === 'check') {
       const profile = regressionProfile();
       const impact = analyzeProjectImpact(projectRoot, { base: flag('--base'), head: flag('--head'), changedFiles: listFlag('--changed-files') });
-      const suite = buildReleaseRegressionSuite(projectRoot, impact, profile);
-      const check = createReleaseCheck(suite, impact, profile);
-      saveReleaseCheck(projectRoot, check);
-      writeReleaseReport(projectRoot, check);
-      if (args.includes('--plan-only')) { output(check); return; }
-      const first = suite.members[0];
-      if (!first) {
-        if (check.releaseDecision === 'pending') { check.status = 'blocked'; check.releaseDecision = 'review'; }
-        check.updatedAt = now();
-        saveReleaseCheck(projectRoot, check); writeReleaseReport(projectRoot, check); output(check); return;
-      }
-      const task = readTask(projectRoot, first.moduleId, first.taskId);
-      const context = buildExecutionSnapshot(projectRoot, task, { environment: flag('--environment'), platform: flag('--platform'), role: flag('--role'), device: flag('--device'), deviceModel: flag('--device-model'), osVersion: flag('--os-version'), appVersion: flag('--app-version'), webBuild: flag('--web-build'), testDataFingerprint: flag('--test-data-fingerprint') });
-      const regressionRun = beginRegressionRun(projectRoot, suite, context);
-      attachRegressionRun(check, regressionRun);
-      if (!['running', 'pending'].includes(regressionRun.status)) finalizeReleaseCheck(check, regressionRun);
+      const selection = buildReleaseRegressionSelection(projectRoot, impact, profile);
+      const check = createReleaseCheck(selection, impact, profile);
+      saveReleaseCheck(projectRoot, check); writeReleaseReport(projectRoot, check);
+      if (args.includes('--plan-only') || !selection.members.length) { output(check); return; }
+      const timeoutSeconds = flag('--timeout-seconds'); const timeoutMs = timeoutSeconds === undefined ? undefined : Number(timeoutSeconds) * 1000;
+      if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) throw new Error('--timeout-seconds must be a positive number.');
+      const regressionRun = runRegressionSelection(projectRoot, selection, { pythonCommand: flag('--python'), bridge: flag('--bridge'), timeoutMs });
+      attachRegressionRun(check, regressionRun); finalizeReleaseCheck(check, regressionRun);
       saveReleaseCheck(projectRoot, check); writeReleaseReport(projectRoot, check, regressionRun); rebuildIndexes(projectRoot);
       output({ releaseCheck: check, regressionRun }); return;
     }
@@ -489,18 +533,7 @@ ${advancedUsage}`);
     const check = readReleaseCheck(projectRoot, subject);
     if (action === 'show') { output(check); return; }
     if (action === 'report') { output(qaPath(projectRoot, 'reports', `${check.id}.md`)); return; }
-    if (action === 'complete') {
-      if (!check.regressionRunId) throw new Error(`Release check ${check.id} has no regression run.`);
-      const regressionRun = readJson<RegressionRun>(qaPath(projectRoot, 'regression-runs', `${check.regressionRunId}.json`));
-      const completed = completeRegressionRun(projectRoot, regressionRun);
-      attachRegressionRun(check, completed);
-      if (!['running', 'pending'].includes(completed.status)) finalizeReleaseCheck(check, completed);
-      saveReleaseCheck(projectRoot, check); writeReleaseReport(projectRoot, check, completed); rebuildIndexes(projectRoot);
-      output({ releaseCheck: check, regressionRun: completed }); return;
-    }
-    throw new Error(`Unsupported command.
-
-${advancedUsage}`);
+    throw new Error(`Release command must be check, list, show, or report.\n\n${advancedUsage}`);
   }
   if (group === 'validate') {
     const result = validateProject(root()); output(result); if (!result.valid) process.exitCode = 1; return;
@@ -518,10 +551,9 @@ ${advancedUsage}`);
     const module = readModule(projectRoot, subject);
     const memories = readIndex<ProjectMemory>(projectRoot, 'memories').filter(memory => !memory.moduleId || memory.moduleId === subject).filter(memory => memory.status === 'active');
     const tasks = readIndex<{ moduleId: string }>(projectRoot, 'tasks').filter(task => task.moduleId === subject);
-    output({ project: readProject(projectRoot), module, canonicalPrompts: readProjectPromptBundle(projectRoot), memories, tasks, skills: readIndex(projectRoot, 'skills'), capabilities: availableCapabilities(projectRoot), policy: readJson(qaPath(projectRoot, 'policies.json')) }); return;
+    output({ project: readProject(projectRoot), module, memories, tasks, skills: readIndex(projectRoot, 'skills'), capabilities: availableCapabilities(projectRoot), policy: readJson(qaPath(projectRoot, 'policies.json')) }); return;
   }
   if (group === 'index' && action === 'rebuild') { output(rebuildIndexes(root())); return; }
-  if (group === 'prompts' && action === 'sync') { output({ prompts: syncProjectPrompts(root()) }); return; }
   if (group === 'module') {
     const projectRoot = root();
     if (action === 'list') return output(readIndex(projectRoot, 'modules'));
@@ -557,6 +589,8 @@ ${advancedUsage}`);
   }
   if (group === 'task') {
     const projectRoot = root();
+    if (action === 'operation') throw new Error('Legacy task operation commands were removed in v0.6.0. Use reviewed Python regression scripts.');
+    if (action === 'regression' && subject === 'sync') throw new Error('Task regression sync was removed in v0.6.0. Python regression selections are computed directly.');
     if (action === 'list') return output(readIndex(projectRoot, 'tasks'));
     const moduleId = requiredFlag('--module');
     if (!subject) throw new Error('task id is required.');
@@ -577,59 +611,32 @@ ${advancedUsage}`);
         if (normalizeTaskState(task.metadata.status) === 'running') throw new Error(`Task ${task.metadata.id} has an active Run; stop or complete it before changing the approved TestPlan.`);
         invalidateApproval(task);
         if (normalizeTaskState(task.metadata.status) !== 'awaiting_approval') transitionTaskState(projectRoot, task, 'awaiting_approval', 'test_plan_changed', 'task_update_changed_plan_hash', { actor: { type: 'agent', id: 'qa-agent' }, artifactHash: currentPlanHash, idempotencyKey: `test-plan-changed:${task.metadata.id}:${currentPlanHash}` });
-        markOperationsStaleForPlanHash(projectRoot, task, currentPlanHash);
+              markPythonRegressionsStaleForPlanHash(projectRoot, task, currentPlanHash);
       }
       saveTask(projectRoot, task); rebuildIndexes(projectRoot); output(task); return;
     }
-    const nestedAction = action === 'operation' || action === 'regression' ? subject : undefined;
+    const nestedAction = action === 'regression' ? subject : undefined;
     const taskId = nestedAction ? (flag('--task') ?? args[3]) : subject;
-    if (!taskId || taskId.startsWith('--')) throw new Error('task id is required for operation/regression commands.');
+    if (!taskId || taskId.startsWith('--')) throw new Error('task id is required.');
     const task = readTask(projectRoot, moduleId, taskId);
     if (action === 'plan') return output(taskPlan(task));
-    if (action === 'operation') {
-      const operationAction = ['generate', 'list', 'show', 'review'].includes(subject ?? '') ? subject : args[3];
-      if (operationAction === 'generate') { generateOperationPlan(projectRoot, moduleId, taskId); return; }
-      if (operationAction === 'list') return output(operationSummary(projectRoot, task));
-      if (operationAction === 'show') return output(readOperation(projectRoot, task, requiredFlag('--operation')));
-      if (operationAction === 'review') {
-        const approve = args.includes('--approve'); const reject = args.includes('--reject');
-        if (approve === reject) throw new Error('Specify exactly one of --approve or --reject.');
-        const reviewed = reviewOperation(projectRoot, task, requiredFlag('--operation'), approve ? 'approve' : 'reject', requiredFlag('--confirmed-by')); rebuildIndexes(projectRoot); return output({ operationPlan: reviewed, nextActions: approve ? [{ id: 'validate_operation_plan', command: 'qa-agent test', requiresHuman: false }] : [] });
-      }
-      throw new Error('Operation action must be list, show, or review.');
-    }
+    if (action === 'finalize') return output(finalizeTask(projectRoot, moduleId, taskId, flag('--run')));
     if (action === 'regression') {
-      const regressionAction = ['sync', 'show', 'run', 'complete'].includes(subject ?? '') ? subject : args[3];
-      if (regressionAction === 'sync') return output(syncTaskRegressionSuite(projectRoot, task));
-      if (regressionAction === 'show') return output(readTaskRegressionSuite(projectRoot, task));
+      const regressionAction = ['show', 'run'].includes(subject ?? '') ? subject : args[3];
+      const selection = buildTaskRegressionSelection(projectRoot, task);
+      if (regressionAction === 'show') return output(selection);
       if (regressionAction === 'run') {
-        const suite = readTaskRegressionSuite(projectRoot, task); const context = buildExecutionSnapshot(projectRoot, task, { environment: flag('--environment'), platform: flag('--platform'), role: flag('--role'), scenarioId: flag('--scenario'), device: flag('--device'), deviceModel: flag('--device-model'), osVersion: flag('--os-version'), appVersion: flag('--app-version'), webBuild: flag('--web-build'), testDataFingerprint: flag('--test-data-fingerprint') });
-        const started = beginRegressionRun(projectRoot, suite, context); rebuildIndexes(projectRoot); return output(started);
+        const timeoutSeconds = flag('--timeout-seconds'); const timeoutMs = timeoutSeconds === undefined ? undefined : Number(timeoutSeconds) * 1000;
+        if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) throw new Error('--timeout-seconds must be a positive number.');
+        const result = runRegressionSelection(projectRoot, selection, { pythonCommand: flag('--python'), bridge: flag('--bridge'), timeoutMs }); rebuildIndexes(projectRoot); return output(result);
       }
-      if (regressionAction === 'complete') { const regressionRun = readJson<RegressionRun>(qaPath(projectRoot, 'regression-runs', `${requiredFlag('--run')}.json`)); const completed = completeRegressionRun(projectRoot, regressionRun); rebuildIndexes(projectRoot); return output(completed); }
-      throw new Error('Regression action must be sync, show, or run.');
+      throw new Error('Task regression action must be show or run.');
     }
-    if (action === 'review') {
-      const reviewed = reviewTask(projectRoot, moduleId, taskId);
-      output({ ...reviewed, deprecatedAlias: true, canonicalCommand: 'qa-agent review --module MODULE --task TASK --approve --confirmed-by USER', workflow: workflowStatus(projectRoot, moduleId, taskId) }); return;
-    }
-    if (action === 'archive') {
-      archiveTask(projectRoot, moduleId, taskId); return;
-    }
-    if (action === 'explore') {
-      if (flag('--operation')) throw new Error('task explore does not accept --operation. Use qa-agent test for an approved_unverified or validated OperationPlan.');
-      const started = beginAgentGuidedRun(projectRoot, task, { ...runContextFromFlags(), operationId: undefined });
-      rebuildIndexes(projectRoot);
-      const workflow = workflowStatus(projectRoot, moduleId, taskId);
-      output({ ...executionEnvelope(projectRoot, started), workflow, canonicalPrompts: readProjectPromptBundle(projectRoot), deprecatedAlias: true, canonicalCommand: 'qa-agent test --module MODULE --task TASK' });
-      return;
-    }
-    if (action === 'run') {
-      const started = beginAgentGuidedRun(projectRoot, task, runContextFromFlags());
-      rebuildIndexes(projectRoot);
-      const workflow = workflowStatus(projectRoot, moduleId, taskId);
-      output({ ...executionEnvelope(projectRoot, started), workflow, canonicalPrompts: readProjectPromptBundle(projectRoot), deprecatedAlias: true, canonicalCommand: 'qa-agent test --module MODULE --task TASK', compatibilityNote: 'compatibility alias: task run is retained for existing automation only.' });
-      return;
+    if (action === 'review') { const reviewed = reviewTask(projectRoot, moduleId, taskId); output({ ...reviewed, deprecatedAlias: true, canonicalCommand: 'qa-agent review --module MODULE --task TASK --approve --confirmed-by USER', workflow: workflowStatus(projectRoot, moduleId, taskId) }); return; }
+    if (action === 'archive') { archiveTask(projectRoot, moduleId, taskId); return; }
+    if (action === 'explore' || action === 'run') {
+      const started = beginAgentGuidedRun(projectRoot, task, runContextFromFlags()); rebuildIndexes(projectRoot);
+      output({ ...executionEnvelope(started), workflow: workflowStatus(projectRoot, moduleId, taskId), deprecatedAlias: true, canonicalCommand: 'qa-agent test --module MODULE --task TASK' }); return;
     }
   }
   if (group === 'memory') {
@@ -662,44 +669,39 @@ ${advancedUsage}`);
     if (action === 'step') {
       const executionMode = (flag('--execution-mode') ?? 'host-automated') as StepExecutionMode;
       if (!['host-automated', 'user-assisted', 'system-component-blocked', 'preseeded-test-data'].includes(executionMode)) throw new Error('--execution-mode is invalid.');
-      const updated = recordAgentStep(projectRoot, subject, { action: requiredFlag('--action'), operationAction: flag('--operation-action') as 'launch' | 'navigate' | 'click' | 'input' | 'fill' | 'swipe' | 'back' | 'wait' | 'assert' | 'screenshot' | 'reset' | 'restart-app' | undefined, safetyAction: flag('--safety-action'), detail: requiredFlag('--detail'), screenshotPath: requiredFlag('--screenshot'), status: (flag('--status') as RunStatus | undefined) ?? 'passed', visualInspection: (flag('--visual-inspection') as 'performed' | 'not-required' | 'not-applicable' | 'skipped' | undefined) ?? 'not-required', executionMode, operationStepId: flag('--operation-step'), scenarioId: flag('--scenario'), locator: locatorFromFlags(), actualLocator: locatorFromFlags('actual-'), inputRefs: recordFlag('--input-refs'), expectedState: flag('--expected-state'), actualState: flag('--actual-state'), adaptation: flag('--adaptation') });
-      output(executionEnvelope(projectRoot, updated)); return;
+      const updated = recordAgentStep(projectRoot, subject, { action: requiredFlag('--action'), uiAction: flag('--ui-action') as 'launch' | 'navigate' | 'click' | 'input' | 'fill' | 'swipe' | 'back' | 'wait' | 'assert' | 'screenshot' | 'reset' | 'restart-app' | undefined, safetyAction: flag('--safety-action'), detail: requiredFlag('--detail'), screenshotPath: requiredFlag('--screenshot'), status: (flag('--status') as RunStatus | undefined) ?? 'passed', visualInspection: (flag('--visual-inspection') as 'performed' | 'not-required' | 'not-applicable' | 'skipped' | undefined) ?? 'not-required', executionMode, scenarioId: flag('--scenario'), locator: locatorFromFlags(), actualLocator: locatorFromFlags('actual-'), inputRefs: recordFlag('--input-refs'), expectedState: flag('--expected-state'), actualState: flag('--actual-state'), adaptation: flag('--adaptation') });
+      output(executionEnvelope(updated)); return;
     }
     if (action === 'evidence') {
       const updated = recordHostEvidence(projectRoot, subject, { type: requiredFlag('--type'), summary: requiredFlag('--summary'), artifactPath: flag('--file') });
-      output(executionEnvelope(projectRoot, updated)); return;
+      output(executionEnvelope(updated)); return;
     }
     if (action === 'cleanup') {
       const updated = recordCleanupFinding(projectRoot, subject, { scenarioId: requiredFlag('--scenario'), cleanup: requiredFlag('--cleanup'), actual: requiredFlag('--actual'), status: requiredFlag('--status') as RunStatus, screenshotPath: flag('--screenshot') });
-      output(executionEnvelope(projectRoot, updated)); return;
+      output(executionEnvelope(updated)); return;
     }
     if (action === 'recover') {
       const updated = recordRecoveryAttempt(projectRoot, subject, { action: requiredFlag('--action'), reason: requiredFlag('--reason'), detail: requiredFlag('--detail'), outcome: requiredFlag('--outcome') as 'continued' | 'blocked' | 'paused' | 'failed', failedStepId: flag('--failed-step') });
-      output(executionEnvelope(projectRoot, updated)); return;
+      output(executionEnvelope(updated)); return;
     }
     if (action === 'observe') {
       const updated = recordVisualFinding(projectRoot, subject, { scenarioId: requiredFlag('--scenario'), assertionId: requiredFlag('--assertion'), expected: requiredFlag('--expected'), actual: requiredFlag('--actual'), status: requiredFlag('--status') as RunStatus, screenshotPath: flag('--screenshot'), inspectionProvider: flag('--inspection-provider') });
-      output(executionEnvelope(projectRoot, updated)); return;
+      output(executionEnvelope(updated)); return;
     }
     if (action === 'complete') {
       const updated = completeAgentGuidedRun(projectRoot, readTask(projectRoot, (run as { moduleId: string }).moduleId, (run as { taskId: string }).taskId), subject);
-      rebuildIndexes(projectRoot); output(executionEnvelope(projectRoot, updated)); return;
+      rebuildIndexes(projectRoot); output(executionEnvelope(updated)); return;
     }
   }
   if (group === 'module' && action === 'regression') {
-    const projectRoot = root();
-    const regressionAction = subject;
-    const moduleId = args[3];
-    if (!['show', 'run', 'complete'].includes(regressionAction ?? '')) throw new Error(`Unsupported command.\n\n${advancedUsage}`);
+    const projectRoot = root(); const regressionAction = subject; const moduleId = args[3];
+    if (!['show', 'run'].includes(regressionAction ?? '')) throw new Error(`Unsupported command.\n\n${advancedUsage}`);
     if (!moduleId || moduleId.startsWith('--')) throw new Error('module id is required.');
-    if (regressionAction === 'show') return output(buildModuleRegressionSuite(projectRoot, moduleId, priorityValue() ?? 'p3'));
-    if (regressionAction === 'run') {
-      const suite = buildModuleRegressionSuite(projectRoot, moduleId, priorityValue() ?? 'p3'); const first = suite.members[0]; if (!first) throw new Error(`Module ${moduleId} has no validated OperationPlan.`);
-      const task = readTask(projectRoot, moduleId, first.taskId); const context = buildExecutionSnapshot(projectRoot, task, { environment: flag('--environment'), platform: flag('--platform'), role: flag('--role'), device: flag('--device'), deviceModel: flag('--device-model'), osVersion: flag('--os-version'), appVersion: flag('--app-version'), webBuild: flag('--web-build'), testDataFingerprint: flag('--test-data-fingerprint') });
-      const started = beginRegressionRun(projectRoot, suite, context); rebuildIndexes(projectRoot); return output(started);
-    }
-    if (regressionAction === 'complete') { const regressionRun = readJson<RegressionRun>(qaPath(projectRoot, 'regression-runs', `${requiredFlag('--run')}.json`)); const completed = completeRegressionRun(projectRoot, regressionRun); rebuildIndexes(projectRoot); return output(completed); }
-    throw new Error('Module regression action must be show, run, or complete.');
+    const selection = buildModuleRegressionSelection(projectRoot, moduleId, priorityValue() ?? 'p3');
+    if (regressionAction === 'show') return output(selection);
+    const timeoutSeconds = flag('--timeout-seconds'); const timeoutMs = timeoutSeconds === undefined ? undefined : Number(timeoutSeconds) * 1000;
+    if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) throw new Error('--timeout-seconds must be a positive number.');
+    const result = runRegressionSelection(projectRoot, selection, { pythonCommand: flag('--python'), bridge: flag('--bridge'), timeoutMs }); rebuildIndexes(projectRoot); return output(result);
   }
   if (group === 'skill') {
     const skillRoot = join(process.cwd(), 'skill', 'qa-agent');

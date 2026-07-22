@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { invalidateApproval, testPlanHash } from './approval.ts';
 import { appendTaskEvent } from './events.ts';
 import { rebuildIndexes } from './indexer.ts';
-import { markOperationsStaleForPlanHash } from './operations.ts';
+import { markPythonRegressionsStaleForPlanHash } from './python-regression.ts';
 import { readModule, readTask, saveTask, taskDirectory } from './project.ts';
 import { assertSafeId, hasSecrets, isSafeId, now } from './store.ts';
 import type { PlanDraft, PlanDraftScenario, RequirementTrace, RiskLevel, TestScenario, TestTask, VisualAssertion } from './types.ts';
@@ -16,7 +16,6 @@ export interface PlanDraftApplyResult {
   planHash: string;
   previousPlanHash: string;
   approvalRequired: boolean;
-  staleOperationPlanIds: string[];
   scenarioIds: string[];
   task: TestTask;
 }
@@ -166,7 +165,7 @@ export function applyPlanDraft(root: string, draft: PlanDraft): PlanDraftApplyRe
   task.requirements.requirementTrace = requirementTrace(task.scenarios);
 
   let planHash = testPlanHash(task);
-  if (planHash === previousPlanHash) return { changed: false, moduleId: draft.moduleId, taskId: draft.taskId, planHash, previousPlanHash, approvalRequired: !task.metadata.approval, staleOperationPlanIds: [], scenarioIds: task.scenarios.map(scenario => scenario.id), task };
+  if (planHash === previousPlanHash) return { changed: false, moduleId: draft.moduleId, taskId: draft.taskId, planHash, previousPlanHash, approvalRequired: !task.metadata.approval, scenarioIds: task.scenarios.map(scenario => scenario.id), task };
   task.requirements.updatedAt = now();
   planHash = testPlanHash(task);
 
@@ -179,7 +178,7 @@ export function applyPlanDraft(root: string, draft: PlanDraft): PlanDraftApplyRe
   task.metadata.version += 1;
   task.updatedAt = now();
   saveTask(root, task);
-  const staleOperationPlanIds = markOperationsStaleForPlanHash(root, task, planHash);
+  markPythonRegressionsStaleForPlanHash(root, task, planHash);
   rebuildIndexes(root);
-  return { changed: true, moduleId: draft.moduleId, taskId: draft.taskId, planHash, previousPlanHash, approvalRequired: true, staleOperationPlanIds, scenarioIds: task.scenarios.map(scenario => scenario.id), task: readTask(root, draft.moduleId, draft.taskId) };
+  return { changed: true, moduleId: draft.moduleId, taskId: draft.taskId, planHash, previousPlanHash, approvalRequired: true, scenarioIds: task.scenarios.map(scenario => scenario.id), task: readTask(root, draft.moduleId, draft.taskId) };
 }

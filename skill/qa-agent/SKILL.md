@@ -1,100 +1,48 @@
 ---
 name: qa-agent
-description: Plan, execute, verify, replay, report, and archive project-level QA through the local qa-agent Runtime and project-scoped `.qa-agent/` memory.
+description: Run project-aware QA checks, preserve real evidence, and turn reviewed successful flows into command-line Python regression scripts.
 ---
 
 # QA Agent
 
-QA Agent is a thin workflow router. The CLI Runtime owns persistent state, transitions, approvals, evidence, reports, OperationPlans, regression assets, and archive gates. The host Agent owns the conversation and approved UI/MCP tools.
+Use this Skill for ordinary QA work. The user should only need to describe what to test, approve the proposed business flow, say “continue”, or ask to finish.
 
-An OperationPlan is a persisted, Scenario-specific and repeatable business operation path. It defines the ordered actions, locators, input references, expected states, assertions, evidence, and cleanup. Each plan belongs to its owning Task and is stored under `.qa-agent/modules/<module>/tasks/<task>/operation-plans/<scenario>/`; never create a standalone project-level OperationPlan script. It is independent of the executor: a person, an Agent with human assistance, or a dedicated browser/device executor such as Playwright, Python plus fb-idb, or ADB may perform it. Every replay starts from the application's home page or defined initial entry point, with the approved initial state restored or confirmed, so execution never depends on leftover navigation or data. Once an OperationPlan exists, execution replays that path; it must not restart discovery or redesign the flow.
+Read `references/workflow.md` before acting. Runtime owns Task state, Run state, evidence, reports, safety decisions, Python script publication, and regression results.
 
-## Canonical lifecycle
+## Route the request
 
-```text
-start → review → test → result/promotion → test regression → archive
-```
+- Informational question: answer directly without creating QA assets.
+- Ordinary test or verification: use `qa-agent check`.
+- Interruption, recovery, or “continue”: use `qa-agent continue`.
+- Explicit session end: use `qa-agent finish`.
+- Strict pre-execution matrix or release planning: load `qa-agent-plan`.
+- Rerun an already approved Python script: load `qa-agent-regression-test`.
+- Python draft generation, review, and publication remain in this main Skill.
 
-Use only these semantic entry commands in a normal conversation:
+Quick Check is the default. Do not force strict planning onto a one-off test.
 
-```bash
-qa-agent start --request "..." --module <module> --task <task>
-qa-agent review --module <module> --task <task> --approve --confirmed-by <human>
-qa-agent test --module <module> --task <task> [--scenario <scenario>]
-qa-agent archive --module <module> --task <task>
-```
+## Daily workflow
 
-`workflow bootstrap`, `task explore`, `task run`, `operation replay`, `operation generate`, `task review`, and `task archive` are compatibility or administration commands. Do not select them as the primary next action. Compatibility responses may include `deprecatedAlias` and `canonicalCommand`.
+1. Inspect relevant source, routes, tests, configuration, existing QA assets, and available tools.
+2. Present a short business test flow in the user’s language before starting UI execution.
+3. Wait for the user to approve that flow.
+4. Call `qa-agent check --request "<original request>"`; infer safe Module and Task identities.
+5. On later turns call `qa-agent continue`; do not ask the user to repeat internal IDs.
+6. Use UI tools only when Runtime returns `uiExecutionAllowed=true`, `mustStop=false`, and a `runId`.
+7. Persist every real action, screenshot, business observation, cleanup result, evidence artifact, and recovery attempt through Runtime commands.
+8. Follow the Runtime `nextAction`. Ask at most one user-owned question per turn.
+9. Complete only through `qa-agent run complete`. Runtime owns the report and Quick Task PRD.
+10. Present the result: outcome, passed checks, failures or blockers, screenshots, and cleanup.
+11. If Runtime reports `pythonRegressionEligibility.eligible=true`, ask once whether the user wants a Python regression script generated from that exact completed Run.
+12. Generation consent authorizes a draft only. Read `references/python-regression.md`, generate the Python file from the recorded Run steps, save it with `qa-agent regression draft`, and show the complete script or complete diff.
+13. Publish with `qa-agent regression publish` only after a separate explicit user approval of the reviewed script.
+14. For later reruns, load `qa-agent-regression-test`; it runs the formal script and reviews the Runtime-generated report without editing or replanning the flow.
+15. On explicit session closure call `qa-agent finish`. Session finish is not Task archive.
 
-## Per-turn state gate
+## User-facing rules
 
-At the start of every turn, read the latest Runtime `WorkflowState` and its compact `<qa-workflow-state>` breadcrumb. Treat these fields as authoritative:
+Hide internal IDs, hashes, gates, tokens, paths, and protocol fields unless troubleshooting or explicitly requested.
 
-- `taskState`
-- `workflowPhase`
-- `gates`
-- `allowedActions`
-- `forbiddenActions`
-- `nextActions`
-- `resumeToken`
-- `contextHash`
+## Safety
 
-Do not use UI tools unless `uiExecutionAllowed=true`, `mustStop=false`, and a `runId` exists. Never bypass a blocking Gate. The compatibility fields `workflowStatus` and `nextAllowedAction` may be read, but `nextActions` is preferred.
-
-## Phase routing
-
-| Condition | Load |
-| --- | --- |
-| No Task or incomplete intake | Skill `qa-agent-start` |
-| Planning or TestPlan approval | Skill `qa-agent-review` |
-| Approved Task or active Run | Skill `qa-agent-test` |
-| Completed Run or candidate promotion | Skill `qa-agent-result` |
-| Approved-unverified or validated replay | Skill `qa-agent-regression` |
-| Blocked, paused, interrupted, or stale context | Skill `qa-agent-recovery` |
-| All completion assets are ready | Skill `qa-agent-archive` |
-
-Load only the current phase Skill by its installed Skill name instead of looking for a nested `skills/` directory or carrying the full workflow in every prompt.
-
-## Responsibility boundary
-
-The Agent may:
-
-- inspect project source and existing QA assets with read-only tools;
-- ask for user-owned product, scope, role, environment, risk, test-data, or side-effect decisions;
-- present plans, diffs, Runtime results, and candidates;
-- invoke semantic Runtime commands and allowed Run persistence actions;
-- operate approved browser, simulator, device, and MCP tools.
-
-The Runtime alone may:
-
-- change durable workflow state;
-- validate approvals and plan hashes;
-- open and complete formal Runs;
-- generate authoritative reports;
-- automatically create OperationPlan candidates from eligible exploratory Runs;
-- validate OperationPlans through real replay;
-- build formal regression assets and enforce archive gates.
-
-Never manually write Task manifests, Scenario JSON, OperationPlan JSON, formal Run reports, event logs, or indexes.
-
-## Planning behavior
-
-Before asking a question, inspect the relevant Module, Task, source, tests, configuration, reviewed memory, historical Runs, existing OperationPlans, environment, and capability snapshot. Materialize the resulting Scenario matrix through `qa-agent plan apply --file <plan-draft.json>`; never edit Runtime-owned JSON directly. Ask at most one highest-value user decision per turn. State why it matters, give the recommended answer, and explain the effect of alternatives.
-
-Task creation is non-destructive and can happen automatically. Human approval is required for the TestPlan business contract, high-risk actions, OperationPlan promotion, and any user-owned decision that cannot be safely inferred.
-
-## Approval separation
-
-TestPlan approval authorizes execution of the unchanged planHash. It does not approve a reusable regression script.
-
-OperationPlan approval promotes a Runtime-generated `candidate` to `approved_unverified`. Approval selects a reusable replay path; it does not require that a particular Agent be the executor. A completely executed structured replay contract changes it to `validated`, even when the Run correctly reports a business FAIL; the FAIL remains a Run result. Only `validated` OperationPlans may enter formal RegressionSuites, release gates, or satisfy archive requirements.
-
-## Execution and evidence
-
-Persist every real UI action with a screenshot. Record declared business assertions through `run observe`; a passed `run step` never substitutes for an assertion. Record every declared cleanup outcome. Keep recovery attempts and evidence in the same Run package.
-
-Stop on real payment, refund, production deletion/write, real notification, production permission changes, missing capabilities, missing permissions, stale approval, incompatible environment, or unsafe action. Do not fabricate evidence, results, locators, or reports.
-
-## Memory
-
-Keep project facts and artifacts inside the active project's `.qa-agent/` directory. Never persist credentials, secrets, raw production data, or unreviewed chat transcripts. Promote only reviewed, stable business rules or known defects to durable memory.
+Never fabricate screenshots, evidence, results, locators, approvals, scripts, or reports. Stop before real payments, refunds, production writes or deletion, notification delivery, production permission changes, unavailable capabilities, execution-contract drift, or an unresolved business decision.

@@ -1,4 +1,4 @@
 interface:
   display_name: "QA Agent"
-  short_description: "Project-aware QA planning and safe execution"
-  default_prompt: "Use $qa-agent, load the current project canonicalPrompts, require real human plan approval, then execute and report the safe QA lifecycle."
+  short_description: "Simple project-aware QA with persistent evidence"
+  default_prompt: "Use $qa-agent and references/workflow.md. Present a concise business test flow and wait for user approval before starting a new Quick Check. After a real report, offer Python script generation only when eligible. Generation consent creates a draft only; publish after a second explicit user review. Load $qa-agent-regression-test only to run an already published Python regression script and review the Runtime report. Use $qa-agent-plan only for strict pre-execution planning. Task, Module, and Release regression run validated Python scripts directly."
