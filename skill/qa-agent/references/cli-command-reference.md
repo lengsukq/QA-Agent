@@ -70,4 +70,4 @@ regression-runs/<run-id>/...
 | `qa-agent index rebuild` | Rebuild project indexes. |
 | `qa-agent skill validate` | Validate the installable three-Skill package. |
 
-v0.6.0 uses one reusable execution model: approved Python scripts. Source Runs remain immutable evidence; `sourceFlowHash` provides direct traceability from a script to the exact completed business flow.
+v0.3.0 uses one reusable execution model: approved Python scripts. Source Runs remain immutable evidence; `sourceFlowHash` provides direct traceability from a script to the exact completed business flow.

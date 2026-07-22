@@ -2,9 +2,9 @@
 
 QA Agent is a project-local AI testing runtime. Developers can request real UI checks in natural language while the Runtime persists Tasks, Runs, screenshots, business observations, cleanup, and reports.
 
-Current version: **v0.6.0**
+Current version: **v0.3.0**
 
-v0.6.0 separates Python script creation from regression execution:
+v0.3.0 separates Python script creation from regression execution:
 
 - the Agent presents a concise business test flow before real UI execution;
 - Runtime generates the screenshot-backed report;
@@ -52,7 +52,7 @@ qa-agent --version
 Expected output:
 
 ```text
-0.6.0
+0.3.0
 ```
 
 ## Initialize a project
@@ -194,7 +194,7 @@ A completed Quick Task keeps:
 - `prd.md` stores the long-lived Task goal and latest result;
 - `screenshots/` and `evidence/` contain real artifacts.
 
-v0.6.0 keeps the minimal asset model and does not create duplicate `summary.md`, Quick observed-Scenario JSON, or Session Journal files.
+v0.3.0 keeps the minimal asset model and does not create duplicate `summary.md`, Quick observed-Scenario JSON, or Session Journal files.
 
 ## Python regression scripts
 
@@ -353,12 +353,12 @@ Show strict regression, release, and administration commands with:
 qa-agent help --advanced
 ```
 
-## Upgrade to v0.6.0
+## Upgrade to v0.3.0
 
 Upgrade the CLI:
 
 ```bash
-npm install -g qa-agent-skill@0.6.0
+npm install -g qa-agent-skill@0.3.0
 ```
 
 Then update an existing project:
@@ -386,7 +386,7 @@ npm run pack:check
 
 ## Three Skills
 
-v0.6.0 installs:
+v0.3.0 installs:
 
 ```text
 qa-agent

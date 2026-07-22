@@ -2,9 +2,9 @@
 
 QA Agent 是一个项目级 AI 测试运行时。它让开发者直接用自然语言发起真实 UI 检查，同时自动保存 Task、Run、截图、业务观察、Cleanup 和测试报告。
 
-当前版本：**v0.6.0**
+当前版本：**v0.3.0**
 
-v0.6.0 将 Python 脚本生成和回归执行进一步拆开：
+v0.3.0 将 Python 脚本生成和回归执行进一步拆开：
 
 - Agent 先展示简短业务测试流程，用户同意后才执行真实 UI；
 - Runtime 生成带截图的正式报告；
@@ -52,7 +52,7 @@ qa-agent --version
 应输出：
 
 ```text
-0.6.0
+0.3.0
 ```
 
 ## 初始化项目
@@ -196,7 +196,7 @@ Quick Check 不要求完整 TestPlan 审批，但仍然遵守：
 - `screenshots/`：真实截图；
 - `evidence/`：其他证据。
 
-v0.6.0 延续精简资产模型，不生成重复的 `summary.md`、Quick 观察场景 JSON 或 Session Journal。
+v0.3.0 延续精简资产模型，不生成重复的 `summary.md`、Quick 观察场景 JSON 或 Session Journal。
 
 ## Python 回归脚本
 
@@ -369,12 +369,12 @@ qa-agent help --advanced
 
 高级命令包括严格计划、Run 证据写入、Python Regression、Release、Archive、Migration 和验证命令。
 
-## 升级到 v0.6.0
+## 升级到 v0.3.0
 
 升级 CLI：
 
 ```bash
-npm install -g qa-agent-skill@0.6.0
+npm install -g qa-agent-skill@0.3.0
 ```
 
 进入已有项目：
@@ -404,7 +404,7 @@ npm run pack:check
 
 ## 三个 Skill
 
-v0.6.0 安装结构：
+v0.3.0 安装结构：
 
 ```text
 qa-agent

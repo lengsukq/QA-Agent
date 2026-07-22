@@ -589,8 +589,8 @@ ${advancedUsage}`);
   }
   if (group === 'task') {
     const projectRoot = root();
-    if (action === 'operation') throw new Error('Legacy task operation commands were removed in v0.6.0. Use reviewed Python regression scripts.');
-    if (action === 'regression' && subject === 'sync') throw new Error('Task regression sync was removed in v0.6.0. Python regression selections are computed directly.');
+    if (action === 'operation') throw new Error('Legacy task operation commands were removed in v0.3.0. Use reviewed Python regression scripts.');
+    if (action === 'regression' && subject === 'sync') throw new Error('Task regression sync was removed in v0.3.0. Python regression selections are computed directly.');
     if (action === 'list') return output(readIndex(projectRoot, 'tasks'));
     const moduleId = requiredFlag('--module');
     if (!subject) throw new Error('task id is required.');
