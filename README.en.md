@@ -2,9 +2,9 @@
 
 QA Agent is a project-local AI testing runtime. Developers can request real UI checks in natural language while the Runtime persists Tasks, Runs, screenshots, business observations, cleanup, and reports.
 
-Current version: **v0.3.4**
+Current version: **v0.3.5**
 
-v0.3.4 adds two-stage PRD approval and a QA-led Guided mode:
+v0.3.5 strengthens the regression screenshot contract while retaining two-stage PRD approval and QA-led Guided mode:
 
 - the Agent derives a detailed Task PRD from the project;
 - every material requirement, environment, account, test-data, expected-result, or safety question must be resolved with the QA;
@@ -15,6 +15,9 @@ v0.3.4 adds two-stage PRD approval and a QA-led Guided mode:
 - Runtime persists screenshots, QA decisions, assertions, cleanup, and formal reports;
 - Python draft generation and publication still require separate approvals;
 - `qa-agent-regression-test` only runs already published scripts;
+- every formal Python regression must capture a real checkpoint screenshot for each source UI step;
+- missing, empty, misplaced, or incomplete screenshot coverage makes the result `invalid_result`;
+- the Agent must inspect screenshots against expected and actual states before presenting a formal regression report;
 - strict matrices, release checks, GO/NO-GO, and archive gates remain in the main Skill and Runtime.
 
 ## What QA Agent is for
@@ -53,7 +56,7 @@ qa-agent --version
 Expected output:
 
 ```text
-0.3.4
+0.3.5
 ```
 
 ## Initialize a project
@@ -275,7 +278,7 @@ A Task no longer keeps multiple `runs/<run-id>/` histories. Before a formal Pyth
 
 When the TestPlan changes, the old Python script first becomes `stale`. After the user reviews and approves the changed plan, Runtime may create a replacement Source Run and a revised script.
 
-v0.3.4 does not create duplicate `summary.md`, Quick observed-Scenario JSON, Source Run history indexes, or Session Journal files.
+v0.3.5 does not create duplicate `summary.md`, Quick observed-Scenario JSON, Source Run history indexes, or Session Journal files.
 
 ## Python regression scripts
 
@@ -408,12 +411,12 @@ Show strict regression, release, and administration commands with:
 qa-agent help --advanced
 ```
 
-## Upgrade to v0.3.4
+## Upgrade to v0.3.5
 
 Upgrade the CLI:
 
 ```bash
-npm install -g qa-agent-skill@0.3.4
+npm install -g qa-agent-skill@0.3.5
 ```
 
 Then update an existing project:
@@ -441,7 +444,7 @@ npm run pack:check
 
 ## Three Skills
 
-v0.3.4 installs:
+v0.3.5 installs:
 
 ```text
 qa-agent

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { assertHumanApprover, testPlanHash } from './approval.ts';
@@ -295,6 +295,8 @@ function validateScriptAgainstSource(script: string, scriptId: string, runId: st
     if (!script.includes(stepId)) throw new Error(`Python regression script does not contain source step trace ${stepId}.`);
   }
   if (!script.includes('QA_AGENT_RESULT_PATH')) throw new Error('Python regression script must write its structured result to QA_AGENT_RESULT_PATH.');
+  if (!script.includes('QA_AGENT_SCREENSHOT_DIR')) throw new Error('Python regression script must capture checkpoint screenshots under QA_AGENT_SCREENSHOT_DIR.');
+  if (!/[\"\']screenshot[\"\']/.test(script)) throw new Error('Python regression script result must reference screenshot artifacts for its checkpoint steps.');
   if (!script.includes(RESULT_API_VERSION)) throw new Error(`Python regression script must emit ${RESULT_API_VERSION}.`);
   return metadata;
 }
@@ -456,27 +458,45 @@ export function listPythonRegressions(root: string, moduleId: string, taskId: st
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }
 
-function validateScriptResult(value: unknown, runDirectory: string): { result: PythonRegressionScriptResult; screenshots: string[] } {
+function validateScriptResult(value: unknown, runDirectory: string, sourceStepIds: string[]): { result: PythonRegressionScriptResult; screenshots: string[] } {
   const result = value as Partial<PythonRegressionScriptResult>;
   if (result.apiVersion !== RESULT_API_VERSION || !allowedBusinessStatuses.has(result.status as PythonRegressionBusinessStatus)) {
     throw new Error(`Python script result must use ${RESULT_API_VERSION} and a valid status.`);
   }
   if (!['completed', 'blocked'].includes(result.contractStatus ?? '')) throw new Error('Python script result contractStatus must be completed or blocked.');
   if (!result.conclusion?.trim() || !Array.isArray(result.steps)) throw new Error('Python script result requires conclusion and steps.');
+  if (result.contractStatus === 'completed' && !result.steps.length) throw new Error('A completed Python regression result requires screenshot-backed checkpoint steps.');
+
+  const expectedStepIds = new Set(sourceStepIds);
+  const seenStepIds = new Set<string>();
   const screenshots: string[] = [];
-  const inspectScreenshot = (path: string | undefined): void => {
-    if (!path) return;
+  const inspectScreenshot = (path: string | undefined, label: string, required: boolean): void => {
+    if (!path) {
+      if (required) throw new Error(`${label} requires a screenshot artifact.`);
+      return;
+    }
     const absolute = safeRelativePath(runDirectory, path, 'Python regression screenshot');
+    const relativePath = relative(runDirectory, absolute);
+    if (relativePath.split(sep)[0] !== 'screenshots') throw new Error(`Python regression screenshot must be stored under screenshots/: ${path}.`);
     if (!existsSync(absolute)) throw new Error(`Python regression screenshot does not exist: ${path}.`);
-    screenshots.push(relative(runDirectory, absolute));
+    const stat = statSync(absolute);
+    if (!stat.isFile() || stat.size === 0) throw new Error(`Python regression screenshot is empty or invalid: ${path}.`);
+    screenshots.push(relativePath);
   };
   for (const step of result.steps) {
     if (!step?.id || !step.name || !allowedBusinessStatuses.has(step.status)) throw new Error('Every Python regression result step requires id, name, and a valid status.');
-    inspectScreenshot(step.screenshot);
+    if (!expectedStepIds.has(step.id)) throw new Error(`Python regression result contains unknown source step ${step.id}.`);
+    if (seenStepIds.has(step.id)) throw new Error(`Python regression result contains duplicate source step ${step.id}.`);
+    seenStepIds.add(step.id);
+    inspectScreenshot(step.screenshot, `Python regression step ${step.id}`, true);
+  }
+  if (result.contractStatus === 'completed') {
+    const missing = sourceStepIds.filter(stepId => !seenStepIds.has(stepId));
+    if (missing.length) throw new Error(`Completed Python regression result is missing screenshot-backed source steps: ${missing.join(', ')}.`);
   }
   for (const cleanup of result.cleanup ?? []) {
     if (!cleanup?.name || !allowedBusinessStatuses.has(cleanup.status)) throw new Error('Every Python regression cleanup result requires name and a valid status.');
-    inspectScreenshot(cleanup.screenshot);
+    inspectScreenshot(cleanup.screenshot, `Python regression cleanup ${cleanup.name}`, false);
   }
   return { result: result as PythonRegressionScriptResult, screenshots: [...new Set(screenshots)] };
 }
@@ -488,10 +508,11 @@ function markdownEscape(value: string): string {
 function writePythonRegressionReport(root: string, run: PythonRegressionRun, result?: PythonRegressionScriptResult): string {
   const directory = regressionRunDirectory(root, run.moduleId, run.taskId, run.id);
   const path = join(directory, 'report.md');
+  const screenshotBacked = Boolean(result?.steps.length && run.screenshots.length && ['completed', 'blocked'].includes(run.contractStatus));
   const lines = [
-    '<!-- QA-AGENT:PYTHON-REGRESSION-REPORT -->',
+    screenshotBacked ? '<!-- QA-AGENT:PYTHON-REGRESSION-REPORT -->' : '<!-- QA-AGENT:PYTHON-REGRESSION-DIAGNOSTIC -->',
     '',
-    `# Python Regression: ${run.regressionId}`,
+    screenshotBacked ? `# Python Regression: ${run.regressionId}` : `# Python Regression Diagnostic: ${run.regressionId}`,
     '',
     `- Run: ${run.id}`,
     `- Business result: ${run.status.toUpperCase()}`,
@@ -506,15 +527,30 @@ function writePythonRegressionReport(root: string, run: PythonRegressionRun, res
     '',
     '## Steps',
     '',
-    '| Step | Status | Expected | Actual |',
-    '| --- | --- | --- | --- |',
+    '| Step | Status | Expected | Actual | Screenshot |',
+    '| --- | --- | --- | --- | --- |',
     ...(result?.steps.length
-      ? result.steps.map(step => `| ${markdownEscape(step.name)} | ${step.status.toUpperCase()} | ${markdownEscape(step.expected ?? '')} | ${markdownEscape(step.actual ?? '')} |`)
-      : ['| Script result unavailable | INCONCLUSIVE |  |  |']),
+      ? result.steps.map(step => `| ${markdownEscape(step.name)} | ${step.status.toUpperCase()} | ${markdownEscape(step.expected ?? '')} | ${markdownEscape(step.actual ?? '')} | ${markdownEscape(step.screenshot ?? 'missing')} |`)
+      : ['| Script result unavailable | INCONCLUSIVE |  |  | missing |']),
     '',
+    '## Screenshot-backed Checkpoints',
+    '',
+    ...(result?.steps.length
+      ? result.steps.flatMap(step => [
+          `### ${markdownEscape(step.name)}`,
+          '',
+          `- Source step: ${step.id}`,
+          `- Status: ${step.status.toUpperCase()}`,
+          `- Expected: ${markdownEscape(step.expected ?? '')}`,
+          `- Actual: ${markdownEscape(step.actual ?? '')}`,
+          `- Screenshot: ${step.screenshot ?? 'missing'}`,
+          ...(step.screenshot ? [`![${basename(step.screenshot)}](${step.screenshot})`] : []),
+          '',
+        ])
+      : ['No screenshot-backed checkpoints were available because the script result contract was invalid.', '']),
     '## Screenshots',
     '',
-    ...(run.screenshots.length ? run.screenshots.map(path => `![${basename(path)}](${path})`) : ['No screenshots were produced.']),
+    ...(run.screenshots.length ? run.screenshots.map(path => `![${basename(path)}](${path})`) : ['No valid screenshots were produced. This Run is diagnostic only and must not be treated as a completed regression report.']),
     '',
     '## Logs',
     '',
@@ -594,7 +630,7 @@ export function runPythonRegression(root: string, input: RunPythonRegressionInpu
     conclusion = 'Python regression did not write QA_AGENT_RESULT_PATH.';
   } else {
     try {
-      const validated = validateScriptResult(readJson<unknown>(resultPath), runDirectory);
+      const validated = validateScriptResult(readJson<unknown>(resultPath), runDirectory, manifest.sourceStepIds);
       parsed = validated.result;
       screenshots = validated.screenshots;
       contractStatus = parsed.contractStatus;

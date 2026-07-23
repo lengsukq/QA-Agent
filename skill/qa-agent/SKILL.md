@@ -40,7 +40,7 @@ Do not treat “可以”, “继续”, or “没问题” as either PRD confir
 4. Follow `nextAction`; ask at most one user-owned question per turn.
 5. Complete only through Runtime. Present its report rather than writing a competing formal report.
 6. When `pythonRegressionEligibility.eligible=true`, ask whether to generate Python from that exact Run.
-7. Generation consent authorizes a draft only. Read `references/python-regression.md` and `references/recommended-regression-stack.md`, save with `qa-agent regression draft`, and show the full script or diff.
+7. Generation consent authorizes a draft only. Read `references/python-regression.md` and `references/recommended-regression-stack.md`. The generated script must capture a real checkpoint screenshot for every source UI step, reference it in `result.json`, save with `qa-agent regression draft`, and show the full script or diff.
 8. Publish with `qa-agent regression publish` only after separate explicit approval. Publication freezes the Source Run.
 9. Later reruns use `qa-agent-regression-test` and `regression-runs/` without editing or replanning the formal script.
 10. Call `qa-agent finish` only on explicit closure. Session finish is not Task archive.

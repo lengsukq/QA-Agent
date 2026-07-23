@@ -162,9 +162,9 @@ test('removes the OperationPlan and RegressionSuite product model completely', (
   assert.doesNotMatch(production, /OperationPlan|operation-plans|RegressionSuite|regression-suite|sourceOperationPlanIds|replayStatus|replayStage|replayCursor/);
 });
 
-test('publishes v0.3.4 without source and lockfile implementation payloads', () => {
+test('publishes v0.3.5 without source and lockfile implementation payloads', () => {
   const pkg = JSON.parse(readFileSync(join(repository, 'package.json'), 'utf8')) as { version: string; files: string[] };
-  assert.equal(pkg.version, '0.3.4');
+  assert.equal(pkg.version, '0.3.5');
   assert.equal(pkg.files.includes('src/'), false);
   assert.equal(pkg.files.includes('package-lock.json'), false);
 });

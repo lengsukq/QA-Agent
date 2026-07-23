@@ -61,6 +61,17 @@ The Python file must contain near the top:
 
 It must write a structured result to `QA_AGENT_RESULT_PATH` using `qa-agent/python-regression-result/v1`.
 
+The formal script must also:
+
+- read `QA_AGENT_SCREENSHOT_DIR`;
+- capture a real screenshot after every source UI step;
+- save screenshots under the current Run's `screenshots/` directory;
+- return one result step for every `sourceStepId`;
+- attach that step's relative screenshot path, such as `screenshots/agent-2.png`;
+- never reuse a screenshot from the Source Run or another regression Run.
+
+A completed result without screenshot-backed coverage for every source step is `invalid_result`. Runtime must not treat a screenshot-free execution as a valid regression report.
+
 ## Draft and publication
 
 Create a draft:
@@ -85,6 +96,6 @@ Run a formal script:
 qa-agent regression run SCRIPT_ID --module MODULE --task TASK [--bridge COMMAND]
 ```
 
-The script controls the fixed business sequence. Do not rediscover or rewrite the flow during regression. Runtime stores the result, report, screenshots, stdout, stderr, and Cleanup under `regression-runs/`.
+The script controls the fixed business sequence. Do not rediscover or rewrite the flow during regression. Runtime validates every screenshot before generating the formal report, then embeds each screenshot beside the matching expected and actual checkpoint. The Agent must inspect those images and base its user-facing regression conclusion on the screenshot-backed report rather than only trusting script text. Runtime stores the result, report, screenshots, stdout, stderr, and Cleanup under `regression-runs/`.
 
 A business FAIL with `contractStatus=completed` means the script is valid and the product behavior failed. Do not rewrite the script automatically.

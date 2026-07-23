@@ -103,6 +103,26 @@ test('creates a reviewed Python regression draft, publishes it into the Task, an
   assert.ok(completed.pythonRegressionEligibility?.flowHash);
   assert.deepEqual(completed.pythonRegressionEligibility?.sourceStepIds, [sourceStepId]);
 
+  const missingScreenshotScriptId = 'missing-screenshot-contract';
+  const missingScreenshotScript = join(root, 'missing-screenshot-contract.py');
+  const missingScreenshotMetadata = JSON.stringify({ scriptId: missingScreenshotScriptId, sourceRunId: completed.id, sourceStepIds: [sourceStepId], sourceFlowHash: completed.pythonRegressionEligibility!.flowHash });
+  writeFileSync(missingScreenshotScript, `# QA_AGENT_REGRESSION: ${missingScreenshotMetadata}\nimport json\nimport os\nfrom pathlib import Path\n\nSOURCE_STEP_IDS = [${JSON.stringify(sourceStepId)}]\nresult = {"apiVersion": "qa-agent/python-regression-result/v1", "status": "passed", "contractStatus": "completed", "conclusion": "No screenshot contract.", "steps": []}\nPath(os.environ["QA_AGENT_RESULT_PATH"]).write_text(json.dumps(result), encoding="utf-8")\n`, 'utf8');
+  const missingScreenshotDraft = spawnSync(process.execPath, ['--experimental-strip-types', cli, 'regression', 'draft', '--module', task.metadata.moduleId, '--task', task.metadata.id, '--run', completed.id, '--file', missingScreenshotScript, '--id', missingScreenshotScriptId], { cwd: root, encoding: 'utf8' });
+  assert.notEqual(missingScreenshotDraft.status, 0);
+  assert.match(missingScreenshotDraft.stderr, /QA_AGENT_SCREENSHOT_DIR/);
+
+  const invalidRuntimeScriptId = 'invalid-runtime-screenshot';
+  const invalidRuntimeScript = join(root, 'invalid-runtime-screenshot.py');
+  const invalidRuntimeMetadata = JSON.stringify({ scriptId: invalidRuntimeScriptId, sourceRunId: completed.id, sourceStepIds: [sourceStepId], sourceFlowHash: completed.pythonRegressionEligibility!.flowHash });
+  writeFileSync(invalidRuntimeScript, `# QA_AGENT_REGRESSION: ${invalidRuntimeMetadata}\nimport json\nimport os\nfrom pathlib import Path\n\nSOURCE_STEP_IDS = [${JSON.stringify(sourceStepId)}]\nSCREENSHOT_FIELD = "screenshot"\n\ndef main():\n    Path(os.environ["QA_AGENT_SCREENSHOT_DIR"]).mkdir(parents=True, exist_ok=True)\n    result = {"apiVersion": "qa-agent/python-regression-result/v1", "status": "passed", "contractStatus": "completed", "conclusion": "Missing runtime screenshot.", "steps": [{"id": ${JSON.stringify(sourceStepId)}, "name": "Click login button", "status": "passed"}], "cleanup": []}\n    Path(os.environ["QA_AGENT_RESULT_PATH"]).write_text(json.dumps(result), encoding="utf-8")\n\nif __name__ == "__main__":\n    main()\n`, 'utf8');
+  run(root, 'regression', 'draft', '--module', task.metadata.moduleId, '--task', task.metadata.id, '--run', completed.id, '--file', invalidRuntimeScript, '--id', invalidRuntimeScriptId);
+  run(root, 'regression', 'publish', '--module', task.metadata.moduleId, '--task', task.metadata.id, '--draft', invalidRuntimeScriptId, '--confirmed-by', 'project-owner');
+  const invalidRuntimeExecution = JSON.parse(run(root, 'regression', 'run', invalidRuntimeScriptId, '--module', task.metadata.moduleId, '--task', task.metadata.id));
+  assert.equal(invalidRuntimeExecution.contractStatus, 'invalid_result');
+  assert.equal(invalidRuntimeExecution.status, 'inconclusive');
+  assert.match(readFileSync(invalidRuntimeExecution.reportPath, 'utf8'), /QA-AGENT:PYTHON-REGRESSION-DIAGNOSTIC/);
+  assert.equal(readPythonRegression(root, task.metadata.moduleId, task.metadata.id, invalidRuntimeScriptId).status, 'approved_unverified');
+
   const scriptId = 'login-python-regression';
   const scriptFile = join(root, 'login-regression.py');
   const metadata = JSON.stringify({ scriptId, sourceRunId: completed.id, sourceStepIds: [sourceStepId], sourceFlowHash: completed.pythonRegressionEligibility!.flowHash });
@@ -135,7 +155,10 @@ test('creates a reviewed Python regression draft, publishes it into the Task, an
   assert.equal(executed.status, 'passed');
   assert.equal(executed.contractStatus, 'completed');
   assert.ok(existsSync(executed.reportPath));
-  assert.match(readFileSync(executed.reportPath, 'utf8'), /QA-AGENT:PYTHON-REGRESSION-REPORT/);
+  const report = readFileSync(executed.reportPath, 'utf8');
+  assert.match(report, /QA-AGENT:PYTHON-REGRESSION-REPORT/);
+  assert.match(report, /## Screenshot-backed Checkpoints/);
+  assert.match(report, /!\[login-success\.png\]\(screenshots\/login-success\.png\)/);
   assert.equal(readPythonRegression(root, task.metadata.moduleId, task.metadata.id, scriptId).status, 'validated');
   assert.equal(JSON.parse(run(root, 'validate')).valid, true);
 });

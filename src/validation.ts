@@ -70,12 +70,23 @@ function validateDomainObject(path: string): string[] {
     if (value.sourceOperationPlanIds !== undefined) errors.push(`${path}: legacy sourceOperationPlanIds remains; run qa-agent migrate.`);
     if (value.status === 'validated' && (!value.validatedByRunId || !value.validatedAt)) errors.push(`${path}: validated script requires a completed validation Run.`);
     const scriptPath = join(dirname(path), `${value.id}.py`);
-    if (!existsSync(scriptPath)) errors.push(`${path}: script is missing.`); else { const script = readFileSync(scriptPath, 'utf8'); if (![textHash(script), textHash(script.trimEnd())].includes(value.scriptHash)) errors.push(`${scriptPath}: script hash mismatch.`); if (pythonContainsRawSecret(script)) errors.push(`${scriptPath}: potential raw secret.`); if (!script.includes(`"sourceFlowHash":"${value.sourceFlowHash}"`) && !script.includes(`"sourceFlowHash": "${value.sourceFlowHash}"`)) errors.push(`${scriptPath}: sourceFlowHash metadata mismatch.`); if (!script.includes('QA_AGENT_RESULT_PATH') || !script.includes('qa-agent/python-regression-result/v1')) errors.push(`${scriptPath}: result contract missing.`); }
+    if (!existsSync(scriptPath)) errors.push(`${path}: script is missing.`); else { const script = readFileSync(scriptPath, 'utf8'); if (![textHash(script), textHash(script.trimEnd())].includes(value.scriptHash)) errors.push(`${scriptPath}: script hash mismatch.`); if (pythonContainsRawSecret(script)) errors.push(`${scriptPath}: potential raw secret.`); if (!script.includes(`"sourceFlowHash":"${value.sourceFlowHash}"`) && !script.includes(`"sourceFlowHash": "${value.sourceFlowHash}"`)) errors.push(`${scriptPath}: sourceFlowHash metadata mismatch.`); if (!script.includes('QA_AGENT_RESULT_PATH') || !script.includes('qa-agent/python-regression-result/v1')) errors.push(`${scriptPath}: result contract missing.`); if (!script.includes('QA_AGENT_SCREENSHOT_DIR') || !/[\"\']screenshot[\"\']/.test(script)) errors.push(`${scriptPath}: screenshot checkpoint contract missing.`); }
   }
   if (/\/tasks\/[^/]+\/regression-runs\/[^/]+\/run\.json$/.test(path)) {
     if (value.apiVersion !== 'qa-agent/python-regression-run/v1' || value.kind !== 'PythonRegressionRun' || !isSafeId(value.id) || !isSafeId(value.regressionId)) errors.push(`${path}: invalid Python regression Run.`);
     if (!['passed', 'failed', 'blocked', 'inconclusive'].includes(value.status) || !['completed', 'blocked', 'invalid_result', 'failed_to_start'].includes(value.contractStatus)) errors.push(`${path}: invalid Python regression Run status.`);
-    const directory = dirname(path); for (const ref of [value.reportRef, value.stdoutRef, value.stderrRef]) if (typeof ref !== 'string' || !existsSync(join(directory, ref))) errors.push(`${path}: missing asset ${String(ref)}.`);
+    const directory = dirname(path);
+    for (const ref of [value.reportRef, value.stdoutRef, value.stderrRef]) if (typeof ref !== 'string' || !existsSync(join(directory, ref))) errors.push(`${path}: missing asset ${String(ref)}.`);
+    const screenshots = Array.isArray(value.screenshots) ? value.screenshots : [];
+    for (const screenshot of screenshots) if (typeof screenshot !== 'string' || !screenshot.startsWith('screenshots/') || !existsSync(join(directory, screenshot))) errors.push(`${path}: missing or invalid regression screenshot ${String(screenshot)}.`);
+    if (value.contractStatus === 'completed') {
+      if (!screenshots.length) errors.push(`${path}: completed Python regression Run requires screenshot-backed checkpoints.`);
+      const reportPath = typeof value.reportRef === 'string' ? join(directory, value.reportRef) : undefined;
+      if (reportPath && existsSync(reportPath)) {
+        const report = readFileSync(reportPath, 'utf8');
+        if (!report.includes('## Screenshot-backed Checkpoints') || !/!\[[^\]]*\]\(screenshots\/[^\)]+\)/.test(report)) errors.push(`${path}: completed regression report must embed checkpoint screenshots.`);
+      }
+    }
   }
   if (/\/\.runtime\/drafts\/[^/]+\/[^/]+\/draft\.json$/.test(path)) {
     if (value.apiVersion !== 'qa-agent/python-regression-draft/v2' || value.kind !== 'PythonRegressionDraft' || value.status !== 'draft' || !isSafeId(value.id)) errors.push(`${path}: invalid Python draft.`);

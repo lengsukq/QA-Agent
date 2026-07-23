@@ -567,7 +567,7 @@ ${advancedUsage}`);
         timeoutMs,
       });
       rebuildIndexes(projectRoot);
-      output({ ...result, reportPath: join(taskDirectory(projectRoot, result.moduleId, result.taskId), 'regression-runs', result.id, result.reportRef), next: 'Agent should inspect the structured result, report, screenshots, stdout, and stderr without replanning the script steps.' });
+      output({ ...result, reportPath: join(taskDirectory(projectRoot, result.moduleId, result.taskId), 'regression-runs', result.id, result.reportRef), next: 'Agent must inspect every screenshot-backed checkpoint against its expected and actual state before presenting the regression report. Do not trust result.json alone or claim a completed regression when contractStatus is invalid_result.' });
       return;
     }
     throw new Error(`Regression command must be draft, drafts, draft-show, publish, list, show, or run.\n\n${advancedUsage}`);
