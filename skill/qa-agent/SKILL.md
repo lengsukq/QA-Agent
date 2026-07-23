@@ -13,7 +13,7 @@ Read `references/workflow.md` before acting. Runtime owns Task state, Run state,
 
 - Informational question: answer directly without QA assets.
 - Ordinary AI-led check: `qa-agent check`.
-- Human QA-led, step-by-step execution: load `qa-agent-guided` and use `qa-agent check --mode guided`.
+- User-led, step-by-step execution: load `qa-agent-guided` and use `qa-agent check --mode guided`; Runtime generates one draft per Scenario on completion.
 - Interruption or “continue”: `qa-agent continue`.
 - Explicit session end: `qa-agent finish`.
 - Run an already approved Python script: load `qa-agent-regression-test`.
@@ -39,7 +39,7 @@ Do not treat “可以”, “继续”, or “没问题” as either PRD confir
 3. Record every declared business/visual assertion before `qa-agent run complete`.
 4. Follow `nextAction`; ask at most one user-owned question per turn.
 5. Use only the Runtime report. Formal reports must embed real screenshots with Markdown image syntax. Include clickable report and finalized PRD links.
-6. If `pythonRegressionEligibility.eligible=true` and no script exists, end the completion reply with `requiredUserQuestion`; do not wait for user initiation.
+6. In AI-led mode, if `pythonRegressionEligibility.eligible=true` and no script exists, end the completion reply with `requiredUserQuestion`. In user-led mode, present the automatically generated Scenario scripts instead and do not ask that generic question.
 7. Generation consent authorizes a draft only. Read `references/python-regression.md` and `references/recommended-regression-stack.md`. The generated script must capture a real checkpoint screenshot for every source UI step, reference it in `result.json`, save with `qa-agent regression draft`, and show the full script or diff.
 8. Publish with `qa-agent regression publish` only after separate explicit approval. Publication freezes the Source Run.
 9. Reruns use `qa-agent-regression-test` and `regression-runs/`. Formal regression reports embed every checkpoint screenshot; path-only references are invalid. Link the report or diagnostic.

@@ -51,7 +51,7 @@ After both PRD gates and `qa-agent test`:
 6. Persist the QA's verdict with `qa-agent run guide-verdict`.
 7. Do not execute another UI operation or complete the Run while a verdict is pending.
 
-The QA may add a new action during execution. Record its explicit operation and expected result; do not silently alter an existing PRD expectation. A negative verdict remains a failure unless the QA later approves a new plan or retry. When the QA asks to save the Case, ensure every UI step has a human verdict, record all assertions and Cleanup, then complete through Runtime.
+The QA may add a new action during execution. Record its explicit operation and expected result; do not silently alter an existing PRD expectation. A negative verdict remains a failure unless the QA later approves a new plan or retry. Runtime persists only the current pending interaction; completed approvals and verdicts live on their Step. When the QA asks to save the Case, ensure every UI step has both records, record all assertions and Cleanup, then complete through Runtime. Completion automatically generates one independent Python regression draft for every selected Scenario under `source-run/scenario-regressions/<scenario-id>/`. Present all Scenario script links; do not ask the generic full-flow generation question used by Quick mode.
 
 ## Strict and release workflow
 

@@ -4,23 +4,22 @@ QA Agent is a project-local AI testing runtime. Developers can request real UI c
 
 Current version: **v0.3.7**
 
-v0.3.7 strengthens artifact accessibility, screenshot-backed reports, and proactive regression drafting while retaining two-stage PRD approval and QA-led Guided mode:
+v0.3.7 puts AI-led and user-led execution on one Task, Plan, Run, Step, Evidence, and Report core. The modes differ only in who controls the next action:
 
 - the Agent derives a detailed Task PRD from the project;
 - every material requirement, environment, account, test-data, expected-result, or safety question must be resolved with the QA;
 - the QA first replies `确认测试方案` to confirm that the PRD matches the requirement;
 - the QA separately replies `确认开始测试` before Runtime may create a Run or allow UI tools;
-- the main `qa-agent` performs AI-led execution;
-- `qa-agent-guided` requires human approval before each UI action and a human verdict after each observed result;
-- Runtime persists screenshots, QA decisions, assertions, cleanup, and formal reports;
-- PRDs, test reports, and regression reports are surfaced through clickable Markdown links;
+- AI-led mode executes the approved PRD continuously without a per-step prepare gate or human verdict;
+- user-led mode keeps only one pending interaction: approve one action, execute and screenshot it, then confirm its result;
+- approvals and verdicts are stored directly on the corresponding Step instead of in a second interaction-history state machine;
+- after a user-led Run completes, Runtime automatically creates one independent Python regression draft per selected Scenario;
+- Scenario drafts are stored under `source-run/scenario-regressions/<scenario-id>/` and still require separate review before formal publication;
+- AI-led Runs retain the optional post-test question for generating one full-flow Python draft;
+- Runtime persists real screenshots, QA decisions, assertions, cleanup, and formal reports;
+- PRDs, test reports, and Scenario script drafts are surfaced through clickable Markdown links;
 - formal test and regression reports must embed screenshots directly in Markdown rather than list paths only;
-- after an eligible test completes, the Agent must proactively ask whether to generate a Python regression draft;
-- Python draft generation and publication still require separate approvals;
 - `qa-agent-regression-test` only runs already published scripts;
-- every formal Python regression must capture a real checkpoint screenshot for each source UI step;
-- missing, empty, misplaced, or incomplete screenshot coverage makes the result `invalid_result`;
-- the Agent must inspect screenshots against expected and actual states before presenting a formal regression report;
 - strict matrices, release checks, GO/NO-GO, and archive gates remain in the main Skill and Runtime.
 
 ## What QA Agent is for
@@ -250,7 +249,7 @@ qa-agent run step RUN ...
 qa-agent run guide-verdict RUN   --step STEP   --status passed   --confirmed-by QA   --confirmation-text "Yes, this matches the expected result"
 ```
 
-Without a pending Guided action approval, Runtime forbids UI execution. After the action, Runtime forbids another UI action and Run completion until the QA verdict is stored.
+Without a pending user-led action approval, Runtime forbids UI execution. After the action, Runtime keeps only a pending result-verdict pointer and forbids another UI action or Run completion until the verdict is stored. Completed approvals and verdicts remain on their Step rather than in a separate interaction-history state machine.
 
 After interruption, use `qa-agent continue`. `qa-agent finish` closes the current Session but does not archive or delete the Task.
 
@@ -269,13 +268,18 @@ Each Task keeps exactly one Source Run used to derive the reusable script:
     ├── run.json
     ├── report.md
     ├── screenshots/
-    └── evidence/
+    ├── evidence/
+    └── scenario-regressions/       # user-led mode only
+        └── <scenario-id>/
+            ├── script.py
+            └── manifest.json
 ```
 
 - `source-run/run.json` contains the structured facts from the first real AI test;
 - `source-run/report.md` is the authoritative report for that execution;
 - `prd.md` stores the reviewed plan and latest result;
-- `screenshots/` and `evidence/` contain real artifacts.
+- `screenshots/` and `evidence/` contain real artifacts;
+- user-led completion writes one independent draft under `scenario-regressions/<scenario-id>/` for every selected Scenario.
 
 A Task no longer keeps multiple `runs/<run-id>/` histories. Before a formal Python script is published, another initial test replaces the unpublished Source Run and records the restart in `events.jsonl`. After publication, the Source Run is frozen and all later execution goes to `regression-runs/`.
 
@@ -285,9 +289,11 @@ v0.3.7 does not create duplicate `summary.md`, Quick observed-Scenario JSON, Sou
 
 ## Python regression scripts
 
-After testing produces a screenshot-backed report, the Agent may ask whether to generate Python when Runtime confirms that the source Run has stable steps, locators, input references, assertions, screenshots, and cleanup.
+AI-led mode may ask whether to generate one full-flow Python draft after Runtime confirms that the Source Run has stable steps, locators, input references, assertions, screenshots, and cleanup.
 
-There are two independent approvals:
+User-led mode does not ask the same question. `qa-agent run complete` automatically creates one draft per selected Scenario from the human-approved and human-confirmed Steps. Those files remain Source Run artifacts until they are separately reviewed and promoted into the formal regression workflow.
+
+Formal draft generation and publication remain separate decisions:
 
 ```text
 approve draft generation

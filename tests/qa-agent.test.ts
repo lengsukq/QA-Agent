@@ -414,6 +414,8 @@ test('User-led QA keeps one pending interaction and generates one regression scr
   const scenarioScriptPath = join(taskSourceRunDirectory(root, task.metadata.moduleId, task.metadata.id), scenarioDraft.scriptRef);
   assert.ok(existsSync(scenarioScriptPath));
   const scenarioScript = readFileSync(scenarioScriptPath, 'utf8');
+  const syntax = spawnSync('python3', ['-m', 'py_compile', scenarioScriptPath], { encoding: 'utf8' });
+  assert.equal(syntax.status, 0, syntax.stderr || syntax.stdout);
   assert.match(scenarioScript, /QA_AGENT_BRIDGE/);
   assert.match(scenarioScript, /QA_AGENT_RESULT_PATH/);
   assert.match(scenarioScript, new RegExp(step.id));

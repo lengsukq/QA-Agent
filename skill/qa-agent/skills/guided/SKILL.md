@@ -7,7 +7,7 @@ description: Run QA-led, step-by-step testing where every UI action and observed
 
 Use this Skill when a human QA wants to direct the test one step at a time, explore a new feature, confirm uncertain expectations, or turn a manually reviewed flow into a reusable Case.
 
-Read `references/workflow.md` from the main `qa-agent` Skill before acting. Runtime owns Task state, evidence, approvals, Run state, and reports.
+Read `references/workflow.md` from the main `qa-agent` Skill before acting. Runtime owns the shared Task/Run/Step core, evidence, safety, reports, and Scenario regression drafts. User-led control keeps only one pending interaction; completed approvals and verdicts live on their Step.
 
 ## Prepare the Case
 
@@ -39,9 +39,10 @@ If the QA says the result is wrong, record `failed`, preserve the screenshot and
 
 When the QA asks to save the Case:
 
-- ensure every UI step has a human verdict;
+- ensure every UI step has both a human approval and a human verdict;
 - record all declared assertions and Cleanup;
 - complete through `qa-agent run complete`;
-- present the Runtime report and saved PRD, with clickable links for both artifacts from `userFacingArtifacts[].markdownLink`; the formal report must embed its real screenshots with Markdown image syntax rather than listing screenshot paths only;
-- when Runtime marks the Run eligible and no formal script exists, end the same completion reply by asking the returned `requiredUserQuestion`; do not wait for the QA to request regression generation first;
-- generate a draft only after separate consent, and publish only after another explicit script review.
+- Runtime automatically generates one independent regression draft for every selected Scenario under `source-run/scenario-regressions/<scenario-id>/`;
+- present the Runtime report, saved PRD, and every Scenario script through their clickable `userFacingArtifacts[].markdownLink`; the formal report must embed its real screenshots with Markdown image syntax rather than listing screenshot paths only;
+- do not ask the generic post-test regression-generation question in user-led mode, because the Scenario drafts already exist;
+- treat generated Scenario scripts as drafts. Formal publication or execution still requires separate review and approval.
