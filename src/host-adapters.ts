@@ -66,7 +66,7 @@ export function configuredHostRecords(projectRoot: string): Record<string, Confi
   return existsSync(path) ? readJson<Record<string, ConfiguredHostRecord>>(path) : {};
 }
 
-export function updateHostIntegrations(projectRoot: string, options: { force?: boolean; migrate?: boolean } = {}): { updated: string[]; conflicts: Array<{ host: string; paths: string[] }>; skipped: string[] } {
+export function updateHostIntegrations(projectRoot: string, options: { force?: boolean } = {}): { updated: string[]; conflicts: Array<{ host: string; paths: string[] }>; skipped: string[] } {
   const records = configuredHostRecords(projectRoot); const updated: string[] = []; const conflicts: Array<{ host: string; paths: string[] }> = []; const skipped: string[] = [];
   for (const [host, record] of Object.entries(records)) {
     const changed = record.paths.filter(path => existsSync(path) && hashPath(path) !== record.hashes[path]);

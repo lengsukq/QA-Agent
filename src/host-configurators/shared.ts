@@ -42,21 +42,12 @@ export function copyMainSkill(destination: string, force: boolean): void {
   if (force && existsSync(targetReferences)) rmSync(targetReferences, { recursive: true, force: true });
   if (!existsSync(targetReferences) || force) cpSync(sourceReferences, targetReferences, { recursive: true, force, errorOnExist: !force });
 
-  // Clean up nested subskills produced by older installations.
-  const legacySubskills = join(destination, 'skills');
-  if (existsSync(legacySubskills)) rmSync(legacySubskills, { recursive: true, force: true });
 }
 
 export const QA_SUBSKILLS = ['guided', 'regression-test'] as const;
-const LEGACY_PHASE_SUBSKILLS = ['quick', 'start', 'review', 'test', 'result', 'finish', 'operation', 'recovery', 'archive', 'regression', 'plan'] as const;
 
 export function copySubSkills(parent: string, force: boolean): string[] {
   const sourceRoot = skillSource();
-  for (const name of LEGACY_PHASE_SUBSKILLS) {
-    const legacy = join(parent, `qa-agent-${name}`);
-    const manifest = join(legacy, 'SKILL.md');
-    if (existsSync(manifest) && new RegExp(`^---\\nname: qa-agent-${name}\\n`, 's').test(readFileSync(manifest, 'utf8'))) rmSync(legacy, { recursive: true, force: true });
-  }
   return QA_SUBSKILLS.map(name => {
     const destination = join(parent, `qa-agent-${name}`);
     const source = join(sourceRoot, 'skills', name);
@@ -93,12 +84,12 @@ export const sharedGuidance = `# QA Agent
 
 Load the installed qa-agent Skill and references/workflow.md.
 
-- check/start creates planning assets only. Inspect the project, apply ordered Scenario steps, and present Task prd.md with its clickable userFacingArtifacts markdownLink, never a plain path.
-- Ask the QA about every unresolved requirement, environment, account, expected-result, or safety question. Persist answers in confirmedDecisions and reapply the plan.
+- check/start creates planning assets only. Inspect the project, apply ordered Scenario steps, and present Task prd.md through its clickable userFacingArtifacts markdownLink.
+- Resolve every requirement, environment, account, expected-result, and safety question with the QA. Persist confirmedDecisions and reapply the plan.
 - Require exact “确认测试方案” through plan review, then a separate exact “确认开始测试” through review. Vague approval never authorizes UI.
 - Runtime owns state, evidence, reports, approvals, publication, and results. Never edit its JSON or write competing reports. Formal reports embed screenshots in Markdown; paths alone are invalid. Completion replies link the report, plus PRD for Source Runs.
 - Load qa-agent-guided for user-led testing. Runtime keeps one pending interaction at a time: one approved action, one screenshot-backed UI operation, then one QA verdict. Completed approvals and verdicts live on the Step.
-- Later call qa-agent continue. Use UI tools only with uiExecutionAllowed=true, mustStop=false, and runId. Pass --session or QA_AGENT_SESSION_KEY when available.
+- Use qa-agent continue after interruption. Use UI tools only with uiExecutionAllowed=true, mustStop=false, and runId. Pass QA_AGENT_SESSION_KEY when available.
 - After an eligible AI-led report, consent creates one full-flow Python draft only. User-led completion creates one independent draft per Scenario automatically. Show the relevant script or diff and publish only after separate approval; publication freezes the Source Run.
 - Load qa-agent-regression-test for later regression-runs. Strict matrices and release planning stay in the main Skill.
 - Ask at most one user-owned question per turn. Never bypass safety or fabricate evidence, decisions, or results.

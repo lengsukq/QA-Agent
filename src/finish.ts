@@ -4,7 +4,7 @@ import { readTask, taskPrdPath, taskSourceRunPath, taskSourceRunReportPath } fro
 import { closeTaskSession, resolveActiveTaskSession } from './session.ts';
 import { finalizeTask } from './task-finalizer.ts';
 import type { FinishResult, TestRun, TestTask } from './types.ts';
-import { normalizeTaskState } from './workflow-model.ts';
+import { taskState as resolveTaskState } from './workflow-model.ts';
 import { workflowStatus } from './workflow.ts';
 import { artifactLinksSentence, userFacingArtifact } from './user-facing-artifacts.ts';
 
@@ -43,7 +43,7 @@ export function finishCurrentTask(root: string, sessionKey?: string): FinishResu
       workflow = workflowStatus(root, task.metadata.moduleId, task.metadata.id);
       run = latestRun(root, task);
     }
-    if (finalization?.status === 'failed' || normalizeTaskState(task.metadata.status) !== 'completed' || task.finalization?.status !== 'completed') {
+    if (finalization?.status === 'failed' || resolveTaskState(task.metadata.status) !== 'completed' || task.finalization?.status !== 'completed') {
       return {
         apiVersion: 'qa-agent/finish/v1', kind: 'FinishResult', status: 'blocked', session: resolution.binding, task: resolution.task, workflow, finalization,
         userMessage: `QA task “${resolution.task.title}” cannot be finished yet because its Runtime report or PRD is incomplete.${finalization?.error ? ` ${finalization.error}` : ''} Use qa-agent continue after resolving the blocker.`,
@@ -59,7 +59,7 @@ export function finishCurrentTask(root: string, sessionKey?: string): FinishResu
   ];
   return {
     apiVersion: 'qa-agent/finish/v1', kind: 'FinishResult', status: persistentTaskPreserved ? 'task_preserved' : 'finished',
-    session: resolution.binding, closure, task: { ...resolution.task, taskState: normalizeTaskState(task.metadata.status), updatedAt: task.updatedAt }, workflow, finalization, userFacingArtifacts,
+    session: resolution.binding, closure, task: { ...resolution.task, taskState: resolveTaskState(task.metadata.status), updatedAt: task.updatedAt }, workflow, finalization, userFacingArtifacts,
     userMessage: persistentTaskPreserved
       ? `The current QA session is finished. Persistent QA task “${resolution.task.title}” remains available in its current state and can be explicitly resumed later.${userFacingArtifacts.length ? ` ${artifactLinksSentence(userFacingArtifacts)}` : ''}`
       : `QA task “${resolution.task.title}” is complete and the current session is finished. The Runtime report, PRD, screenshots, and evidence are saved.${userFacingArtifacts.length ? ` ${artifactLinksSentence(userFacingArtifacts)}` : ''}`,

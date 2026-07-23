@@ -19,10 +19,9 @@ import { buildModuleRegressionSelection, buildReleaseRegressionSelection, buildT
 import { analyzeProjectImpact } from './impact-analysis.ts';
 import { attachRegressionRun, createReleaseCheck, finalizeReleaseCheck, readReleaseCheck, saveReleaseCheck, writeReleaseReport } from './release.ts';
 import { bootstrapWorkflow, workflowStatus } from './workflow.ts';
-import { migrateProjectArtifacts } from './migration.ts';
 import { inspectTaskArchive } from './archive.ts';
 import { appendTaskEvent } from './events.ts';
-import { normalizeTaskState, transitionTaskState } from './workflow-model.ts';
+import { taskState as resolveTaskState, transitionTaskState } from './workflow-model.ts';
 import { applyPlanDraft } from './plan-draft.ts';
 import type { PlanDraft } from './types.ts';
 import { prepareQuickCheck } from './quick.ts';
@@ -41,7 +40,7 @@ import {
   markPythonRegressionsStaleForPlanHash,
 } from './python-regression.ts';
 import { recommendedRegressionStackDiagnosis } from './recommended-stack.ts';
-import { syncManagedRuntimeAssets } from './managed-assets.ts';
+import { assertManagedRuntimeVersion, syncManagedRuntimeAssets } from './managed-assets.ts';
 import { QA_AGENT_VERSION } from './version.ts';
 import { planningPrdIsCurrent } from './task-prd.ts';
 import { artifactLinksSentence, userFacingArtifact } from './user-facing-artifacts.ts';
@@ -55,10 +54,9 @@ Commands:
   --help, -h, help | --version, -v, version
   init [--id ID] [--name NAME] [--description TEXT] [--platforms web,android,ios] [${hostFlags}] [--force]
   configure --project PROJECT_DIRECTORY --host <${hostNames}> [--scope project|user] [init options] [--force]
-  install-skill [--path SKILLS_DIRECTORY] [--force]   (Codex compatibility alias)
   install-host <${hostNames}> [--scope project|user] [--project PROJECT_DIRECTORY] [--path SKILLS_DIRECTORY] [--force]
-  doctor [--platforms web,ios] | validate | migrate | index rebuild
-  update [--force] [--migrate]
+  doctor [--platforms web,ios] | validate | index rebuild
+  update [--force]
   check --request TEXT [--mode quick|guided] [--module ID] [--task ID] [--session SESSION_KEY] [--platforms web,android,ios] [--risk low|medium|high|critical]
   continue [--session SESSION_KEY]
   finish [--session SESSION_KEY]
@@ -68,7 +66,7 @@ Commands:
   review --module MODULE --task TASK --approve --confirmed-by USER --confirmation-text "确认开始测试" [--session SESSION_KEY] [--confirmation-source current-chat-explicit-approval]
   test --module MODULE --task TASK [--session SESSION_KEY] [--scenario SCENARIO] [execution context flags]
   archive --module MODULE --task TASK
-  Compatibility and administration:
+  Advanced and administration:
   workflow bootstrap --request TEXT --module ID --task ID [--module-name NAME] [--task-name NAME] [--platforms web,android,ios] [--risk low|medium|high|critical]
   workflow status --module ID --task ID
   session bind --module MODULE --task TASK [--run RUN] [--session SESSION_KEY] [--session-host HOST] | session current|clear|list [--session SESSION_KEY]
@@ -83,7 +81,7 @@ Commands:
   host list | host attest --id ID --capabilities CAP1,CAP2 --permission-status verified|missing|unknown [--host HOST] [--version VERSION] | host import --file HOST_CAPABILITIES.json | host doctor [--platform android|ios]
   context module MODULE
   module list | module create ID --name NAME [--description TEXT] [--platforms web,android,ios] [--source-hints PATHS] [--entry-points PATHS] [--dependencies MODULES] | module update ID [--name NAME] [--description TEXT] [--risk LEVEL] [same mapping flags] | module archive ID | module plan ID | module coverage ID
-  task list | task create ID --module MODULE [metadata flags] | task update ID --module MODULE [metadata flags] | task plan|finalize|explore|run|review|archive ID --module MODULE | task regression show|run ID --module MODULE
+  task list | task create ID --module MODULE [metadata flags] | task update ID --module MODULE [metadata flags] | task plan|finalize|archive ID --module MODULE | task regression show|run ID --module MODULE
   module regression show|run MODULE [--priority p0|p1|p2|p3]
   memory list | memory search TEXT | memory add ID --module MODULE [--task TASK] --title TEXT --content TEXT | memory review ID --module MODULE [--task TASK] --approve|--reject
   run guide-approve RUN --scenario ID [--planned-step STEP_ID | --action TEXT --expected TEXT] --confirmed-by HUMAN --confirmation-text TEXT
@@ -105,7 +103,7 @@ Common commands:
   continue                Continue the active QA task
   finish                  End the current QA session
   doctor                  Check project and test-tool readiness
-  update [--migrate]      Update managed integration files
+  update                  Refresh managed files for this exact Runtime version
 
 In an Agent conversation, you normally only need to say what to test, “continue”, or “finish”.
 Run qa-agent help --advanced for Python regression, release, and administration commands.
@@ -264,7 +262,7 @@ function addMemory(root: string, id: string, moduleId: string, title: string, co
   return result.memory;
 }
 
-function root(): string { return requireProjectRoot(); }
+function root(): string { const projectRoot = requireProjectRoot(); assertManagedRuntimeVersion(qaPath(projectRoot)); return projectRoot; }
 
 function bootstrapFromFlags(projectRoot: string): void {
   const risk = flag('--risk');
@@ -286,7 +284,7 @@ function archiveTask(projectRoot: string, moduleId: string, taskId: string): voi
     process.exitCode = 1;
     return;
   }
-  if (normalizeTaskState(task.metadata.status) !== 'completed') transitionTaskState(projectRoot, task, 'completed', 'task_completed', 'archive_gates_satisfied', { idempotencyKey: `task-completed:${task.metadata.id}:${task.metadata.version}` });
+  if (resolveTaskState(task.metadata.status) !== 'completed') transitionTaskState(projectRoot, task, 'completed', 'task_completed', 'archive_gates_satisfied', { idempotencyKey: `task-completed:${task.metadata.id}:${task.metadata.version}` });
   transitionTaskState(projectRoot, task, 'archived', 'task_archived', 'archive_assets_complete', { idempotencyKey: `task-archived:${task.metadata.id}:${task.metadata.version}` });
   task.metadata.version += 1; task.updatedAt = now(); saveTask(projectRoot, task); rebuildIndexes(projectRoot);
   const sessionCleared = clearTaskSessionIfMatches(projectRoot, moduleId, taskId, flag('--session'));
@@ -308,10 +306,10 @@ function reviewPlanRequirements(projectRoot: string, moduleId: string, taskId: s
   if (!planningPrdIsCurrent(prdPath, task)) throw new Error(`Task PRD is missing or stale. Regenerate ${prdPath} before requesting QA confirmation.`);
   const currentPlanHash = testPlanHash(task);
   if (planReviewIsCurrent(task) && task.metadata.planReview?.confirmedBy === confirmedBy && task.metadata.planReview.statement === confirmationText.trim()) return task;
-  if (normalizeTaskState(task.metadata.status) === 'running') throw new Error(`Task ${task.metadata.id} has an active Run; its requirements cannot be re-approved.`);
+  if (resolveTaskState(task.metadata.status) === 'running') throw new Error(`Task ${task.metadata.id} has an active Run; its requirements cannot be re-approved.`);
   delete task.metadata.approval;
   task.metadata.planReview = { confirmedBy, confirmedAt: now(), confirmationSource: confirmationSource as 'current-chat-explicit-approval' | 'external-review-record', statement: confirmationText.trim(), planHash: currentPlanHash };
-  appendTaskEvent(projectRoot, { type: 'test_plan_requirements_confirmed', actor: { type: 'human', id: confirmedBy }, moduleId, taskId, fromState: normalizeTaskState(task.metadata.status), toState: normalizeTaskState(task.metadata.status), reasonCode: 'qa_confirmed_prd_matches_requirements', artifactHash: currentPlanHash, idempotencyKey: `plan-requirements-confirmed:${taskId}:${currentPlanHash}:${confirmedBy}` });
+  appendTaskEvent(projectRoot, { type: 'test_plan_requirements_confirmed', actor: { type: 'human', id: confirmedBy }, moduleId, taskId, fromState: resolveTaskState(task.metadata.status), toState: resolveTaskState(task.metadata.status), reasonCode: 'qa_confirmed_prd_matches_requirements', artifactHash: currentPlanHash, idempotencyKey: `plan-requirements-confirmed:${taskId}:${currentPlanHash}:${confirmedBy}` });
   task.metadata.version += 1; task.updatedAt = now(); saveTask(projectRoot, task); rebuildIndexes(projectRoot);
   return readTask(projectRoot, moduleId, taskId);
 }
@@ -332,8 +330,8 @@ function reviewTask(projectRoot: string, moduleId: string, taskId: string): Test
   const prdPath = taskPrdPath(projectRoot, moduleId, taskId);
   if (!planningPrdIsCurrent(prdPath, task)) throw new Error(`Task PRD is missing or stale. Regenerate ${prdPath}, present it to the user, and request confirmation again.`);
   const currentPlanHash = testPlanHash(task);
-  if (approvalIsCurrent(task) && task.metadata.approval?.confirmedBy === confirmedBy && task.metadata.approval.confirmationSource === confirmationSource && task.metadata.approval.statement === confirmationText.trim() && normalizeTaskState(task.metadata.status) === 'ready') return task;
-  const currentState = normalizeTaskState(task.metadata.status);
+  if (approvalIsCurrent(task) && task.metadata.approval?.confirmedBy === confirmedBy && task.metadata.approval.confirmationSource === confirmationSource && task.metadata.approval.statement === confirmationText.trim() && resolveTaskState(task.metadata.status) === 'ready') return task;
+  const currentState = resolveTaskState(task.metadata.status);
   if (currentState === 'running') throw new Error(`Task ${task.metadata.id} has an active Run; stop or complete it before approving a changed TestPlan.`);
   if (currentState !== 'awaiting_approval') transitionTaskState(projectRoot, task, 'awaiting_approval', 'test_plan_approval_requested', 'current_plan_ready_for_review', { actor: { type: 'agent', id: 'qa-agent' }, artifactHash: currentPlanHash, idempotencyKey: `test-plan-review-requested:${task.metadata.id}:${currentPlanHash}` });
   task.metadata.approval = { confirmedBy, confirmedAt: now(), confirmationSource: confirmationSource as 'current-chat-explicit-approval' | 'external-review-record', statement: confirmationText.trim(), planHash: currentPlanHash };
@@ -349,6 +347,7 @@ async function main(): Promise<void> {
   if (group === 'init') {
     const projectRoot = process.cwd(); const projectFile = join(projectRoot, '.qa-agent', 'project.json');
     const initialized = existsSync(projectFile);
+    if (initialized) assertManagedRuntimeVersion(qaPath(projectRoot));
     const project = initialized ? readProject(projectRoot) : initializeProject(projectRoot, { id: flag('--id'), name: flag('--name'), description: flag('--description'), platforms: listFlag('--platforms') });
     const requestedHosts = hostsFromFlags(args); const selectedHosts = requestedHosts.length ? requestedHosts : (process.stdin.isTTY && process.stdout.isTTY ? detectConfiguredHosts(projectRoot) : []);
     const managedHosts = Object.keys(configuredHostRecords(projectRoot));
@@ -362,16 +361,13 @@ async function main(): Promise<void> {
     if (!supportedHosts.includes(host as typeof supportedHosts[number])) throw new Error(`Host is required and must be one of: ${supportedHosts.join(', ')}.`);
     const projectFile = join(projectPath, '.qa-agent', 'project.json');
     const initialized = !existsSync(projectFile);
+    if (!initialized) assertManagedRuntimeVersion(qaPath(projectPath));
     const project = initialized ? initializeProject(projectPath, { id: flag('--id'), name: flag('--name'), description: flag('--description'), platforms: listFlag('--platforms') }) : undefined;
     const hostScope = flag('--scope') as 'project' | 'user' | undefined;
     const hostIntegration = installHostIntegration({ host: host as typeof supportedHosts[number], projectPath, path: flag('--path'), scope: hostScope, force: args.includes('--force') });
     const effectiveScope = hostScope ?? (host === 'codex' ? 'user' : 'project');
     if (effectiveScope === 'project') recordHostInstall(projectPath, hostIntegration);
     output({ projectPath, projectInitialized: initialized, project: project?.project, projectDataPath: join(projectPath, '.qa-agent'), hostIntegration }); return;
-  }
-  if (group === 'install-skill') {
-    const result = installHostIntegration({ host: 'codex', path: flag('--path'), force: args.includes('--force') });
-    output({ message: result.message, path: result.paths[0] }); return;
   }
   if (group === 'install-host') {
     if (!action || !supportedHosts.includes(action as typeof supportedHosts[number])) throw new Error(`Host is required and must be one of: ${supportedHosts.join(', ')}.`);
@@ -385,6 +381,7 @@ async function main(): Promise<void> {
   if (group === 'doctor') {
     const projectRoot = findProjectRoot();
     if (!projectRoot) return output({ ok: false, message: 'No QA project found. Run qa-agent init.' });
+    assertManagedRuntimeVersion(qaPath(projectRoot));
     const available = availableCapabilities(projectRoot);
     const projectPlatforms = listFlag('--platforms') ?? readProject(projectRoot).platforms;
     const requiredCapabilities = [...new Set(projectPlatforms.flatMap(platformCapabilities))];
@@ -400,10 +397,9 @@ async function main(): Promise<void> {
   }
   if (group === 'update') {
     const projectRoot = root();
-    const migration = args.includes('--migrate') ? migrateProjectArtifacts(projectRoot) : undefined;
-    const managedAssets = migration ? undefined : syncManagedRuntimeAssets(qaPath(projectRoot));
-    const hostUpdate = updateHostIntegrations(projectRoot, { force: args.includes('--force'), migrate: args.includes('--migrate') });
-    output({ projectRoot, migration, managedAssets, hostUpdate, migrated: args.includes('--migrate'), next: hostUpdate.conflicts.length ? 'Review conflicts or rerun qa-agent update --force.' : 'Project integrations are current.' }); return;
+    const managedAssets = syncManagedRuntimeAssets(qaPath(projectRoot));
+    const hostUpdate = updateHostIntegrations(projectRoot, { force: args.includes('--force') });
+    output({ projectRoot, managedAssets, hostUpdate, next: hostUpdate.conflicts.length ? 'Review conflicts or rerun qa-agent update --force.' : 'Project integrations are current.' }); return;
   }
   if (group === 'check') {
     const projectRoot = root();
@@ -668,13 +664,6 @@ ${advancedUsage}`);
   if (group === 'validate') {
     const result = validateProject(root()); output(result); if (!result.valid) process.exitCode = 1; return;
   }
-  if (group === 'migrate') {
-    const projectRoot = root();
-    const result = migrateProjectArtifacts(projectRoot);
-    rebuildIndexes(projectRoot);
-    output({ ...result, validation: validateProject(projectRoot) });
-    return;
-  }
   if (group === 'context' && action === 'module') {
     if (!subject) throw new Error('module id is required.');
     const projectRoot = root();
@@ -719,15 +708,13 @@ ${advancedUsage}`);
   }
   if (group === 'task') {
     const projectRoot = root();
-    if (action === 'operation') throw new Error('Legacy task operation commands were removed in v0.3.2. Use reviewed Python regression scripts.');
-    if (action === 'regression' && subject === 'sync') throw new Error('Task regression sync was removed in v0.3.2. Python regression selections are computed directly.');
     if (action === 'list') return output(readIndex(projectRoot, 'tasks'));
     const moduleId = requiredFlag('--module');
     if (!subject) throw new Error('task id is required.');
     if (action === 'create') {
       const task = applyTaskRegressionMetadata(createTaskSkeleton(readModule(projectRoot, moduleId), subject, flag('--name')));
       saveTask(projectRoot, task);
-      appendTaskEvent(projectRoot, { type: 'task_created', actor: { type: 'agent', id: 'qa-agent' }, moduleId, taskId: task.metadata.id, toState: 'draft', reasonCode: 'compatibility_task_create', artifactHash: testPlanHash(task), idempotencyKey: `task-created:${moduleId}:${task.metadata.id}:draft` });
+      appendTaskEvent(projectRoot, { type: 'task_created', actor: { type: 'agent', id: 'qa-agent' }, moduleId, taskId: task.metadata.id, toState: 'draft', reasonCode: 'task_created_from_admin_command', artifactHash: testPlanHash(task), idempotencyKey: `task-created:${moduleId}:${task.metadata.id}:draft` });
       rebuildIndexes(projectRoot); output(task); return;
     }
     if (action === 'update') {
@@ -738,9 +725,9 @@ ${advancedUsage}`);
       const name = flag('--name'); if (name) task.metadata.name = name;
       const currentPlanHash = testPlanHash(task);
       if (hadApproval && beforePlanHash !== currentPlanHash) {
-        if (normalizeTaskState(task.metadata.status) === 'running') throw new Error(`Task ${task.metadata.id} has an active Run; stop or complete it before changing the approved TestPlan.`);
+        if (resolveTaskState(task.metadata.status) === 'running') throw new Error(`Task ${task.metadata.id} has an active Run; stop or complete it before changing the approved TestPlan.`);
         invalidateApproval(task);
-        if (normalizeTaskState(task.metadata.status) !== 'awaiting_approval') transitionTaskState(projectRoot, task, 'awaiting_approval', 'test_plan_changed', 'task_update_changed_plan_hash', { actor: { type: 'agent', id: 'qa-agent' }, artifactHash: currentPlanHash, idempotencyKey: `test-plan-changed:${task.metadata.id}:${currentPlanHash}` });
+        if (resolveTaskState(task.metadata.status) !== 'awaiting_approval') transitionTaskState(projectRoot, task, 'awaiting_approval', 'test_plan_changed', 'task_update_changed_plan_hash', { actor: { type: 'agent', id: 'qa-agent' }, artifactHash: currentPlanHash, idempotencyKey: `test-plan-changed:${task.metadata.id}:${currentPlanHash}` });
               markPythonRegressionsStaleForPlanHash(projectRoot, task, currentPlanHash);
       }
       saveTask(projectRoot, task); rebuildIndexes(projectRoot); output(task); return;
@@ -762,12 +749,7 @@ ${advancedUsage}`);
       }
       throw new Error('Task regression action must be show or run.');
     }
-    if (action === 'review') { const reviewed = reviewTask(projectRoot, moduleId, taskId); output({ ...reviewed, deprecatedAlias: true, canonicalCommand: 'qa-agent review --module MODULE --task TASK --approve --confirmed-by USER', workflow: workflowStatus(projectRoot, moduleId, taskId) }); return; }
     if (action === 'archive') { archiveTask(projectRoot, moduleId, taskId); return; }
-    if (action === 'explore' || action === 'run') {
-      const started = beginAgentGuidedRun(projectRoot, task, runContextFromFlags()); rebuildIndexes(projectRoot);
-      output({ ...executionEnvelope(projectRoot, started), workflow: workflowStatus(projectRoot, moduleId, taskId), deprecatedAlias: true, canonicalCommand: 'qa-agent test --module MODULE --task TASK' }); return;
-    }
   }
   if (group === 'memory') {
     const projectRoot = root();
@@ -792,7 +774,7 @@ ${advancedUsage}`);
   if (group === 'run') {
     if (!['show', 'report', 'guide-approve', 'guide-verdict', 'step', 'evidence', 'cleanup', 'recover', 'observe', 'complete'].includes(action ?? '')) throw new Error(`Unsupported command.\n\n${advancedUsage}`);
     const projectRoot = root();
-    if (!subject) throw new Error('run id is required. Start a Task with task run TASK --module MODULE.');
+    if (!subject) throw new Error('run id is required. Start a Run with qa-agent test --module MODULE --task TASK.');
     const run = readRunById(projectRoot, subject);
     if (action === 'show') return output(run);
     if (action === 'report') return output(taskSourceRunReportPath(projectRoot, run.moduleId, run.taskId));
@@ -846,6 +828,7 @@ ${advancedUsage}`);
   if (group === 'skill') {
     const skillRoot = join(process.cwd(), 'skill', 'qa-agent');
     const projectRoot = findProjectRoot();
+    if (projectRoot) assertManagedRuntimeVersion(qaPath(projectRoot));
     if (action === 'list') return output(projectRoot ? readIndex(projectRoot, 'skills') : [{ name: 'qa-agent', path: skillRoot }]);
     if (action === 'validate') { const result = validateSkill(skillRoot); output(result); if (!result.valid) process.exitCode = 1; return; }
   }

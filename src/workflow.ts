@@ -9,7 +9,7 @@ import { createTaskSkeleton, taskPlan } from './planning.ts';
 import { createModule, modulePath, readModule, readTask, saveTask, taskDirectory, taskPrdPath, taskSourceRunPath } from './project.ts';
 import { readJson } from './store.ts';
 import type { NextAction, QaWorkflowState, RiskLevel, TestRun, WorkflowGate, WorkflowPhase, WorkflowTodo } from './types.ts';
-import { normalizeTaskState } from './workflow-model.ts';
+import { taskState as resolveTaskState } from './workflow-model.ts';
 import { taskFinalizationIsCurrent } from './task-finalizer.ts';
 import { planningPrdIsCurrent } from './task-prd.ts';
 
@@ -88,7 +88,7 @@ export function workflowStatus(root: string, moduleId: string, taskId: string, r
   const unverifiedScripts = scripts.filter(script => script.status === 'approved_unverified' && task && script.sourcePlanHash === testPlanHash(task));
   const capabilityStatus = task ? checkCapabilities(root, [...new Set([...task.capabilities.required, ...platformCapabilities(task.scope.platforms[0] ?? 'web')])], task.capabilities.optional) : undefined;
   const capabilityReady = Boolean(capabilityStatus && !capabilityStatus.missing.length);
-  const taskState = normalizeTaskState(task?.metadata.status);
+  const taskState = resolveTaskState(task?.metadata.status);
   const quickFinalizationRequired = Boolean(task?.metadata.mode === 'quick' && run?.completedAt && !['blocked', 'paused', 'needs_confirmation', 'inconclusive'].includes(run.status));
   const quickFinalizationCurrent = Boolean(task && run && quickFinalizationRequired && taskFinalizationIsCurrent(root, task, run));
   let status: QaWorkflowState['workflowStatus']; let phase: WorkflowPhase; let reasonCode: string; let nextActions: NextAction[];

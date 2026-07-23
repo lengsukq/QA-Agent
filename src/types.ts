@@ -1,7 +1,5 @@
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
 export type TaskLifecycleState = 'draft' | 'planning' | 'awaiting_approval' | 'ready' | 'running' | 'reviewing_result' | 'completed' | 'archived' | 'needs_input' | 'blocked' | 'paused' | 'deprecated' | 'superseded';
-/** Legacy states remain readable during migration and normalize into the simplified lifecycle. */
-export type TaskStatus = TaskLifecycleState | 'active' | 'needs_review' | 'finalizing' | 'regression_ready';
 export type RunStatus = 'pending' | 'running' | 'passed' | 'failed' | 'blocked' | 'paused' | 'inconclusive' | 'not_applicable' | 'needs_confirmation' | 'adapted';
 export type RunMode = 'explore';
 export type VisualInspectionStatus = 'performed' | 'not-required' | 'not-applicable' | 'skipped';
@@ -26,7 +24,7 @@ export type WorkflowStatus = 'setup_required' | 'approval_required' | 'ready_to_
 export type WorkflowPhase = 'intake' | 'discovery' | 'planning' | 'approval' | 'preflight' | 'execution' | 'assertion' | 'result_review' | 'regression' | 'recovery' | 'archive';
 export type WorkflowGateStatus = 'satisfied' | 'blocking' | 'not_required';
 export interface WorkflowGate { id: string; status: WorkflowGateStatus; reasonCode?: string; requiredActor?: 'agent' | 'human' | 'runtime' | 'host'; artifactHash?: string; }
-export interface NextAction { id: string; description: string; command?: string; requiresHuman: boolean; requiredActor?: 'agent' | 'human' | 'runtime' | 'host'; blockingGate?: string; deprecatedAlias?: boolean; canonicalCommand?: string; }
+export interface NextAction { id: string; description: string; command?: string; requiresHuman: boolean; requiredActor?: 'agent' | 'human' | 'runtime' | 'host'; blockingGate?: string; }
 export type WorkflowTodoStatus = 'pending' | 'in_progress' | 'blocked' | 'completed';
 
 export interface WorkflowTodo { id: string; title: string; status: WorkflowTodoStatus; blocking?: boolean; }
@@ -489,7 +487,7 @@ export interface TestTask {
   apiVersion: 'qa-agent/v2';
   kind: 'TestTask';
   metadata: {
-    id: string; name: string; moduleId: string; version: number; status: TaskStatus;
+    id: string; name: string; moduleId: string; version: number; status: TaskLifecycleState;
     priority: TestPriority; tags: string[];
     mode?: QaMode;
     approvalPolicy?: ApprovalPolicy;

@@ -103,7 +103,7 @@ export function analyzeImpact(
   const impactedModules = [...direct, ...propagated].sort((a, b) => b.score - a.score || a.moduleId.localeCompare(b.moduleId));
   const impactedIds = new Set(impactedModules.map(item => item.moduleId));
 
-  const selectedTasks = tasks.filter(task => ['ready', 'running', 'reviewing_result', 'completed', 'active'].includes(task.metadata.status)).flatMap(task => {
+  const selectedTasks = tasks.filter(task => ['ready', 'running', 'reviewing_result', 'completed'].includes(task.metadata.status)).flatMap(task => {
     const reasons: string[] = [];
     if (impactedIds.has(task.metadata.moduleId)) reasons.push('Task belongs to an impacted module.');
     const impactTags = (task.metadata.tags ?? []).filter(tag => tag.startsWith('impact:')).map(tag => tag.slice('impact:'.length));

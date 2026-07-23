@@ -5,7 +5,7 @@ import { capabilityAdvice, capabilitySnapshot, checkCapabilities, platformCapabi
 import { checkpointRun, gitMetadata, qaPath, readRunById, readTask, saveRun, saveTask, taskSourceEvidenceDirectory, taskSourceRunDirectory, taskSourceRunPath } from './project.ts';
 import { rebuildIndexes } from './indexer.ts';
 import { appendTaskEvent } from './events.ts';
-import { normalizeTaskState, transitionTaskState } from './workflow-model.ts';
+import { taskState as resolveTaskState, transitionTaskState } from './workflow-model.ts';
 import { hasSecrets, now, readJson, withFileLock } from './store.ts';
 import { writeReport } from './report.ts';
 import { clearTaskResultSection, finalizeTask } from './task-finalizer.ts';
@@ -61,7 +61,7 @@ function finish(root: string, task: TestTask, run: TestRun): TestRun {
   }
   run.pythonRegressionEligibility = inspectPythonRegressionEligibility(task, run);
   if (task.metadata.mode === 'guided' && !['blocked', 'paused', 'needs_confirmation', 'inconclusive'].includes(run.status)) generateGuidedScenarioRegressions(root, task, run);
-  const taskStateBeforeFinish = normalizeTaskState(task.metadata.status);
+  const taskStateBeforeFinish = resolveTaskState(task.metadata.status);
   const targetTaskState = run.status === 'paused'
     ? 'paused'
     : ['blocked', 'needs_confirmation', 'inconclusive'].includes(run.status) || run.steps.some(step => step.id === 'preflight')
@@ -125,8 +125,8 @@ function resetSourceRunSlot(root: string, task: TestTask, previous: TestRun): vo
     actor: { type: 'runtime', id: 'qa-agent-runtime' },
     moduleId: task.metadata.moduleId,
     taskId: task.metadata.id,
-    fromState: normalizeTaskState(task.metadata.status),
-    toState: normalizeTaskState(task.metadata.status),
+    fromState: resolveTaskState(task.metadata.status),
+    toState: resolveTaskState(task.metadata.status),
     reasonCode: 'replace_unpublished_source_run',
     artifactHash: previous.planHash,
     idempotencyKey: `source-run-restarted:${previous.id}:${task.metadata.version}`,
@@ -144,7 +144,7 @@ function beginAgentGuidedRunUnlocked(root: string, task: TestTask, context: RunC
     return current;
   }
   if (current) resetSourceRunSlot(root, task, current);
-  const taskState = normalizeTaskState(task.metadata.status);
+  const taskState = resolveTaskState(task.metadata.status);
   if (['archived', 'deprecated', 'superseded'].includes(taskState)) throw new Error(`Task ${task.metadata.id} is ${taskState} and cannot start a new Run.`);
   if (!['ready', 'reviewing_result', 'completed', 'blocked', 'paused'].includes(taskState)) throw new Error(`Task status is ${task.metadata.status}; present the Task PRD, obtain “确认测试方案”, and then obtain the separate “确认开始测试” authorization before creating a Run.`);
   if (!executionContractIsCurrent(task)) throw new Error('The Task plan is unapproved or changed after approval. Present the current Task PRD, obtain the exact QA reply “确认测试方案”, and then obtain the separate “确认开始测试” authorization before creating a Run.');

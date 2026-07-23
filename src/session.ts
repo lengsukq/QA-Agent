@@ -5,7 +5,7 @@ import { readIndex, rebuildIndexes } from './indexer.ts';
 import { qaPath, readTask, taskPath } from './project.ts';
 import { isSafeId, listFiles, now, readJson, withFileLock, writeJsonAtomic } from './store.ts';
 import type { QaMode, QaSessionBinding, QaSessionClosure, SessionTaskCandidate, TaskLifecycleState } from './types.ts';
-import { normalizeTaskState } from './workflow-model.ts';
+import { taskState as resolveTaskState } from './workflow-model.ts';
 
 interface IndexedTask {
   id: string;
@@ -87,7 +87,7 @@ function usableBinding(root: string, binding: QaSessionBinding): boolean {
   try {
     if (!existsSync(taskPath(root, binding.moduleId, binding.taskId))) return false;
     const task = readTask(root, binding.moduleId, binding.taskId);
-    return !['archived', 'deprecated', 'superseded'].includes(normalizeTaskState(task.metadata.status));
+    return !['archived', 'deprecated', 'superseded'].includes(resolveTaskState(task.metadata.status));
   } catch {
     return false;
   }
@@ -139,7 +139,7 @@ export function readTaskSession(root: string, explicitSessionKey?: string): QaSe
     try {
       const value = readJson<QaSessionBinding>(fallback);
       if (validBinding(value, identity)) return value;
-    } catch { /* Invalid compatibility pointers are ignored. */ }
+    } catch { /* Invalid fallback pointers are ignored. */ }
   }
   return undefined;
 }
@@ -233,7 +233,7 @@ export function resolveActiveTaskSession(root: string, explicitSessionKey?: stri
               moduleId: existing.moduleId,
               taskId: existing.taskId,
               title: manifest.metadata.name,
-              taskState: normalizeTaskState(manifest.metadata.status),
+              taskState: resolveTaskState(manifest.metadata.status),
               mode: manifest.metadata.mode,
               updatedAt: manifest.updatedAt,
             } satisfies SessionTaskCandidate;

@@ -7,7 +7,7 @@ import { isExplicitPlanRequirementsConfirmation, isExplicitStartConfirmation, is
 import { hasRuntimeReportMarker, RUNTIME_REPORT_GENERATOR } from './report-contract.ts';
 import type { RegressionRun, TaskLifecycleState, TestRun } from './types.ts';
 import { readTaskEvents } from './events.ts';
-import { normalizeTaskState } from './workflow-model.ts';
+import { taskState as resolveTaskState } from './workflow-model.ts';
 import { inspectPythonRegressionEligibility } from './python-regression.ts';
 import { inspectManagedRuntimeAssets } from './managed-assets.ts';
 import { planningPrdIsCurrent } from './task-prd.ts';
@@ -22,16 +22,14 @@ function validateDomainObject(path: string): string[] {
   if (path.endsWith('module.json') && (!isSafeId(value.id) || !['active', 'deprecated', 'archived'].includes(value.status) || typeof value.revision !== 'number')) errors.push(`${path}: invalid module id, revision, or status.`);
   if (/\/tasks\/[^/]+\/task\.json$/.test(path)) {
     if (value.apiVersion !== 'qa-agent/v2' || !value.metadata || !isSafeId(value.metadata.id) || !isSafeId(value.metadata.moduleId)) errors.push(`${path}: invalid Task contract.`);
-    const statuses = ['draft', 'planning', 'awaiting_approval', 'ready', 'running', 'reviewing_result', 'completed', 'archived', 'needs_input', 'blocked', 'paused', 'deprecated', 'superseded', 'active', 'needs_review', 'finalizing', 'regression_ready'];
+    const statuses = ['draft', 'planning', 'awaiting_approval', 'ready', 'running', 'reviewing_result', 'completed', 'archived', 'needs_input', 'blocked', 'paused', 'deprecated', 'superseded'];
     if (!statuses.includes(value.metadata?.status)) errors.push(`${path}: invalid Task lifecycle state ${value.metadata?.status}.`);
     if (value.metadata?.mode && !['quick', 'guided', 'regression'].includes(value.metadata.mode)) errors.push(`${path}: invalid QA mode ${value.metadata.mode}.`);
     if (value.metadata?.approvalPolicy !== 'test-plan-and-side-effects') errors.push(`${path}: every Task must require reviewed TestPlan and explicit start confirmation.`);
-    if (['ready', 'running', 'reviewing_result', 'completed', 'archived', 'active'].includes(value.metadata?.status) && (!isHumanApprover(value.metadata.planReview?.confirmedBy) || !value.metadata.planReview?.confirmedAt || !value.metadata.planReview?.confirmationSource || !value.metadata.planReview?.planHash || !isExplicitPlanRequirementsConfirmation(value.metadata.planReview?.statement))) errors.push(`${path}: executable or completed Task requires QA confirmation that the PRD matches requirements.`);
-    if (['ready', 'running', 'reviewing_result', 'completed', 'archived', 'active'].includes(value.metadata?.status) && (!isHumanApprover(value.metadata.approval?.confirmedBy) || !value.metadata.approval?.confirmedAt || !value.metadata.approval?.confirmationSource || !value.metadata.approval?.planHash || !isExplicitStartConfirmation(value.metadata.approval?.statement))) errors.push(`${path}: executable or completed Task requires the exact human start confirmation.`);
+    if (['ready', 'running', 'reviewing_result', 'completed', 'archived'].includes(value.metadata?.status) && (!isHumanApprover(value.metadata.planReview?.confirmedBy) || !value.metadata.planReview?.confirmedAt || !value.metadata.planReview?.confirmationSource || !value.metadata.planReview?.planHash || !isExplicitPlanRequirementsConfirmation(value.metadata.planReview?.statement))) errors.push(`${path}: executable or completed Task requires QA confirmation that the PRD matches requirements.`);
+    if (['ready', 'running', 'reviewing_result', 'completed', 'archived'].includes(value.metadata?.status) && (!isHumanApprover(value.metadata.approval?.confirmedBy) || !value.metadata.approval?.confirmedAt || !value.metadata.approval?.confirmationSource || !value.metadata.approval?.planHash || !isExplicitStartConfirmation(value.metadata.approval?.statement))) errors.push(`${path}: executable or completed Task requires the exact human start confirmation.`);
     if (!Array.isArray(value.scenarioRefs) || !value.scenarioRefs.length || value.scenarioRefs.some((ref: unknown) => typeof ref !== 'string' || !/^scenarios\/[a-z0-9][a-z0-9-]{0,62}\.json$/.test(ref))) errors.push(`${path}: invalid scenarioRefs.`);
     if (value.pythonRegressionRefs !== undefined && (!Array.isArray(value.pythonRegressionRefs) || value.pythonRegressionRefs.some((ref: unknown) => typeof ref !== 'string' || !/^regression\/[a-z0-9][a-z0-9-]{0,62}\.json$/.test(ref)))) errors.push(`${path}: invalid pythonRegressionRefs.`);
-    if (value.operationPlanRefs !== undefined || value.regressionSuiteRef !== undefined) errors.push(`${path}: legacy OperationPlan or RegressionSuite references remain; run qa-agent migrate.`);
-    if (value.reportIndexRef !== undefined || value.runRefs !== undefined) errors.push(`${path}: legacy multi-Run references remain; run qa-agent update --migrate.`);
     if (value.sourceRunRef !== undefined && value.sourceRunRef !== 'source-run/run.json') errors.push(`${path}: sourceRunRef must be source-run/run.json.`);
     if (value.sourceReportRef !== undefined && value.sourceReportRef !== 'source-run/report.md') errors.push(`${path}: sourceReportRef must be source-run/report.md.`);
     if (value.metadata?.mode === 'quick' && value.metadata?.status === 'completed' && (value.prdRef !== 'prd.md' || value.finalization?.status !== 'completed' || !value.finalization?.sourceRunId || !value.finalization?.artifactHash)) errors.push(`${path}: completed Quick Task requires finalized prd.md metadata.`);
@@ -48,7 +46,6 @@ function validateDomainObject(path: string): string[] {
   if (/\/memory\/[^/]+\.json$/.test(path) || /\/shared-memory\/entries\/[^/]+\.json$/.test(path)) { if (!isSafeId(value.id) || !['candidate', 'active', 'superseded', 'deprecated'].includes(value.status)) errors.push(`${path}: invalid memory.`); if (hasSecrets({ content: value.content, structuredRule: value.structuredRule })) errors.push(`${path}: contains a potential secret.`); }
   if (/\/tasks\/[^/]+\/source-run\/run\.json$/.test(path)) {
     if (!['pending', 'running', 'passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable', 'needs_confirmation', 'adapted'].includes(value.status)) errors.push(`${path}: invalid Source Run status.`);
-    if (value.operationPlanId !== undefined || value.replayStatus !== undefined || value.replayStage !== undefined || value.replayCursor !== undefined || value.operationCandidates !== undefined || (value.steps ?? []).some((step: Record<string, unknown>) => step.operationAction !== undefined)) errors.push(`${path}: legacy replay or action fields remain; run qa-agent migrate.`);
     if (value.guidedPending) {
       if (!['execute_action', 'result_verdict'].includes(value.guidedPending.type)) errors.push(`${path}: invalid user-led pending interaction.`);
       if (value.guidedPending.type === 'execute_action' && (!isSafeId(value.guidedPending.scenarioId) || typeof value.guidedPending.action !== 'string' || typeof value.guidedPending.expected !== 'string' || !isHumanApprover(value.guidedPending.approval?.confirmedBy))) errors.push(`${path}: user-led approved action is incomplete.`);
@@ -100,7 +97,6 @@ function validateDomainObject(path: string): string[] {
     if (!isHumanApprover(value.approvedBy) || !value.approvedAt || !['current-chat-explicit-approval', 'external-review-record'].includes(value.approvalSource)) errors.push(`${path}: Python regression requires human approval.`);
     if (!/^regression\/[a-z0-9][a-z0-9-]{0,62}\.py$/.test(value.scriptRef ?? '')) errors.push(`${path}: invalid scriptRef.`);
     if (!value.sourceRunId || !value.sourceReportRef || !value.sourcePlanHash || !value.sourceFlowHash || !value.scriptHash || !Array.isArray(value.sourceStepIds) || !value.sourceStepIds.length || !Array.isArray(value.scenarioIds) || !value.scenarioIds.length) errors.push(`${path}: missing Run and flow traceability.`);
-    if (value.sourceOperationPlanIds !== undefined) errors.push(`${path}: legacy sourceOperationPlanIds remains; run qa-agent migrate.`);
     if (value.status === 'validated' && (!value.validatedByRunId || !value.validatedAt)) errors.push(`${path}: validated script requires a completed validation Run.`);
     const scriptPath = join(dirname(path), `${value.id}.py`);
     if (!existsSync(scriptPath)) errors.push(`${path}: script is missing.`); else { const script = readFileSync(scriptPath, 'utf8'); if (![textHash(script), textHash(script.trimEnd())].includes(value.scriptHash)) errors.push(`${scriptPath}: script hash mismatch.`); if (pythonContainsRawSecret(script)) errors.push(`${scriptPath}: potential raw secret.`); if (!script.includes(`"sourceFlowHash":"${value.sourceFlowHash}"`) && !script.includes(`"sourceFlowHash": "${value.sourceFlowHash}"`)) errors.push(`${scriptPath}: sourceFlowHash metadata mismatch.`); if (!script.includes('QA_AGENT_RESULT_PATH') || !script.includes('qa-agent/python-regression-result/v1')) errors.push(`${scriptPath}: result contract missing.`); if (!script.includes('QA_AGENT_SCREENSHOT_DIR') || !/[\"\']screenshot[\"\']/.test(script)) errors.push(`${scriptPath}: screenshot checkpoint contract missing.`); }
@@ -125,7 +121,6 @@ function validateDomainObject(path: string): string[] {
   if (/\/\.runtime\/drafts\/[^/]+\/[^/]+\/draft\.json$/.test(path)) {
     if (value.apiVersion !== 'qa-agent/python-regression-draft/v2' || value.kind !== 'PythonRegressionDraft' || value.status !== 'draft' || !isSafeId(value.id)) errors.push(`${path}: invalid Python draft.`);
     if (!value.sourceRunId || !value.sourcePlanHash || !value.sourceFlowHash || !Array.isArray(value.sourceStepIds) || !value.sourceStepIds.length || !Array.isArray(value.scenarioIds) || !value.scenarioIds.length || !value.scriptHash) errors.push(`${path}: draft traceability is incomplete.`);
-    if (value.sourceOperationPlanIds !== undefined) errors.push(`${path}: legacy sourceOperationPlanIds remains.`);
     const scriptPath = join(dirname(path), `${value.id}.py`); if (!existsSync(scriptPath)) errors.push(`${path}: draft script is missing.`); else { const script = readFileSync(scriptPath, 'utf8'); if (![textHash(script), textHash(script.trimEnd())].includes(value.scriptHash)) errors.push(`${scriptPath}: draft hash mismatch.`); if (pythonContainsRawSecret(script)) errors.push(`${scriptPath}: potential raw secret.`); }
   }
   if (/\/regression-runs\/[^/]+\.json$/.test(path) && !/\/tasks\//.test(path)) {
@@ -162,19 +157,13 @@ export function validateProject(root: string): ValidationResult {
   const errors = files.filter(([path]) => !existsSync(path)).map(([path]) => `${path}: not found`);
   for (const [path, fields] of files) if (existsSync(path)) { errors.push(...validateObject(path, fields)); try { errors.push(...validateDomainObject(path)); } catch (error) { errors.push(`${path}: ${(error as Error).message}`); } }
   errors.push(...inspectManagedRuntimeAssets(qaPath(root)));
-  for (const legacy of listFiles(qaPath(root, 'modules'), path => path.includes('/operation-plans/') || path.endsWith('/regression-suite.json'))) errors.push(`${legacy}: legacy OperationPlan asset remains; run qa-agent migrate.`);
-  for (const name of ['archive', 'cache', 'evidence', 'runs']) if (existsSync(qaPath(root, name))) errors.push(`${qaPath(root, name)}: legacy project-level Runtime directory remains; run qa-agent update --migrate.`);
-  try { const project = readJson<Record<string, any>>(qaPath(root, 'project.json')); if (project.storage?.runIndexFormat !== undefined) errors.push(`${qaPath(root, 'project.json')}: legacy runIndexFormat remains; run qa-agent update --migrate.`); } catch { /* reported above */ }
-  if (existsSync(qaPath(root, 'index', 'runs.jsonl'))) errors.push(`${qaPath(root, 'index', 'runs.jsonl')}: legacy exploratory Run index remains; run qa-agent update --migrate.`);
 
   const validStates = new Set<TaskLifecycleState>(['draft', 'planning', 'awaiting_approval', 'ready', 'running', 'reviewing_result', 'completed', 'archived', 'needs_input', 'blocked', 'paused', 'deprecated', 'superseded']);
   for (const manifestPath of listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/task\.json$/.test(path))) {
     const manifest = readJson<Record<string, any>>(manifestPath); const moduleId = manifest.metadata?.moduleId; const taskId = manifest.metadata?.id; if (!moduleId || !taskId) continue;
     const taskDir = dirname(manifestPath); const task = readTask(root, moduleId, taskId);
     if (!planningPrdIsCurrent(taskPrdPath(root, moduleId, taskId), task)) errors.push(`${manifestPath}: Task prd.md is missing or stale for the current detailed TestPlan.`);
-    if (existsSync(join(taskDir, 'reports'))) errors.push(`${join(taskDir, 'reports')}: legacy Task reports directory remains; run qa-agent update --migrate.`);
-    if (existsSync(join(taskDir, 'runs'))) errors.push(`${join(taskDir, 'runs')}: legacy multi-Run directory remains; run qa-agent update --migrate.`);
-    try { const events = readTaskEvents(root, moduleId, taskId); const ids = new Set<string>(); const keys = new Set<string>(); for (const [index, event] of events.entries()) { if (event.seq !== index + 1) errors.push(`${manifestPath}: invalid event sequence.`); if (!event.id || ids.has(event.id)) errors.push(`${manifestPath}: duplicate event id.`); else ids.add(event.id); if (!event.idempotencyKey || keys.has(event.idempotencyKey)) errors.push(`${manifestPath}: duplicate event idempotencyKey.`); else keys.add(event.idempotencyKey); if (event.fromState && !validStates.has(normalizeTaskState(event.fromState))) errors.push(`${manifestPath}: invalid event fromState.`); if (event.toState && !validStates.has(normalizeTaskState(event.toState))) errors.push(`${manifestPath}: invalid event toState.`); } } catch (error) { errors.push((error as Error).message); }
+    try { const events = readTaskEvents(root, moduleId, taskId); const ids = new Set<string>(); const keys = new Set<string>(); for (const [index, event] of events.entries()) { if (event.seq !== index + 1) errors.push(`${manifestPath}: invalid event sequence.`); if (!event.id || ids.has(event.id)) errors.push(`${manifestPath}: duplicate event id.`); else ids.add(event.id); if (!event.idempotencyKey || keys.has(event.idempotencyKey)) errors.push(`${manifestPath}: duplicate event idempotencyKey.`); else keys.add(event.idempotencyKey); if (event.fromState && !validStates.has(resolveTaskState(event.fromState))) errors.push(`${manifestPath}: invalid event fromState.`); if (event.toState && !validStates.has(resolveTaskState(event.toState))) errors.push(`${manifestPath}: invalid event toState.`); } } catch (error) { errors.push((error as Error).message); }
     const sourcePath = taskSourceRunPath(root, moduleId, taskId);
     const sourceRun = existsSync(sourcePath) ? readJson<TestRun>(sourcePath) : undefined;
     if (sourceRun && (sourceRun.moduleId !== moduleId || sourceRun.taskId !== taskId)) errors.push(`${sourcePath}: Source Run identity does not match its Task.`);
@@ -196,7 +185,7 @@ export function validateProject(root: string): ValidationResult {
     }
     for (const ref of declared) if (!existsSync(join(taskDir, ref))) errors.push(`${manifestPath}: missing script reference ${ref}.`);
     if (manifest.metadata?.mode === 'quick' && manifest.metadata?.status === 'completed') { const prd = join(taskDir, 'prd.md'); if (!existsSync(prd) || !readFileSync(prd, 'utf8').includes('<!-- QA-AGENT:RESULTS:START -->')) errors.push(`${manifestPath}: completed Quick Task is missing finalized prd.md.`); }
-    if (normalizeTaskState(manifest.metadata?.status) === 'archived') {
+    if (resolveTaskState(manifest.metadata?.status) === 'archived') {
       const covered = new Set(regressions.filter(item => item.status === 'validated' && item.sourcePlanHash === planHash).flatMap(item => item.scenarioIds ?? []));
       for (const scenario of task.scenarios) if (!covered.has(scenario.id)) errors.push(`${manifestPath}: archived Scenario ${scenario.id} lacks a validated Python regression.`);
       if (!sourceRun?.completedAt || !['passed', 'adapted'].includes(sourceRun.status)) errors.push(`${manifestPath}: archived Task requires the Source Run passed or adapted.`);
@@ -218,7 +207,5 @@ export function validateSkill(skillRoot: string): ValidationResult {
   const recommendedStackText = existsSync(recommendedStackPath) ? readFileSync(recommendedStackPath, 'utf8') : '';
   if (recommendedStackText && (!/Python 3\.12/.test(recommendedStackText) || !/pytest-playwright/.test(recommendedStackText) || !/xcrun simctl/.test(recommendedStackText) || !/fb-idb/.test(recommendedStackText) || !/idb_companion/.test(recommendedStackText) || !/ios-simulator-mcp/.test(recommendedStackText) || !/result\.json/.test(recommendedStackText) || !/report\.md/.test(recommendedStackText) || !/screenshots\//.test(recommendedStackText) || !/stdout\.log/.test(recommendedStackText) || !/stderr\.log/.test(recommendedStackText) || !/evidence\//.test(recommendedStackText))) errors.push(`${recommendedStackPath}: recommended stack contract is incomplete.`);
   if (recommendedStackText && /junit|allure|ui-tree|playwright trace|videos?\//i.test(recommendedStackText)) errors.push(`${recommendedStackPath}: removed extended artifact requirements must not be documented.`);
-  const allSkillText = [text, existsSync(workflowPath) ? readFileSync(workflowPath, 'utf8') : '', existsSync(pythonPath) ? readFileSync(pythonPath, 'utf8') : '', recommendedStackText, ...['guided', 'regression-test'].map(name => { const p = join(skillRoot, 'skills', name, 'SKILL.md'); return existsSync(p) ? readFileSync(p, 'utf8') : ''; })].join('\n');
-  if (/OperationPlan|operation-plans|RegressionSuite|regression-suite|sourceOperationPlanIds/.test(allSkillText)) errors.push('Skill package still references removed OperationPlan or RegressionSuite assets.');
   return { valid: errors.length === 0, errors, checked: 6 };
 }

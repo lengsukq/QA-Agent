@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -12,7 +12,6 @@ import { analyzeProjectImpact } from '../src/impact-analysis.ts';
 import { buildModuleRegressionSelection, buildReleaseRegressionSelection, buildTaskRegressionSelection, runRegressionSelection } from '../src/regression.ts';
 import { createReleaseCheck, finalizeReleaseCheck } from '../src/release.ts';
 import { createPythonRegressionDraft, publishPythonRegression, readPythonRegression, runPythonRegression } from '../src/python-regression.ts';
-import { migrateProjectArtifacts } from '../src/migration.ts';
 import { validateProject } from '../src/validation.ts';
 import { testPlanHash } from '../src/approval.ts';
 import type { PythonRegressionManifest, TestRun, TestTask } from '../src/types.ts';
@@ -516,109 +515,17 @@ test('changing a Task plan marks Python stale and allows a replacement Source Ru
   assert.equal(JSON.parse(readFileSync(taskSourceRunPath(root, 'settings', 'preferences'), 'utf8')).id, replacement.runId);
 });
 
-test('Migration selects one Source Run, preserves extra history, and upgrades Python metadata', () => {
-  const root = mkdtempSync(join(tmpdir(), 'qa-agent-migration-'));
-  initializeProject(root, { id: 'migration' }); importHost(root);
-  const source = strictTaskWithRun(root, 'legacy', 'legacy-task'); createFormalScript(root, source.task, source.run, 'legacy-script');
-  const taskRoot = taskDirectory(root, 'legacy', 'legacy-task');
-  const oldRunsRoot = join(taskRoot, 'runs');
-  const oldSelectedRun = join(oldRunsRoot, source.run.id);
-  mkdirSync(oldRunsRoot, { recursive: true });
-  cpSync(taskSourceRunDirectory(root, 'legacy', 'legacy-task'), oldSelectedRun, { recursive: true });
-  rmSync(taskSourceRunDirectory(root, 'legacy', 'legacy-task'), { recursive: true, force: true });
-  const extraRunId = 'run-legacy-extra';
-  const oldExtraRun = join(oldRunsRoot, extraRunId);
-  cpSync(oldSelectedRun, oldExtraRun, { recursive: true });
-  const extraRunPath = join(oldExtraRun, 'run.json');
-  const extraRun = JSON.parse(readFileSync(extraRunPath, 'utf8'));
-  extraRun.id = extraRunId;
-  extraRun.startedAt = '2027-01-01T00:00:00.000Z';
-  extraRun.completedAt = '2027-01-01T00:01:00.000Z';
-  extraRun.reportPath = `runs/${extraRunId}/report.md`;
-  writeFileSync(extraRunPath, JSON.stringify(extraRun, null, 2));
-
-  const manifestPath = join(taskRoot, 'regression', 'legacy-script.json');
-  const scriptPath = join(taskRoot, 'regression', 'legacy-script.py');
-  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-  manifest.apiVersion = 'qa-agent/python-regression/v1'; manifest.sourceOperationPlanIds = ['legacy-operation']; delete manifest.sourceFlowHash; delete manifest.scenarioIds;
-  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
-  const script = readFileSync(scriptPath, 'utf8').replace(/,"sourceFlowHash":"[^"]+"/, ''); writeFileSync(scriptPath, script);
-  const taskManifestPath = join(taskRoot, 'task.json');
-  const taskManifest = JSON.parse(readFileSync(taskManifestPath, 'utf8'));
-  taskManifest.operationPlanRefs = ['operation-plans/happy-path/v1.json'];
-  taskManifest.regressionSuiteRef = 'regression-suite.json';
-  taskManifest.reportIndexRef = 'runs/index.json';
-  taskManifest.runRefs = [`runs/${source.run.id}/run.json`, `runs/${extraRunId}/run.json`];
-  delete taskManifest.sourceRunRef;
-  delete taskManifest.sourceReportRef;
-  taskManifest.metadata.status = 'regression_ready';
-  writeFileSync(taskManifestPath, JSON.stringify(taskManifest, null, 2));
-  mkdirSync(join(taskRoot, 'operation-plans', 'happy-path'), { recursive: true }); writeFileSync(join(taskRoot, 'operation-plans', 'happy-path', 'v1.json'), '{}'); writeFileSync(join(taskRoot, 'regression-suite.json'), '{}');
-  mkdirSync(join(taskRoot, 'reports'), { recursive: true });
-  writeFileSync(join(oldRunsRoot, 'index.json'), '{}');
-  writeFileSync(join(oldRunsRoot, 'latest.json'), '{}');
-  writeFileSync(join(root, '.qa-agent', 'schemas', 'operation.schema.json'), '{}');
-  writeFileSync(join(root, '.qa-agent', 'schemas', 'regression-suite.schema.json'), '{}');
-  writeFileSync(join(root, '.qa-agent', 'skills', 'built-in', 'operation-replay.json'), '{}');
-  writeFileSync(join(root, '.qa-agent', '.version'), JSON.stringify({ version: '0.3.0', initializedAt: '2026-01-01T00:00:00.000Z' }));
-  const projectPath = join(root, '.qa-agent', 'project.json'); const project = JSON.parse(readFileSync(projectPath, 'utf8')); project.storage.runIndexFormat = 'jsonl'; writeFileSync(projectPath, JSON.stringify(project, null, 2));
-  writeFileSync(join(root, '.qa-agent', 'index', 'runs.jsonl'), '{}\n');
-  for (const name of ['archive', 'cache', 'evidence', 'runs']) mkdirSync(join(root, '.qa-agent', name), { recursive: true });
-
-  assert.equal(validateProject(root).valid, false);
-  const result = migrateProjectArtifacts(root);
-  assert.equal(result.removedOperationPlanDirectories, 1);
-  assert.equal(result.removedRegressionSuites, 1);
-  assert.equal(result.removedLegacySchemas, 2);
-  assert.equal(result.removedLegacyBuiltInSkills, 1);
-  assert.equal(result.updatedProjectVersion, 1);
-  assert.equal(result.removedLegacyRuntimeDirectories, 4);
-  assert.equal(result.migratedSourceRuns, 1);
-  assert.equal(result.quarantinedLegacySourceRuns, 1);
-  assert.ok(result.removedLegacyRunIndexes >= 4);
-  assert.equal(existsSync(join(taskRoot, 'operation-plans')), false);
-  assert.equal(existsSync(join(taskRoot, 'regression-suite.json')), false);
-  assert.equal(existsSync(join(taskRoot, 'reports')), false);
-  assert.equal(existsSync(join(taskRoot, 'runs')), false);
-  assert.equal(JSON.parse(readFileSync(taskSourceRunPath(root, 'legacy', 'legacy-task'), 'utf8')).id, source.run.id);
-  assert.ok(existsSync(join(root, '.qa-agent', '.runtime', 'migration-backup', 'source-runs', 'legacy', 'legacy-task', extraRunId, 'run.json')));
-  assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'operation.schema.json')), false);
-  assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'regression-suite.schema.json')), false);
-  assert.equal(existsSync(join(root, '.qa-agent', 'skills', 'built-in', 'operation-replay.json')), false);
-  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.7');
-  const migrated = JSON.parse(readFileSync(manifestPath, 'utf8'));
-  assert.equal(migrated.apiVersion, 'qa-agent/python-regression/v2');
-  assert.ok(migrated.sourceFlowHash);
-  assert.ok(migrated.scenarioIds.length);
-  assert.equal(migrated.sourceOperationPlanIds, undefined);
-  assert.equal(migrated.sourceReportRef, 'source-run/report.md');
-  const migratedTask = readTask(root, 'legacy', 'legacy-task');
-  assert.equal(migratedTask.sourceRunRef, 'source-run/run.json');
-  assert.equal(migratedTask.sourceReportRef, 'source-run/report.md');
-  assert.equal(migratedTask.metadata.status, 'reviewing_result');
-  assert.equal(validateProject(root).valid, true);
-});
-
-test('host force-update removes stale replay references and the old mixed regression Skill', () => {
-  const root = mkdtempSync(join(tmpdir(), 'qa-agent-host-'));
-  run(root, 'install-host', 'cursor', '--project', root, '--force');
-  const main = join(root, '.cursor', 'skills', 'qa-agent');
-  const legacyReference = join(main, 'references', 'operating-model.md');
-  writeFileSync(legacyReference, 'legacy replay reference');
-  const legacySkill = join(root, '.cursor', 'skills', 'qa-agent-regression'); mkdirSync(legacySkill, { recursive: true }); writeFileSync(join(legacySkill, 'SKILL.md'), '---\nname: qa-agent-regression\ndescription: legacy\n---\n');
-  run(root, 'install-host', 'cursor', '--project', root, '--force');
-  assert.equal(existsSync(legacyReference), false);
-  assert.equal(existsSync(legacySkill), false);
-  assert.ok(existsSync(join(main, 'references', 'recommended-regression-stack.md')));
-  assert.ok(existsSync(join(root, '.cursor', 'skills', 'qa-agent-regression-test', 'SKILL.md')));
-});
-
-test('legacy operation commands are removed from CLI', () => {
-  const root = mkdtempSync(join(tmpdir(), 'qa-agent-old-cli-'));
-  run(root, 'init', '--id', 'old-cli');
-  for (const args of [['operation', 'generate'], ['operation', 'replay', 'legacy'], ['task', 'operation', 'list', '--module', 'auth'], ['task', 'regression', 'sync', '--module', 'auth']]) {
-    const result = command(root, ...args);
-    assert.notEqual(result.status, 0, args.join(' '));
-    assert.match(result.stderr, /removed|Unsupported|task id|required/i);
+test('rejects projects created by another Runtime version instead of migrating them', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-fresh-version-'));
+  run(root, 'init', '--id', 'fresh-version');
+  writeFileSync(join(root, '.qa-agent', '.version'), JSON.stringify({ version: '0.3.6', initializedAt: '2026-01-01T00:00:00.000Z' }));
+  for (const args of [['update'], ['doctor'], ['check', '--request', '旧项目不应被读取'], ['init']]) {
+    const rejected = command(root, ...args);
+    assert.notEqual(rejected.status, 0, args.join(' '));
+    assert.match(rejected.stderr, /not supported|fresh project|remove \.qa-agent/i);
   }
+  const migrate = command(root, 'migrate');
+  assert.notEqual(migrate.status, 0);
+  assert.match(migrate.stderr, /Unsupported command/i);
+  assert.equal(existsSync(join(repository, 'src', 'migration.ts')), false);
 });

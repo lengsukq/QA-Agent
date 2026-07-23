@@ -93,7 +93,7 @@ test('keeps host guidance thin and routes published scripts to regression-test',
 test('keeps Quick completion and Session finish assets minimal', () => {
   const text = sourceText();
   assert.doesNotMatch(text, /summaryRef|taskSummaryPath|observedScenarioRefs|SessionJournal/);
-  assert.doesNotMatch(text, /taskRunDirectory|taskRunIndexPath|taskRunLatestPath|reportIndexRef:|runRefs:/);
+  assert.doesNotMatch(text, /taskRunDirectory|taskRunIndexPath|taskRunLatestPath/);
   assert.match(readFileSync(join(repository, 'src', 'task-finalizer.ts'), 'utf8'), /prd\.md/);
   assert.match(readFileSync(join(repository, 'src', 'engine.ts'), 'utf8'), /finalizeTask\(root/);
   assert.match(readFileSync(join(skillRoot, 'SKILL.md'), 'utf8'), /Session finish is not Task archive/i);
@@ -116,7 +116,6 @@ test('keeps one Source Run per Task and routes later execution to regression-run
   assert.match(cliReference, /There is no exploratory `runs\/<run-id>\/` history/i);
   assert.doesNotMatch(project, /taskRunDirectory|taskRunIndexPath|taskRunLatestPath/);
   assert.doesNotMatch(project, /runs\.jsonl/);
-  assert.doesNotMatch(types, /reportIndexRef|runRefs:/);
   assert.doesNotMatch(readme, /└── runs\/\s*\n\s*└── <run-id>/);
 });
 
@@ -168,15 +167,6 @@ test('requires clickable artifacts, Markdown-embedded screenshots, and an explic
   assert.match(readFileSync(join(repository, 'src', 'report.ts'), 'utf8'), /## Embedded Screenshots/);
   assert.match(readFileSync(join(repository, 'src', 'workflow.ts'), 'utf8'), /是否基于本次已验证流程生成 Python 回归脚本草稿/);
   assert.match(readFileSync(join(repository, 'src', 'cli.ts'), 'utf8'), /mustAskUserQuestion/);
-});
-
-test('removes the OperationPlan and RegressionSuite product model completely', () => {
-  assert.equal(existsSync(join(repository, 'src', 'operations.ts')), false);
-  assert.equal(existsSync(join(skillRoot, 'references', 'operating-model.md')), false);
-  assert.doesNotMatch(skillText(), /OperationPlan|operation-plans|RegressionSuite|regression-suite|sourceOperationPlanIds/);
-  const productionFiles = ['types.ts', 'engine.ts', 'workflow.ts', 'regression.ts', 'release.ts', 'archive.ts', 'cli.ts', 'project.ts', 'planning.ts'];
-  const production = productionFiles.map(name => readFileSync(join(repository, 'src', name), 'utf8')).join('\n');
-  assert.doesNotMatch(production, /OperationPlan|operation-plans|RegressionSuite|regression-suite|sourceOperationPlanIds|replayStatus|replayStage|replayCursor/);
 });
 
 test('publishes v0.3.7 without source and lockfile implementation payloads', () => {

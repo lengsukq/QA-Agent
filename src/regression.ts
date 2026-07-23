@@ -163,7 +163,7 @@ export function buildReleaseRegressionSelection(root: string, impact: ImpactAnal
 
   for (const path of taskPaths) {
     const manifest = readJson<TestTask>(path);
-    if (!['ready', 'running', 'reviewing_result', 'completed', 'active'].includes(manifest.metadata.status)) continue;
+    if (!['ready', 'running', 'reviewing_result', 'completed'].includes(manifest.metadata.status)) continue;
     const task = readTask(root, manifest.metadata.moduleId, manifest.metadata.id);
     const tags = task.metadata.tags ?? [];
     const goldenPath = tags.includes('golden-path');

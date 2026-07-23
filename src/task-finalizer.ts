@@ -6,7 +6,7 @@ import { rebuildIndexes } from './indexer.ts';
 import { qaPath, readRunById, readTask, saveTask, taskDirectory, taskPrdPath, taskSourceRunPath, taskSourceRunReportPath } from './project.ts';
 import { now, readJson, withFileLock, writeTextAtomic } from './store.ts';
 import type { RunStatus, TaskFinalizationResult, TestRun, TestTask } from './types.ts';
-import { normalizeTaskState, transitionTaskState } from './workflow-model.ts';
+import { taskState as resolveTaskState, transitionTaskState } from './workflow-model.ts';
 
 const PRD_START = '<!-- QA-AGENT:RESULTS:START -->';
 const PRD_END = '<!-- QA-AGENT:RESULTS:END -->';
@@ -121,7 +121,7 @@ export function finalizeTask(root: string, moduleId: string, taskId: string, sou
       return { apiVersion: 'qa-agent/task-finalization/v1', kind: 'TaskFinalizationResult', status: 'completed', moduleId, taskId, sourceRunId: run.id, prdPath, artifactHash: task.finalization?.artifactHash };
     }
 
-    const state = normalizeTaskState(task.metadata.status);
+    const state = resolveTaskState(task.metadata.status);
     if (!['reviewing_result', 'completed'].includes(state)) throw new Error(`Task ${taskId} is ${state}; only a completed Quick Run result can be finalized.`);
     const timestamp = now();
     task.prdRef = 'prd.md';
@@ -146,7 +146,7 @@ export function finalizeTask(root: string, moduleId: string, taskId: string, sou
         status: 'completed', sourceRunId: run.id, prdRef: 'prd.md',
         startedAt: task.finalization?.startedAt ?? timestamp, finalizedAt: now(), updatedAt: now(), artifactHash: hash,
       };
-      if (normalizeTaskState(task.metadata.status) === 'reviewing_result') transitionTaskState(root, task, 'completed', 'task_finalized', 'task_prd_updated', { artifactHash: hash, idempotencyKey: `task-finalized:${run.id}:${hash}`, metadata: { runId: run.id, prdRef: 'prd.md' } });
+      if (resolveTaskState(task.metadata.status) === 'reviewing_result') transitionTaskState(root, task, 'completed', 'task_finalized', 'task_prd_updated', { artifactHash: hash, idempotencyKey: `task-finalized:${run.id}:${hash}`, metadata: { runId: run.id, prdRef: 'prd.md' } });
       task.metadata.version += 1;
       task.updatedAt = now();
       saveTask(root, task);

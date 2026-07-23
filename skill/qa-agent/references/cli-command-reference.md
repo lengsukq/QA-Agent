@@ -10,7 +10,7 @@
 | `qa-agent continue` | Continue the Task bound to the current Session. |
 | `qa-agent finish` | Close the current Session without archiving the Task. |
 | `qa-agent doctor` | Inspect project and host-tool readiness. |
-| `qa-agent update --migrate` | Update managed host files and migrate legacy assets. |
+| `qa-agent update` | Refresh managed files for a project created by the same Runtime version. |
 
 `qa-agent doctor` also reports the advisory Web and iOS regression stack from `references/recommended-regression-stack.md`. Missing recommended tools do not block QA Agent when another approved adapter satisfies the result contract.
 
@@ -122,6 +122,5 @@ Runtime never generates Python. The Agent writes a script only after the user re
 | `qa-agent archive --module MODULE --task TASK` | Archive only after Python coverage, evidence, Cleanup, and memory gates pass. |
 | `qa-agent session bind --module MODULE --task TASK` | Bind a Task to the current Session. |
 | `qa-agent validate` | Validate project assets. |
-| `qa-agent migrate` | Upgrade legacy assets and remove obsolete managed Skill structures. |
 | `qa-agent index rebuild` | Rebuild project indexes. |
 | `qa-agent skill validate` | Validate the installable three-Skill package. |

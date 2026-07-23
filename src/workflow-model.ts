@@ -18,10 +18,7 @@ const allowedTransitions: Record<TaskLifecycleState, TaskLifecycleState[]> = {
   superseded: [],
 };
 
-export function normalizeTaskState(status: TestTask['metadata']['status'] | undefined): TaskLifecycleState {
-  if (status === 'active') return 'ready';
-  if (status === 'needs_review') return 'awaiting_approval';
-  if (status === 'finalizing' || status === 'regression_ready') return 'reviewing_result';
+export function taskState(status: TestTask['metadata']['status'] | undefined): TaskLifecycleState {
   return status ?? 'draft';
 }
 
@@ -31,9 +28,9 @@ export function transitionTaskState(
   toState: TaskLifecycleState,
   eventType: string,
   reasonCode: string,
-  options: { actor?: { type: 'human' | 'agent' | 'runtime' | 'host' | 'migration'; id: string }; artifactHash?: string; idempotencyKey?: string; metadata?: Record<string, unknown>; allowSame?: boolean } = {},
+  options: { actor?: { type: 'human' | 'agent' | 'runtime' | 'host'; id: string }; artifactHash?: string; idempotencyKey?: string; metadata?: Record<string, unknown>; allowSame?: boolean } = {},
 ): void {
-  const fromState = normalizeTaskState(task.metadata.status);
+  const fromState = taskState(task.metadata.status);
   if (fromState === toState && options.allowSame !== false) return;
   if (!allowedTransitions[fromState].includes(toState)) throw new Error(`Invalid Task transition ${fromState} -> ${toState} (${eventType}).`);
   task.metadata.status = toState;

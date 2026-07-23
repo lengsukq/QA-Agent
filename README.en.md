@@ -411,7 +411,7 @@ qa-agent check --request TEXT
 qa-agent continue
 qa-agent finish
 qa-agent doctor
-qa-agent update --migrate
+qa-agent update
 ```
 
 Show strict regression, release, and administration commands with:
@@ -420,21 +420,22 @@ Show strict regression, release, and administration commands with:
 qa-agent help --advanced
 ```
 
-## Upgrade to v0.3.7
+## Initialize v0.3.7 from scratch
 
-Upgrade the CLI:
+Install the CLI:
 
 ```bash
 npm install -g qa-agent-skill@0.3.7
 ```
 
-Then update an existing project:
+v0.3.7 has no cross-version migration path and does not read or transform an older `.qa-agent` directory. Initialize the project with this version. To keep previous results as ordinary backup files, move the old directory aside first:
 
 ```bash
-qa-agent update --migrate --force
+mv .qa-agent .qa-agent.backup
+qa-agent init
 ```
 
-Migration continues to read v0.2 assets and maps the legacy `finalizing` state to `reviewing_result`. Existing Runs, reports, and screenshots are preserved.
+`qa-agent update` only refreshes managed files created by the same 0.3.7 Runtime. A version mismatch is rejected.
 
 ## Validate a project
 

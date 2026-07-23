@@ -10,7 +10,7 @@ export interface TaskEvent {
   id: string;
   type: string;
   at: string;
-  actor: { type: 'human' | 'agent' | 'runtime' | 'host' | 'migration'; id: string };
+  actor: { type: 'human' | 'agent' | 'runtime' | 'host'; id: string };
   moduleId: string;
   taskId: string;
   fromState?: TaskLifecycleState;

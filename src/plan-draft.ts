@@ -7,7 +7,7 @@ import { markPythonRegressionsStaleForPlanHash } from './python-regression.ts';
 import { readModule, readTask, saveTask, taskDirectory, taskPrdPath } from './project.ts';
 import { assertSafeId, hasSecrets, isSafeId, now } from './store.ts';
 import type { PlannedTestStep, PlanDraft, PlanDraftScenario, RequirementTrace, RiskLevel, TestScenario, TestTask, VisualAssertion } from './types.ts';
-import { normalizeTaskState, transitionTaskState } from './workflow-model.ts';
+import { taskState as resolveTaskState, transitionTaskState } from './workflow-model.ts';
 
 export interface PlanDraftApplyResult {
   changed: boolean;
@@ -144,7 +144,7 @@ export function applyPlanDraft(root: string, draft: PlanDraft): PlanDraftApplyRe
 
   const module = readModule(root, draft.moduleId);
   const task = readTask(root, draft.moduleId, draft.taskId);
-  const state = normalizeTaskState(task.metadata.status);
+  const state = resolveTaskState(task.metadata.status);
   if (state === 'running') throw new Error(`Task ${task.metadata.id} has an active Run; complete or stop it before applying a changed PlanDraft.`);
   if (['archived', 'deprecated', 'superseded'].includes(state)) throw new Error(`Task ${task.metadata.id} is ${state}; its TestPlan cannot be replaced.`);
 
@@ -186,7 +186,7 @@ export function applyPlanDraft(root: string, draft: PlanDraft): PlanDraftApplyRe
   planHash = testPlanHash(task);
 
   invalidateApproval(task);
-  const fromState = normalizeTaskState(task.metadata.status);
+  const fromState = resolveTaskState(task.metadata.status);
   if (fromState !== 'awaiting_approval') transitionTaskState(root, task, 'awaiting_approval', 'test_plan_changed', 'plan_draft_applied', { actor: { type: 'agent', id: 'qa-agent' }, artifactHash: planHash, idempotencyKey: `plan-draft-state:${task.metadata.id}:${planHash}` });
   appendTaskEvent(root, {
     type: 'plan_draft_applied', actor: { type: 'agent', id: 'qa-agent' }, moduleId: task.metadata.moduleId, taskId: task.metadata.id, reasonCode: 'structured_plan_materialized', artifactHash: planHash, idempotencyKey: `plan-draft-applied:${task.metadata.id}:${planHash}`, metadata: { previousPlanHash, scenarioIds: task.scenarios.map(scenario => scenario.id) },

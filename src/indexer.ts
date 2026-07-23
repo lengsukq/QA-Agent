@@ -4,7 +4,7 @@ import { listFiles, now, readJson, withFileLock, writeJsonAtomic } from './store
 import { qaPath } from './project.ts';
 import { readTaskEvents, resumeToken, workflowContextHash } from './events.ts';
 import { listPythonRegressions } from './python-regression.ts';
-import { normalizeTaskState } from './workflow-model.ts';
+import { taskState as resolveTaskState } from './workflow-model.ts';
 import type { ProjectMemory, QaModule, RegressionRun, TestRun, TestTask } from './types.ts';
 import type { QaSkillManifest } from './built-in-skills.ts';
 
@@ -24,7 +24,7 @@ function rebuildIndexesUnlocked(root: string): { modules: number; tasks: number;
     const scripts = listPythonRegressions(root, item.metadata.moduleId, item.metadata.id);
     const events = readTaskEvents(root, item.metadata.moduleId, item.metadata.id);
     const lastEvent = events.at(-1);
-    const taskState = normalizeTaskState(item.metadata.status);
+    const taskState = resolveTaskState(item.metadata.status);
     const workflowPhase = taskState === 'awaiting_approval' ? 'approval' : taskState === 'running' ? 'execution' : taskState === 'reviewing_result' || taskState === 'completed' ? 'result_review' : taskState === 'archived' ? 'archive' : taskState === 'blocked' || taskState === 'paused' ? 'recovery' : taskState === 'draft' || taskState === 'planning' || taskState === 'needs_input' ? 'planning' : 'preflight';
     const validatedIds = scripts.filter(script => script.status === 'validated').map(script => script.id);
     const unverifiedIds = scripts.filter(script => script.status === 'approved_unverified').map(script => script.id);
