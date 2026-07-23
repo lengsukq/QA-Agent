@@ -15,7 +15,7 @@ Both Quick and Guided modes use the same planning contract:
 1. Create the Task through `qa-agent check`; use `--mode guided` for human-led execution.
 2. Inspect relevant source, routes, configuration, tests, existing QA assets, and tools.
 3. Build and apply a structured PlanDraft. Every Scenario must have ordered `steps`; every step needs an operation and expected result.
-4. Present the complete Runtime-written Task PRD.
+4. Present the complete Runtime-written Task PRD and include its Runtime-provided clickable `userFacingArtifacts[].markdownLink` in the same reply.
 5. Resolve every `userQuestions` entry with the QA. Ask one concrete question at a time, store the answer under `confirmedDecisions`, remove the resolved question, and apply the updated PlanDraft again.
 6. If the Agent has any material uncertainty not yet listed—requirements, environment, role, account, test data, expected behavior, or safety—it must add the question and stop.
 7. Wait for the exact reply `确认测试方案`, then persist it with `qa-agent plan review`. This confirms that the PRD matches the QA requirement; it does not authorize UI execution.
@@ -32,10 +32,10 @@ Quick mode is AI-led after both planning gates:
 2. Execute the approved flow and persist every real UI action with a screenshot.
 3. Record every declared business/visual assertion and Cleanup result.
 4. Complete through `qa-agent run complete`.
-5. Runtime writes `source-run/run.json`, `source-run/report.md`, screenshots, evidence, and the Task PRD result update.
-6. When eligible, ask whether to generate a Python script draft from the exact completed Run.
+5. Runtime writes `source-run/run.json`, `source-run/report.md`, screenshots, evidence, and the Task PRD result update. `report.md` must embed every recorded screenshot using Markdown image syntax; a list of screenshot paths is not a valid formal report. The user-facing completion reply must include clickable links for both `report.md` and the finalized `prd.md`.
+6. When eligible and no formal script exists, the same completion reply must end with the Runtime-provided `requiredUserQuestion` asking whether to generate a Python script draft from the exact completed Run. Do not wait for the user to raise regression generation.
 7. Generation consent permits only draft creation. Show the complete script or diff and publish only after a separate script-publication approval.
-8. Publication freezes the Source Run. Later regression uses `qa-agent-regression-test` and writes execution assets under `regression-runs/` without replanning or editing the formal script.
+8. Publication freezes the Source Run. Later regression uses `qa-agent-regression-test` and writes execution assets under `regression-runs/` without replanning or editing the formal script. A formal regression report must embed every validated checkpoint screenshot in Markdown; a path-only result remains diagnostic and cannot count as a completed report.
 
 ## Guided workflow
 
@@ -63,7 +63,7 @@ Session finish and Task archive are different. Finish closes the active Session.
 
 ## User-visible language
 
-Use goal, plan, question, progress, observed result, QA verdict, evidence, script, and next decision. Hide internal Module, Task, Scenario, Run, hash, gate, token, and file-path details unless requested.
+Use goal, plan, question, progress, observed result, QA verdict, evidence, script, and next decision. Hide internal Module, Task, Scenario, Run, hash, gate, token, and unrelated file-path details unless requested. Always surface the Runtime-provided clickable PRD and report artifact links at their review/completion points; never replace them with plain paths.
 
 ## Safety boundaries
 

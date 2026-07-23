@@ -153,6 +153,23 @@ test('requires separate generation and publication approval with Run-level flow 
   assert.match(sourceText(), /sourceFlowHash/);
 });
 
+test('requires clickable artifacts, Markdown-embedded screenshots, and an explicit regression offer', () => {
+  const main = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
+  const workflow = readFileSync(join(skillRoot, 'references', 'workflow.md'), 'utf8');
+  const guided = readFileSync(join(skillRoot, 'skills', 'guided', 'SKILL.md'), 'utf8');
+  const regression = readFileSync(join(skillRoot, 'skills', 'regression-test', 'SKILL.md'), 'utf8');
+  for (const text of [main, workflow, guided, regression, sharedGuidance]) {
+    assert.match(text, /clickable|Markdown link|markdownLink/i);
+    assert.match(text, /Markdown image syntax|embed/i);
+    assert.match(text, /plain path|paths alone|path-only/i);
+  }
+  assert.match(main, /requiredUserQuestion/);
+  assert.match(workflow, /requiredUserQuestion/);
+  assert.match(readFileSync(join(repository, 'src', 'report.ts'), 'utf8'), /## Embedded Screenshots/);
+  assert.match(readFileSync(join(repository, 'src', 'workflow.ts'), 'utf8'), /是否基于本次已验证流程生成 Python 回归脚本草稿/);
+  assert.match(readFileSync(join(repository, 'src', 'cli.ts'), 'utf8'), /mustAskUserQuestion/);
+});
+
 test('removes the OperationPlan and RegressionSuite product model completely', () => {
   assert.equal(existsSync(join(repository, 'src', 'operations.ts')), false);
   assert.equal(existsSync(join(skillRoot, 'references', 'operating-model.md')), false);
@@ -162,9 +179,9 @@ test('removes the OperationPlan and RegressionSuite product model completely', (
   assert.doesNotMatch(production, /OperationPlan|operation-plans|RegressionSuite|regression-suite|sourceOperationPlanIds|replayStatus|replayStage|replayCursor/);
 });
 
-test('publishes v0.3.5 without source and lockfile implementation payloads', () => {
+test('publishes v0.3.6 without source and lockfile implementation payloads', () => {
   const pkg = JSON.parse(readFileSync(join(repository, 'package.json'), 'utf8')) as { version: string; files: string[] };
-  assert.equal(pkg.version, '0.3.5');
+  assert.equal(pkg.version, '0.3.6');
   assert.equal(pkg.files.includes('src/'), false);
   assert.equal(pkg.files.includes('package-lock.json'), false);
 });

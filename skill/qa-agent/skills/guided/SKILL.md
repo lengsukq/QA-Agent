@@ -14,7 +14,7 @@ Read `references/workflow.md` from the main `qa-agent` Skill before acting. Runt
 1. Create or resume it with `qa-agent check --mode guided --request "<request>"`.
 2. Inspect relevant source, routes, configuration, tests, existing QA assets, and available tools.
 3. Generate a complete PlanDraft and apply it with `qa-agent plan apply`.
-4. Present the complete Runtime-written Task PRD.
+4. Present the complete Runtime-written Task PRD and include its clickable `userFacingArtifacts[].markdownLink` in the same reply. Do not show only a plain path.
 5. If the PRD contains `userQuestions`, ask the QA one concrete question at a time. Add answers to `confirmedDecisions`, clear resolved questions, and apply the updated PlanDraft again.
 6. Ask whether the PRD matches the requested behavior. Only the exact reply `确认测试方案` may be persisted through `qa-agent plan review`.
 7. Separately wait for the exact reply `确认开始测试`, persist it through `qa-agent review`, and only then call `qa-agent test`.
@@ -42,6 +42,6 @@ When the QA asks to save the Case:
 - ensure every UI step has a human verdict;
 - record all declared assertions and Cleanup;
 - complete through `qa-agent run complete`;
-- present the Runtime report and saved PRD;
-- offer a Python regression draft only when Runtime marks the Run eligible;
+- present the Runtime report and saved PRD, with clickable links for both artifacts from `userFacingArtifacts[].markdownLink`; the formal report must embed its real screenshots with Markdown image syntax rather than listing screenshot paths only;
+- when Runtime marks the Run eligible and no formal script exists, end the same completion reply by asking the returned `requiredUserQuestion`; do not wait for the QA to request regression generation first;
 - generate a draft only after separate consent, and publish only after another explicit script review.

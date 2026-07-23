@@ -44,6 +44,7 @@ import { recommendedRegressionStackDiagnosis } from './recommended-stack.ts';
 import { syncManagedRuntimeAssets } from './managed-assets.ts';
 import { QA_AGENT_VERSION } from './version.ts';
 import { planningPrdIsCurrent } from './task-prd.ts';
+import { artifactLinksSentence, userFacingArtifact } from './user-facing-artifacts.ts';
 
 const args = process.argv.slice(2);
 const hostFlags = supportedHosts.map(host => `--${HOST_PLATFORMS[host].cliFlag}`).join(' ');
@@ -179,12 +180,29 @@ function runContextFromFlags(): Partial<ExecutionSnapshot> {
   return { environment: flag('--environment'), platform: flag('--platform'), role: flag('--role'), scenarioId: flag('--scenario'), device: flag('--device'), deviceModel: flag('--device-model'), osVersion: flag('--os-version'), appVersion: flag('--app-version'), webBuild: flag('--web-build'), testDataFingerprint: flag('--test-data-fingerprint') };
 }
 
-function executionEnvelope(run: TestRun): Record<string, unknown> {
+function executionEnvelope(projectRoot: string, run: TestRun): Record<string, unknown> {
   const running = run.status === 'running';
   const guidedPhase = run.guidedInteraction?.phase;
   const uiAllowed = running && (!guidedPhase || guidedPhase === 'ready_to_execute');
   const taskDirectory = `.qa-agent/modules/${run.moduleId}/tasks/${run.taskId}`;
   const runDirectory = `${taskDirectory}/source-run`;
+  const sourceReportFormal = run.screenshots.length > 0;
+  const userFacingArtifacts = [
+    userFacingArtifact(projectRoot, taskPrdPath(projectRoot, run.moduleId, run.taskId), '查看测试方案 PRD', 'task-prd'),
+    ...(run.reportGeneratedBy === 'qa-agent-runtime'
+      ? [userFacingArtifact(projectRoot, taskSourceRunReportPath(projectRoot, run.moduleId, run.taskId), sourceReportFormal ? '查看测试报告' : '查看测试诊断', sourceReportFormal ? 'source-run-report' : 'source-run-diagnostic')]
+      : []),
+  ];
+  const publishedRegressions = listPythonRegressions(projectRoot, run.moduleId, run.taskId);
+  const shouldOfferPythonRegression = Boolean(
+    !running
+    && run.reportGeneratedBy === 'qa-agent-runtime'
+    && run.pythonRegressionEligibility?.eligible
+    && publishedRegressions.length === 0,
+  );
+  const requiredUserQuestion = shouldOfferPythonRegression
+    ? '测试已完成，并且本次流程符合生成回归脚本的条件。是否基于本次已验证流程生成 Python 回归脚本草稿？'
+    : undefined;
   return {
     ...run,
     executionMode: 'explore',
@@ -193,9 +211,19 @@ function executionEnvelope(run: TestRun): Record<string, unknown> {
     mustStop: !uiAllowed,
     manualReportAllowed: false,
     runtimeReportGenerated: run.reportGeneratedBy === 'qa-agent-runtime',
+    userFacingArtifacts,
+    requiredUserFacingLinks: artifactLinksSentence(userFacingArtifacts),
+    mustAskUserQuestion: shouldOfferPythonRegression,
+    requiredUserQuestion,
+    nextUserDecision: shouldOfferPythonRegression ? {
+      id: 'offer_python_regression',
+      question: requiredUserQuestion,
+      choices: ['生成回归脚本', '暂不生成'],
+      consequence: '同意后只生成草稿；正式发布仍需要单独审核和批准。',
+    } : undefined,
     assetContract: { taskDirectory, runDirectory, runJson: `${runDirectory}/run.json`, report: `${runDirectory}/report.md`, screenshotsDirectory: `${runDirectory}/screenshots/`, evidenceDirectory: `${runDirectory}/evidence/` },
     forbiddenActions: uiAllowed ? ['manual-report.write', 'pass.claim-before-run-complete'] : ['ui.execute', 'manual-report.write', 'pass.claim'],
-    next: guidedPhase === 'awaiting_action_approval' ? 'Ask the QA to approve exactly one next action before using a UI tool.' : guidedPhase === 'awaiting_result_verdict' ? `Present step ${run.guidedInteraction?.pendingStepId} and ask the QA whether the observed result matches expectations.` : running ? 'Execute the approved business flow and persist every UI action, screenshot, assertion, and cleanup.' : run.reportGeneratedBy === 'qa-agent-runtime' ? `Stop UI execution. Inspect the Runtime report at ${run.reportPath}.` : run.conclusion,
+    next: guidedPhase === 'awaiting_action_approval' ? 'Ask the QA to approve exactly one next action before using a UI tool.' : guidedPhase === 'awaiting_result_verdict' ? `Present step ${run.guidedInteraction?.pendingStepId} and ask the QA whether the observed result matches expectations.` : running ? 'Execute the approved business flow and persist every UI action, screenshot, assertion, and cleanup.' : shouldOfferPythonRegression ? `Present the Runtime report and PRD links, summarize the result, then ask requiredUserQuestion verbatim. Do not end the reply without asking it.` : run.reportGeneratedBy === 'qa-agent-runtime' ? `Stop UI execution. Inspect the Runtime report and include every userFacingArtifacts[].markdownLink in the user-facing reply. Do not provide only a plain path.` : run.conclusion,
   };
 }
 
@@ -373,11 +401,15 @@ async function main(): Promise<void> {
     });
     rebuildIndexes(projectRoot);
     const session = bindTaskSession(projectRoot, { sessionKey: flag('--session'), host: flag('--session-host'), moduleId: prepared.moduleId, taskId: prepared.taskId });
+    const prdPath = taskPrdPath(projectRoot, prepared.moduleId, prepared.taskId);
+    const userFacingArtifacts = [userFacingArtifact(projectRoot, prdPath, '查看测试方案 PRD', 'task-prd')];
     output({
-      message: `${mode === 'guided' ? 'Guided' : 'Quick'} Task prepared. Inspect the project, apply a detailed PlanDraft, present the PRD, resolve all questions, and request QA requirement confirmation before start authorization.`,
+      message: `${mode === 'guided' ? 'Guided' : 'Quick'} Task prepared. Inspect the project, apply a detailed PlanDraft, present the PRD with its clickable artifact link, resolve all questions, and request QA requirement confirmation before start authorization.`,
       check: { moduleId: prepared.moduleId, taskId: prepared.taskId, mode, moduleCreated: prepared.moduleCreated, taskCreated: prepared.taskCreated, approvalPolicy: 'test-plan-and-side-effects' },
       quickCheck: { moduleId: prepared.moduleId, taskId: prepared.taskId, moduleCreated: prepared.moduleCreated, taskCreated: prepared.taskCreated, approvalPolicy: 'test-plan-and-side-effects' },
-      prdPath: taskPrdPath(projectRoot, prepared.moduleId, prepared.taskId),
+      prdPath,
+      userFacingArtifacts,
+      requiredUserFacingLinks: artifactLinksSentence(userFacingArtifacts),
       planningRequired: true,
       requiredRequirementsConfirmationAfterPlanning: PLAN_REQUIREMENTS_CONFIRMATION_ZH,
       requiredConfirmationAfterPlanning: START_TEST_CONFIRMATION_ZH,
@@ -418,7 +450,8 @@ async function main(): Promise<void> {
       const projectRoot = root(); const moduleId = requiredFlag('--module'); const taskId = requiredFlag('--task');
       const task = reviewPlanRequirements(projectRoot, moduleId, taskId);
       const session = bindTaskSession(projectRoot, { sessionKey: flag('--session'), host: flag('--session-host'), moduleId, taskId });
-      output({ task, session, requiredStartConfirmation: START_TEST_CONFIRMATION_ZH, workflow: workflowStatus(projectRoot, moduleId, taskId) });
+      const userFacingArtifacts = [userFacingArtifact(projectRoot, taskPrdPath(projectRoot, moduleId, taskId), '查看已确认的测试方案 PRD', 'task-prd')];
+      output({ task, session, requiredStartConfirmation: START_TEST_CONFIRMATION_ZH, workflow: workflowStatus(projectRoot, moduleId, taskId), userFacingArtifacts, requiredUserFacingLinks: artifactLinksSentence(userFacingArtifacts), next: 'Include the PRD markdownLink in the user-facing reply, then request the separate exact start confirmation.' });
       return;
     }
     if (action !== 'apply') throw new Error(`Plan command must be apply or review.\n\n${advancedUsage}`);
@@ -428,17 +461,20 @@ async function main(): Promise<void> {
     let draft: PlanDraft;
     try { draft = JSON.parse(raw) as PlanDraft; }
     catch (error) { throw new Error(`PlanDraft is not valid JSON: ${(error as Error).message}`); }
-    output(applyPlanDraft(root(), draft));
+    const projectRoot = root();
+    const applied = applyPlanDraft(projectRoot, draft);
+    const userFacingArtifacts = [userFacingArtifact(projectRoot, applied.prdPath, '查看测试方案 PRD', 'task-prd')];
+    output({ ...applied, userFacingArtifacts, requiredUserFacingLinks: artifactLinksSentence(userFacingArtifacts), next: 'Present the complete PRD and include userFacingArtifacts[0].markdownLink in the same user-facing reply. Do not provide only a plain path.' });
     return;
   }
   if (group === 'start') { bootstrapFromFlags(root()); return; }
-  if (group === 'review') { const projectRoot = root(); const moduleId = requiredFlag('--module'); const taskId = requiredFlag('--task'); const task = reviewTask(projectRoot, moduleId, taskId); const session = bindTaskSession(projectRoot, { sessionKey: flag('--session'), host: flag('--session-host'), moduleId, taskId }); output({ task, session, workflow: workflowStatus(projectRoot, moduleId, taskId) }); return; }
+  if (group === 'review') { const projectRoot = root(); const moduleId = requiredFlag('--module'); const taskId = requiredFlag('--task'); const task = reviewTask(projectRoot, moduleId, taskId); const session = bindTaskSession(projectRoot, { sessionKey: flag('--session'), host: flag('--session-host'), moduleId, taskId }); const userFacingArtifacts = [userFacingArtifact(projectRoot, taskPrdPath(projectRoot, moduleId, taskId), '查看测试方案 PRD', 'task-prd')]; output({ task, session, workflow: workflowStatus(projectRoot, moduleId, taskId), userFacingArtifacts, requiredUserFacingLinks: artifactLinksSentence(userFacingArtifacts) }); return; }
   if (group === 'test') {
     const projectRoot = root(); const moduleId = requiredFlag('--module'); const taskId = requiredFlag('--task'); const task = readTask(projectRoot, moduleId, taskId);
     const started = beginAgentGuidedRun(projectRoot, task, runContextFromFlags());
     rebuildIndexes(projectRoot);
     const session = bindTaskSession(projectRoot, { sessionKey: flag('--session'), host: flag('--session-host'), moduleId, taskId, runId: started.id });
-    output({ ...executionEnvelope(started), session, workflow: workflowStatus(projectRoot, moduleId, taskId) });
+    output({ ...executionEnvelope(projectRoot, started), session, workflow: workflowStatus(projectRoot, moduleId, taskId) });
     return;
   }
   if (group === 'archive') { archiveTask(root(), requiredFlag('--module'), requiredFlag('--task')); return; }
@@ -567,7 +603,10 @@ ${advancedUsage}`);
         timeoutMs,
       });
       rebuildIndexes(projectRoot);
-      output({ ...result, reportPath: join(taskDirectory(projectRoot, result.moduleId, result.taskId), 'regression-runs', result.id, result.reportRef), next: 'Agent must inspect every screenshot-backed checkpoint against its expected and actual state before presenting the regression report. Do not trust result.json alone or claim a completed regression when contractStatus is invalid_result.' });
+      const reportPath = join(taskDirectory(projectRoot, result.moduleId, result.taskId), 'regression-runs', result.id, result.reportRef);
+      const formalReport = result.contractStatus === 'completed' || result.contractStatus === 'blocked';
+      const userFacingArtifacts = [userFacingArtifact(projectRoot, reportPath, formalReport ? '查看回归报告' : '查看回归诊断', formalReport ? 'python-regression-report' : 'python-regression-diagnostic')];
+      output({ ...result, reportPath, userFacingArtifacts, requiredUserFacingLinks: artifactLinksSentence(userFacingArtifacts), next: 'Agent must inspect every screenshot-backed checkpoint against its expected and actual state, then include userFacingArtifacts[0].markdownLink in the user-facing reply. Do not trust result.json alone or provide only a plain path.' });
       return;
     }
     throw new Error(`Regression command must be draft, drafts, draft-show, publish, list, show, or run.\n\n${advancedUsage}`);
@@ -703,7 +742,7 @@ ${advancedUsage}`);
     if (action === 'archive') { archiveTask(projectRoot, moduleId, taskId); return; }
     if (action === 'explore' || action === 'run') {
       const started = beginAgentGuidedRun(projectRoot, task, runContextFromFlags()); rebuildIndexes(projectRoot);
-      output({ ...executionEnvelope(started), workflow: workflowStatus(projectRoot, moduleId, taskId), deprecatedAlias: true, canonicalCommand: 'qa-agent test --module MODULE --task TASK' }); return;
+      output({ ...executionEnvelope(projectRoot, started), workflow: workflowStatus(projectRoot, moduleId, taskId), deprecatedAlias: true, canonicalCommand: 'qa-agent test --module MODULE --task TASK' }); return;
     }
   }
   if (group === 'memory') {
@@ -735,39 +774,39 @@ ${advancedUsage}`);
     if (action === 'report') return output(taskSourceRunReportPath(projectRoot, run.moduleId, run.taskId));
     if (action === 'guide-approve') {
       const updated = approveGuidedAction(projectRoot, subject, { scenarioId: flag('--scenario'), plannedStepId: flag('--planned-step'), action: flag('--action'), expected: flag('--expected'), confirmedBy: requiredFlag('--confirmed-by'), confirmationSource: (flag('--confirmation-source') as 'current-chat-explicit-approval' | 'external-review-record' | undefined), statement: requiredFlag('--confirmation-text') });
-      output(executionEnvelope(updated)); return;
+      output(executionEnvelope(projectRoot, updated)); return;
     }
     if (action === 'guide-verdict') {
       const status = requiredFlag('--status') as 'passed' | 'failed' | 'blocked' | 'paused' | 'inconclusive' | 'adapted';
       if (!['passed', 'failed', 'blocked', 'paused', 'inconclusive', 'adapted'].includes(status)) throw new Error('--status is invalid for a Guided verdict.');
       const updated = recordGuidedVerdict(projectRoot, subject, { stepId: requiredFlag('--step'), status, confirmedBy: requiredFlag('--confirmed-by'), confirmationSource: (flag('--confirmation-source') as 'current-chat-explicit-approval' | 'external-review-record' | undefined), statement: requiredFlag('--confirmation-text'), note: flag('--note') });
-      output(executionEnvelope(updated)); return;
+      output(executionEnvelope(projectRoot, updated)); return;
     }
     if (action === 'step') {
       const executionMode = (flag('--execution-mode') ?? 'host-automated') as StepExecutionMode;
       if (!['host-automated', 'user-assisted', 'system-component-blocked', 'preseeded-test-data'].includes(executionMode)) throw new Error('--execution-mode is invalid.');
       const updated = recordAgentStep(projectRoot, subject, { action: requiredFlag('--action'), uiAction: flag('--ui-action') as 'launch' | 'navigate' | 'click' | 'input' | 'fill' | 'swipe' | 'back' | 'wait' | 'assert' | 'screenshot' | 'reset' | 'restart-app' | undefined, safetyAction: flag('--safety-action'), detail: requiredFlag('--detail'), screenshotPath: requiredFlag('--screenshot'), status: (flag('--status') as RunStatus | undefined) ?? 'passed', visualInspection: (flag('--visual-inspection') as 'performed' | 'not-required' | 'not-applicable' | 'skipped' | undefined) ?? 'not-required', executionMode, scenarioId: flag('--scenario'), locator: locatorFromFlags(), actualLocator: locatorFromFlags('actual-'), inputRefs: recordFlag('--input-refs'), expectedState: flag('--expected-state'), actualState: flag('--actual-state'), adaptation: flag('--adaptation') });
-      output(executionEnvelope(updated)); return;
+      output(executionEnvelope(projectRoot, updated)); return;
     }
     if (action === 'evidence') {
       const updated = recordHostEvidence(projectRoot, subject, { type: requiredFlag('--type'), summary: requiredFlag('--summary'), artifactPath: flag('--file') });
-      output(executionEnvelope(updated)); return;
+      output(executionEnvelope(projectRoot, updated)); return;
     }
     if (action === 'cleanup') {
       const updated = recordCleanupFinding(projectRoot, subject, { scenarioId: requiredFlag('--scenario'), cleanup: requiredFlag('--cleanup'), actual: requiredFlag('--actual'), status: requiredFlag('--status') as RunStatus, screenshotPath: flag('--screenshot') });
-      output(executionEnvelope(updated)); return;
+      output(executionEnvelope(projectRoot, updated)); return;
     }
     if (action === 'recover') {
       const updated = recordRecoveryAttempt(projectRoot, subject, { action: requiredFlag('--action'), reason: requiredFlag('--reason'), detail: requiredFlag('--detail'), outcome: requiredFlag('--outcome') as 'continued' | 'blocked' | 'paused' | 'failed', failedStepId: flag('--failed-step') });
-      output(executionEnvelope(updated)); return;
+      output(executionEnvelope(projectRoot, updated)); return;
     }
     if (action === 'observe') {
       const updated = recordVisualFinding(projectRoot, subject, { scenarioId: requiredFlag('--scenario'), assertionId: requiredFlag('--assertion'), expected: requiredFlag('--expected'), actual: requiredFlag('--actual'), status: requiredFlag('--status') as RunStatus, screenshotPath: flag('--screenshot'), inspectionProvider: flag('--inspection-provider') });
-      output(executionEnvelope(updated)); return;
+      output(executionEnvelope(projectRoot, updated)); return;
     }
     if (action === 'complete') {
       const updated = completeAgentGuidedRun(projectRoot, readTask(projectRoot, (run as { moduleId: string }).moduleId, (run as { taskId: string }).taskId), subject);
-      rebuildIndexes(projectRoot); output(executionEnvelope(updated)); return;
+      rebuildIndexes(projectRoot); output(executionEnvelope(projectRoot, updated)); return;
     }
   }
   if (group === 'module' && action === 'regression') {

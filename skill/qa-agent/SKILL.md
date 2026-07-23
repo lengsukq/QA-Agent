@@ -24,7 +24,7 @@ Read `references/workflow.md` before acting. Runtime owns Task state, Run state,
 1. Create or resume the Task with `qa-agent check --request "<request>"`. This creates planning assets only; it must not start a Run.
 2. Inspect relevant source, routes, tests, configuration, existing QA assets, and tools.
 3. Produce and apply a PlanDraft. Every Scenario requires ordered `steps`, each with `action` and `expected`.
-4. Present the complete Runtime-written Task PRD.
+4. Present the complete Runtime Task PRD with its clickable `userFacingArtifacts[].markdownLink`; never substitute a plain path.
 5. If `userQuestions` exist—or the Agent has any material uncertainty about requirements, environment, account, test data, expected behavior, or safety—ask the QA one concrete question at a time. Persist answers in `confirmedDecisions`, clear resolved questions, and reapply the PlanDraft.
 6. Ask whether the PRD matches the requested requirements. Persist only the exact reply `确认测试方案` through `qa-agent plan review`.
 7. Then require a separate exact reply `确认开始测试`, persisted through `qa-agent review`.
@@ -38,11 +38,11 @@ Do not treat “可以”, “继续”, or “没问题” as either PRD confir
 2. Persist every real UI action, screenshot, observation, evidence item, recovery attempt, and Cleanup through Runtime.
 3. Record every declared business/visual assertion before `qa-agent run complete`.
 4. Follow `nextAction`; ask at most one user-owned question per turn.
-5. Complete only through Runtime. Present its report rather than writing a competing formal report.
-6. When `pythonRegressionEligibility.eligible=true`, ask whether to generate Python from that exact Run.
+5. Use only the Runtime report. Formal reports must embed real screenshots with Markdown image syntax. Include clickable report and finalized PRD links.
+6. If `pythonRegressionEligibility.eligible=true` and no script exists, end the completion reply with `requiredUserQuestion`; do not wait for user initiation.
 7. Generation consent authorizes a draft only. Read `references/python-regression.md` and `references/recommended-regression-stack.md`. The generated script must capture a real checkpoint screenshot for every source UI step, reference it in `result.json`, save with `qa-agent regression draft`, and show the full script or diff.
 8. Publish with `qa-agent regression publish` only after separate explicit approval. Publication freezes the Source Run.
-9. Later reruns use `qa-agent-regression-test` and `regression-runs/` without editing or replanning the formal script.
+9. Reruns use `qa-agent-regression-test` and `regression-runs/`. Formal regression reports embed every checkpoint screenshot; path-only references are invalid. Link the report or diagnostic.
 10. Call `qa-agent finish` only on explicit closure. Session finish is not Task archive.
 
 ## Safety

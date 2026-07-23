@@ -2,9 +2,9 @@
 
 QA Agent is a project-local AI testing runtime. Developers can request real UI checks in natural language while the Runtime persists Tasks, Runs, screenshots, business observations, cleanup, and reports.
 
-Current version: **v0.3.5**
+Current version: **v0.3.6**
 
-v0.3.5 strengthens the regression screenshot contract while retaining two-stage PRD approval and QA-led Guided mode:
+v0.3.6 strengthens artifact accessibility, screenshot-backed reports, and proactive regression drafting while retaining two-stage PRD approval and QA-led Guided mode:
 
 - the Agent derives a detailed Task PRD from the project;
 - every material requirement, environment, account, test-data, expected-result, or safety question must be resolved with the QA;
@@ -13,6 +13,9 @@ v0.3.5 strengthens the regression screenshot contract while retaining two-stage 
 - the main `qa-agent` performs AI-led execution;
 - `qa-agent-guided` requires human approval before each UI action and a human verdict after each observed result;
 - Runtime persists screenshots, QA decisions, assertions, cleanup, and formal reports;
+- PRDs, test reports, and regression reports are surfaced through clickable Markdown links;
+- formal test and regression reports must embed screenshots directly in Markdown rather than list paths only;
+- after an eligible test completes, the Agent must proactively ask whether to generate a Python regression draft;
 - Python draft generation and publication still require separate approvals;
 - `qa-agent-regression-test` only runs already published scripts;
 - every formal Python regression must capture a real checkpoint screenshot for each source UI step;
@@ -56,7 +59,7 @@ qa-agent --version
 Expected output:
 
 ```text
-0.3.5
+0.3.6
 ```
 
 ## Initialize a project
@@ -278,7 +281,7 @@ A Task no longer keeps multiple `runs/<run-id>/` histories. Before a formal Pyth
 
 When the TestPlan changes, the old Python script first becomes `stale`. After the user reviews and approves the changed plan, Runtime may create a replacement Source Run and a revised script.
 
-v0.3.5 does not create duplicate `summary.md`, Quick observed-Scenario JSON, Source Run history indexes, or Session Journal files.
+v0.3.6 does not create duplicate `summary.md`, Quick observed-Scenario JSON, Source Run history indexes, or Session Journal files.
 
 ## Python regression scripts
 
@@ -411,12 +414,12 @@ Show strict regression, release, and administration commands with:
 qa-agent help --advanced
 ```
 
-## Upgrade to v0.3.5
+## Upgrade to v0.3.6
 
 Upgrade the CLI:
 
 ```bash
-npm install -g qa-agent-skill@0.3.5
+npm install -g qa-agent-skill@0.3.6
 ```
 
 Then update an existing project:
@@ -444,7 +447,7 @@ npm run pack:check
 
 ## Three Skills
 
-v0.3.5 installs:
+v0.3.6 installs:
 
 ```text
 qa-agent

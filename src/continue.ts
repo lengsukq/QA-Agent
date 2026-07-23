@@ -1,7 +1,10 @@
+import { existsSync } from 'node:fs';
 import { bindTaskSession, resolveActiveTaskSession } from './session.ts';
 import type { ContinueResult, NextAction } from './types.ts';
 import { workflowStatus } from './workflow.ts';
 import { finalizeTask } from './task-finalizer.ts';
+import { taskPrdPath, taskSourceRunReportPath } from './project.ts';
+import { artifactLinksSentence, userFacingArtifact } from './user-facing-artifacts.ts';
 
 function actionOwner(action: NextAction): 'runtime' | 'agent' | 'host' | 'human' {
   if (action.requiredActor) return action.requiredActor;
@@ -11,6 +14,19 @@ function actionOwner(action: NextAction): 'runtime' | 'agent' | 'host' | 'human'
 function selectionMessage(candidates: NonNullable<ContinueResult['candidates']>): string {
   const items = candidates.map((candidate, index) => `${index + 1}. ${candidate.title}`).join('\n');
   return `Multiple unfinished QA tasks are available. Choose one to continue:\n${items}`;
+}
+
+function availableTaskArtifacts(root: string, moduleId: string, taskId: string): NonNullable<ContinueResult['userFacingArtifacts']> {
+  const prdPath = taskPrdPath(root, moduleId, taskId);
+  const reportPath = taskSourceRunReportPath(root, moduleId, taskId);
+  return [
+    ...(existsSync(prdPath) ? [userFacingArtifact(root, prdPath, '查看测试方案 PRD', 'task-prd')] : []),
+    ...(existsSync(reportPath) ? [userFacingArtifact(root, reportPath, '查看测试报告', 'source-run-report')] : []),
+  ];
+}
+
+function appendArtifactLinks(message: string, artifacts: NonNullable<ContinueResult['userFacingArtifacts']>): string {
+  return artifacts.length ? `${message} ${artifactLinksSentence(artifacts)}` : message;
 }
 
 export function continueCurrentTask(root: string, sessionKey?: string): ContinueResult {
@@ -34,6 +50,7 @@ export function continueCurrentTask(root: string, sessionKey?: string): Continue
   }
 
   let workflow = workflowStatus(root, resolution.binding.moduleId, resolution.binding.taskId);
+  let userFacingArtifacts = availableTaskArtifacts(root, resolution.binding.moduleId, resolution.binding.taskId);
   const session = bindTaskSession(root, {
     sessionKey,
     host: resolution.binding.host,
@@ -46,6 +63,7 @@ export function continueCurrentTask(root: string, sessionKey?: string): Continue
   if (action?.id === 'finalize_task' && action.requiredActor === 'runtime') {
     const finalization = finalizeTask(root, resolution.binding.moduleId, resolution.binding.taskId, workflow.runId ?? resolution.binding.runId);
     workflow = workflowStatus(root, resolution.binding.moduleId, resolution.binding.taskId);
+    userFacingArtifacts = availableTaskArtifacts(root, resolution.binding.moduleId, resolution.binding.taskId);
     action = workflow.nextActions[0];
     const finalizedSession = bindTaskSession(root, {
       sessionKey,
@@ -57,16 +75,16 @@ export function continueCurrentTask(root: string, sessionKey?: string): Continue
     if (finalization.status === 'failed') {
       return {
         apiVersion: 'qa-agent/continue/v1', kind: 'ContinueResult', status: 'blocked', session: finalizedSession,
-        task: resolution.task, workflow, finalization,
+        task: resolution.task, workflow, finalization, userFacingArtifacts,
         nextAction: workflow.nextActions[0] ? { id: workflow.nextActions[0].id, owner: actionOwner(workflow.nextActions[0]), description: workflow.nextActions[0].description, command: workflow.nextActions[0].command } : undefined,
-        userMessage: `QA task “${resolution.task.title}” result assets could not be finalized yet: ${finalization.error}. Saved Run evidence remains available and qa-agent continue can retry.`,
+        userMessage: appendArtifactLinks(`QA task “${resolution.task.title}” result assets could not be finalized yet: ${finalization.error}. Saved Run evidence remains available and qa-agent continue can retry.`, userFacingArtifacts),
       };
     }
     return {
       apiVersion: 'qa-agent/continue/v1', kind: 'ContinueResult', status: 'completed', session: finalizedSession,
-      task: { ...resolution.task, taskState: workflow.taskState, updatedAt: new Date().toISOString() }, workflow, finalization,
+      task: { ...resolution.task, taskState: workflow.taskState, updatedAt: new Date().toISOString() }, workflow, finalization, userFacingArtifacts,
       nextAction: action ? { id: action.id, owner: actionOwner(action), description: action.description, command: action.command } : undefined,
-      userMessage: `QA task “${resolution.task.title}” is complete. The Runtime report, Task PRD, screenshots, and evidence are finalized.`,
+      userMessage: appendArtifactLinks(`QA task “${resolution.task.title}” is complete. The Runtime report, Task PRD, screenshots, and evidence are finalized.`, userFacingArtifacts),
     };
   }
 
@@ -82,15 +100,16 @@ export function continueCurrentTask(root: string, sessionKey?: string): Continue
       session,
       task: resolution.task,
       workflow,
-      userMessage: `QA task “${resolution.task.title}” is complete and archived.`,
+      userFacingArtifacts,
+      userMessage: appendArtifactLinks(`QA task “${resolution.task.title}” is complete and archived.`, userFacingArtifacts),
     };
   }
 
   if (workflow.workflowStatus === 'completed' && workflow.taskState === 'completed') {
     return {
       apiVersion: 'qa-agent/continue/v1', kind: 'ContinueResult', status: 'completed', session,
-      task: resolution.task, workflow, nextAction,
-      userMessage: `QA task “${resolution.task.title}” is complete and its result assets are finalized.`,
+      task: resolution.task, workflow, nextAction, userFacingArtifacts,
+      userMessage: appendArtifactLinks(`QA task “${resolution.task.title}” is complete and its result assets are finalized.`, userFacingArtifacts),
     };
   }
 
@@ -103,7 +122,8 @@ export function continueCurrentTask(root: string, sessionKey?: string): Continue
       task: resolution.task,
       workflow,
       nextAction,
-      userMessage: `QA task “${resolution.task.title}” has a Runtime result ready for review and asset finalization.`,
+      userFacingArtifacts,
+      userMessage: appendArtifactLinks(`QA task “${resolution.task.title}” has a Runtime result ready for review and asset finalization.`, userFacingArtifacts),
     };
   }
 
@@ -116,7 +136,8 @@ export function continueCurrentTask(root: string, sessionKey?: string): Continue
       task: resolution.task,
       workflow,
       nextAction,
-      userMessage: `QA task “${resolution.task.title}” needs one user decision: ${nextAction.description}`,
+      userFacingArtifacts,
+      userMessage: appendArtifactLinks(`QA task “${resolution.task.title}” needs one user decision: ${nextAction.description}`, userFacingArtifacts),
     };
   }
 
@@ -129,7 +150,8 @@ export function continueCurrentTask(root: string, sessionKey?: string): Continue
       task: resolution.task,
       workflow,
       nextAction,
-      userMessage: `QA task “${resolution.task.title}” is temporarily blocked: ${nextAction?.description ?? workflow.nextAllowedAction} Saved progress remains available.`,
+      userFacingArtifacts,
+      userMessage: appendArtifactLinks(`QA task “${resolution.task.title}” is temporarily blocked: ${nextAction?.description ?? workflow.nextAllowedAction} Saved progress remains available.`, userFacingArtifacts),
     };
   }
 
@@ -141,8 +163,9 @@ export function continueCurrentTask(root: string, sessionKey?: string): Continue
     task: resolution.task,
     workflow,
     nextAction,
-    userMessage: nextAction
+    userFacingArtifacts,
+    userMessage: appendArtifactLinks(nextAction
       ? `Continue QA task “${resolution.task.title}”: ${nextAction.description}`
-      : `QA task “${resolution.task.title}” has no pending action.`,
+      : `QA task “${resolution.task.title}” has no pending action.`, userFacingArtifacts),
   };
 }

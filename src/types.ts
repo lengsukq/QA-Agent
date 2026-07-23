@@ -68,6 +68,18 @@ export type ContinueStatus = 'action_ready' | 'human_decision_required' | 'block
 
 export type FinishStatus = 'finished' | 'task_preserved' | 'blocked' | 'no_active_task' | 'task_selection_required';
 
+export type UserFacingArtifactKind = 'task-prd' | 'source-run-report' | 'source-run-diagnostic' | 'python-regression-report' | 'python-regression-diagnostic';
+
+export interface UserFacingArtifact {
+  kind: UserFacingArtifactKind;
+  label: string;
+  path: string;
+  workspacePath: string;
+  fileUrl: string;
+  markdownLink: string;
+  absoluteMarkdownLink: string;
+}
+
 export interface FinishResult {
   apiVersion: 'qa-agent/finish/v1';
   kind: 'FinishResult';
@@ -78,6 +90,7 @@ export interface FinishResult {
   candidates?: SessionTaskCandidate[];
   workflow?: QaWorkflowState;
   finalization?: TaskFinalizationResult;
+  userFacingArtifacts?: UserFacingArtifact[];
   userMessage: string;
 }
 
@@ -208,6 +221,7 @@ export interface ContinueResult {
   candidates?: SessionTaskCandidate[];
   workflow?: QaWorkflowState;
   finalization?: TaskFinalizationResult;
+  userFacingArtifacts?: UserFacingArtifact[];
   nextAction?: {
     id: string;
     owner: 'runtime' | 'agent' | 'host' | 'human';

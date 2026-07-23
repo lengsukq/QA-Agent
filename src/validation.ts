@@ -58,7 +58,21 @@ function validateDomainObject(path: string): string[] {
       if (!value.planHash) errors.push(`${path}: completed Run requires planHash.`);
       const expected = 'source-run/report.md'; if (value.reportPath !== expected) errors.push(`${path}: reportPath must be ${expected}.`);
       if (value.reportGeneratedBy !== RUNTIME_REPORT_GENERATOR || !value.reportGeneratedAt) errors.push(`${path}: completed Run must be Runtime-owned.`);
-      const reportPath = join(dirname(path), 'report.md'); if (!existsSync(reportPath) || !hasRuntimeReportMarker(readFileSync(reportPath, 'utf8'), value.id)) errors.push(`${path}: Runtime report is missing or invalid.`);
+      const reportPath = join(dirname(path), 'report.md');
+      if (!existsSync(reportPath) || !hasRuntimeReportMarker(readFileSync(reportPath, 'utf8'), value.id)) errors.push(`${path}: Runtime report is missing or invalid.`);
+      else {
+        const report = readFileSync(reportPath, 'utf8');
+        const screenshots = Array.isArray(value.screenshots) ? value.screenshots : [];
+        const formalReportRequired = ['passed', 'adapted', 'failed'].includes(value.status) || (Array.isArray(value.steps) && value.steps.some((step: Record<string, unknown>) => step.source === 'ui'));
+        if (formalReportRequired && !screenshots.length) errors.push(`${path}: formal Source Run report requires screenshots.`);
+        if (formalReportRequired && report.includes('QA-AGENT:SOURCE-RUN-DIAGNOSTIC')) errors.push(`${path}: screenshot-backed Source Run must not be marked diagnostic.`);
+        if (!formalReportRequired && !screenshots.length && !report.includes('QA-AGENT:SOURCE-RUN-DIAGNOSTIC')) errors.push(`${path}: screenshot-free Source Run must be marked diagnostic rather than formal.`);
+        if (!report.includes('## Embedded Screenshots')) errors.push(`${path}: Source Run report must contain an Embedded Screenshots section.`);
+        for (const screenshot of screenshots) {
+          const screenshotPath = typeof screenshot?.path === 'string' ? screenshot.path.replace(/^source-run\//, '') : '';
+          if (!screenshotPath || (!report.includes(`](./${screenshotPath})`) && !report.includes(`](${screenshotPath})`))) errors.push(`${path}: Source Run report does not embed screenshot ${screenshotPath || 'unknown'}.`);
+        }
+      }
     }
     if (['passed', 'adapted'].includes(value.status) && (!Array.isArray(value.screenshots) || !value.screenshots.length || !(value.visualFindings ?? []).length)) errors.push(`${path}: successful Run requires screenshot-backed findings.`);
   }
@@ -85,6 +99,7 @@ function validateDomainObject(path: string): string[] {
       if (reportPath && existsSync(reportPath)) {
         const report = readFileSync(reportPath, 'utf8');
         if (!report.includes('## Screenshot-backed Checkpoints') || !/!\[[^\]]*\]\(screenshots\/[^\)]+\)/.test(report)) errors.push(`${path}: completed regression report must embed checkpoint screenshots.`);
+        for (const screenshot of screenshots) if (!report.includes(`](${screenshot})`)) errors.push(`${path}: completed regression report does not embed screenshot ${screenshot}.`);
       }
     }
   }

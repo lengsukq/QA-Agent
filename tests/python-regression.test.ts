@@ -66,6 +66,8 @@ test('creates a reviewed Python regression draft, publishes it into the Task, an
   const applied = JSON.parse(run(root, 'plan', 'apply', '--file', planFile));
   assert.equal(applied.requiredRequirementsConfirmation, '确认测试方案');
   assert.equal(applied.requiredConfirmation, '确认开始测试');
+  assert.equal(applied.userFacingArtifacts[0].kind, 'task-prd');
+  assert.match(applied.userFacingArtifacts[0].markdownLink, /^\[查看测试方案 PRD\]\(.+\/prd\.md\)$/);
   assert.match(readFileSync(prepared.prdPath, 'utf8'), /\| 步骤 \| 操作 \| 预期结果 \|/);
   run(root, 'plan', 'review', '--module', prepared.quickCheck.moduleId, '--task', prepared.quickCheck.taskId, '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '确认测试方案');
   run(root, 'review', '--module', prepared.quickCheck.moduleId, '--task', prepared.quickCheck.taskId, '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '确认开始测试');
@@ -97,11 +99,17 @@ test('creates a reviewed Python regression draft, publishes it into the Task, an
     status: 'passed',
     screenshotPath: sourceScreenshot,
   });
-  const completed = completeAgentGuidedRun(root, task, started.runId);
+  const completed = JSON.parse(run(root, 'run', 'complete', started.runId));
   assert.equal(completed.status, 'passed');
   assert.equal(completed.pythonRegressionEligibility?.eligible, true);
   assert.ok(completed.pythonRegressionEligibility?.flowHash);
   assert.deepEqual(completed.pythonRegressionEligibility?.sourceStepIds, [sourceStepId]);
+  assert.equal(completed.mustAskUserQuestion, true);
+  assert.match(completed.requiredUserQuestion, /是否基于本次已验证流程生成 Python 回归脚本草稿/);
+  assert.equal(completed.nextUserDecision.id, 'offer_python_regression');
+  assert.deepEqual(completed.nextUserDecision.choices, ['生成回归脚本', '暂不生成']);
+  assert.deepEqual(completed.userFacingArtifacts.map((item: { kind: string }) => item.kind), ['task-prd', 'source-run-report']);
+  assert.match(completed.requiredUserFacingLinks, /\[查看测试方案 PRD\]\(.+prd\.md\).*\[查看测试报告\]\(.+report\.md\)/);
 
   const missingScreenshotScriptId = 'missing-screenshot-contract';
   const missingScreenshotScript = join(root, 'missing-screenshot-contract.py');
@@ -155,6 +163,8 @@ test('creates a reviewed Python regression draft, publishes it into the Task, an
   assert.equal(executed.status, 'passed');
   assert.equal(executed.contractStatus, 'completed');
   assert.ok(existsSync(executed.reportPath));
+  assert.equal(executed.userFacingArtifacts[0].kind, 'python-regression-report');
+  assert.match(executed.userFacingArtifacts[0].markdownLink, /^\[查看回归报告\]\(.+\/report\.md\)$/);
   const report = readFileSync(executed.reportPath, 'utf8');
   assert.match(report, /QA-AGENT:PYTHON-REGRESSION-REPORT/);
   assert.match(report, /## Screenshot-backed Checkpoints/);

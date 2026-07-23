@@ -101,6 +101,9 @@ function prepareQuickTask(root: string, request: string): { prepared: any; task:
   assert.equal(prepared.requiredRequirementsConfirmationAfterPlanning, '确认测试方案');
   assert.equal(prepared.requiredConfirmationAfterPlanning, '确认开始测试');
   assert.ok(existsSync(prepared.prdPath));
+  assert.equal(prepared.userFacingArtifacts[0].kind, 'task-prd');
+  assert.match(prepared.userFacingArtifacts[0].markdownLink, /^\[查看测试方案 PRD\]\(.+\/prd\.md\)$/);
+  assert.equal(prepared.requiredUserFacingLinks, prepared.userFacingArtifacts[0].markdownLink);
   assert.match(readFileSync(prepared.prdPath, 'utf8'), /等待 Agent 根据项目生成详细步骤/);
   const task = applyDetailedPlan(root, readTask(root, prepared.quickCheck.moduleId, prepared.quickCheck.taskId));
   const prd = readFileSync(prepared.prdPath, 'utf8');
@@ -172,10 +175,10 @@ function strictTaskWithRun(root: string, moduleId: string, taskId: string, risk:
   return { task: readTask(root, moduleId, taskId), run: completed };
 }
 
-test('initializes v0.3.5 without replay directories and exposes simplified help', () => {
+test('initializes v0.3.6 without replay directories and exposes simplified help', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-init-'));
   run(root, 'init', '--id', 'fixture');
-  assert.equal(run(root, '--version').trim(), '0.3.5');
+  assert.equal(run(root, '--version').trim(), '0.3.6');
   const help = run(root, 'help');
   for (const commandName of ['init', 'check', 'continue', 'finish', 'doctor', 'update']) assert.match(help, new RegExp(commandName));
   assert.doesNotMatch(help, /operation plan|operation replay/i);
@@ -195,7 +198,7 @@ test('initializes v0.3.5 without replay directories and exposes simplified help'
   assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'operation.schema.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'regression-suite.schema.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'skills', 'built-in', 'operation-replay.json')), false);
-  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.5');
+  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.6');
   assert.equal(validateProject(root).valid, true);
 });
 
@@ -209,6 +212,9 @@ test('Quick Check completes with report, PRD, and direct Python eligibility', ()
   assert.ok(completed.pythonRegressionEligibility?.flowHash);
   const taskRoot = taskDirectory(root, task.metadata.moduleId, task.metadata.id);
   assert.ok(existsSync(taskSourceRunReportPath(root, task.metadata.moduleId, task.metadata.id)));
+  const report = readFileSync(taskSourceRunReportPath(root, task.metadata.moduleId, task.metadata.id), 'utf8');
+  assert.match(report, /## Embedded Screenshots/);
+  for (const screenshot of completed.screenshots) assert.ok(report.includes(`](./${screenshot.path.replace(/^source-run\//, '')})`));
   assert.equal(existsSync(join(taskRoot, 'runs')), false);
   assert.equal(readTask(root, task.metadata.moduleId, task.metadata.id).sourceRunRef, 'source-run/run.json');
   assert.equal(readTask(root, task.metadata.moduleId, task.metadata.id).sourceReportRef, 'source-run/report.md');
@@ -567,7 +573,7 @@ test('Migration selects one Source Run, preserves extra history, and upgrades Py
   assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'operation.schema.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'regression-suite.schema.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'skills', 'built-in', 'operation-replay.json')), false);
-  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.5');
+  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.6');
   const migrated = JSON.parse(readFileSync(manifestPath, 'utf8'));
   assert.equal(migrated.apiVersion, 'qa-agent/python-regression/v2');
   assert.ok(migrated.sourceFlowHash);

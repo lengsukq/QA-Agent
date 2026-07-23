@@ -1,11 +1,12 @@
 import { existsSync } from 'node:fs';
 import { readJson } from './store.ts';
-import { readTask, taskSourceRunPath } from './project.ts';
+import { readTask, taskPrdPath, taskSourceRunPath, taskSourceRunReportPath } from './project.ts';
 import { closeTaskSession, resolveActiveTaskSession } from './session.ts';
 import { finalizeTask } from './task-finalizer.ts';
 import type { FinishResult, TestRun, TestTask } from './types.ts';
 import { normalizeTaskState } from './workflow-model.ts';
 import { workflowStatus } from './workflow.ts';
+import { artifactLinksSentence, userFacingArtifact } from './user-facing-artifacts.ts';
 
 function latestRun(root: string, task: TestTask): TestRun | undefined {
   const path = taskSourceRunPath(root, task.metadata.moduleId, task.metadata.id);
@@ -52,11 +53,15 @@ export function finishCurrentTask(root: string, sessionKey?: string): FinishResu
 
   const closure = closeTaskSession(root, { ...resolution.binding, runId: run?.id ?? resolution.binding.runId }, sessionKey);
   const persistentTaskPreserved = task.metadata.mode !== 'quick';
+  const userFacingArtifacts = [
+    ...(existsSync(taskPrdPath(root, task.metadata.moduleId, task.metadata.id)) ? [userFacingArtifact(root, taskPrdPath(root, task.metadata.moduleId, task.metadata.id), '查看测试方案 PRD', 'task-prd')] : []),
+    ...(existsSync(taskSourceRunReportPath(root, task.metadata.moduleId, task.metadata.id)) ? [userFacingArtifact(root, taskSourceRunReportPath(root, task.metadata.moduleId, task.metadata.id), '查看测试报告', 'source-run-report')] : []),
+  ];
   return {
     apiVersion: 'qa-agent/finish/v1', kind: 'FinishResult', status: persistentTaskPreserved ? 'task_preserved' : 'finished',
-    session: resolution.binding, closure, task: { ...resolution.task, taskState: normalizeTaskState(task.metadata.status), updatedAt: task.updatedAt }, workflow, finalization,
+    session: resolution.binding, closure, task: { ...resolution.task, taskState: normalizeTaskState(task.metadata.status), updatedAt: task.updatedAt }, workflow, finalization, userFacingArtifacts,
     userMessage: persistentTaskPreserved
-      ? `The current QA session is finished. Persistent QA task “${resolution.task.title}” remains available in its current state and can be explicitly resumed later.`
-      : `QA task “${resolution.task.title}” is complete and the current session is finished. The Runtime report, PRD, screenshots, and evidence are saved.`,
+      ? `The current QA session is finished. Persistent QA task “${resolution.task.title}” remains available in its current state and can be explicitly resumed later.${userFacingArtifacts.length ? ` ${artifactLinksSentence(userFacingArtifacts)}` : ''}`
+      : `QA task “${resolution.task.title}” is complete and the current session is finished. The Runtime report, PRD, screenshots, and evidence are saved.${userFacingArtifacts.length ? ` ${artifactLinksSentence(userFacingArtifacts)}` : ''}`,
   };
 }
