@@ -182,20 +182,28 @@ function runContextFromFlags(): Partial<ExecutionSnapshot> {
 
 function executionEnvelope(projectRoot: string, run: TestRun): Record<string, unknown> {
   const running = run.status === 'running';
-  const guidedPhase = run.guidedInteraction?.phase;
-  const uiAllowed = running && (!guidedPhase || guidedPhase === 'ready_to_execute');
-  const taskDirectory = `.qa-agent/modules/${run.moduleId}/tasks/${run.taskId}`;
-  const runDirectory = `${taskDirectory}/source-run`;
+  const task = readTask(projectRoot, run.moduleId, run.taskId);
+  const userLed = task.metadata.mode === 'guided';
+  const uiAllowed = running && (!userLed || run.guidedPending?.type === 'execute_action');
+  const taskDirectoryRelative = `.qa-agent/modules/${run.moduleId}/tasks/${run.taskId}`;
+  const runDirectory = `${taskDirectoryRelative}/source-run`;
   const sourceReportFormal = run.screenshots.length > 0;
   const userFacingArtifacts = [
     userFacingArtifact(projectRoot, taskPrdPath(projectRoot, run.moduleId, run.taskId), '查看测试方案 PRD', 'task-prd'),
     ...(run.reportGeneratedBy === 'qa-agent-runtime'
       ? [userFacingArtifact(projectRoot, taskSourceRunReportPath(projectRoot, run.moduleId, run.taskId), sourceReportFormal ? '查看测试报告' : '查看测试诊断', sourceReportFormal ? 'source-run-report' : 'source-run-diagnostic')]
       : []),
+    ...(run.scenarioRegressionDrafts ?? []).map(draft => userFacingArtifact(
+      projectRoot,
+      join(taskDirectory(projectRoot, run.moduleId, run.taskId), 'source-run', draft.scriptRef),
+      `查看场景回归脚本：${draft.scenarioId}`,
+      'scenario-regression-draft',
+    )),
   ];
   const publishedRegressions = listPythonRegressions(projectRoot, run.moduleId, run.taskId);
   const shouldOfferPythonRegression = Boolean(
-    !running
+    !userLed
+    && !running
     && run.reportGeneratedBy === 'qa-agent-runtime'
     && run.pythonRegressionEligibility?.eligible
     && publishedRegressions.length === 0,
@@ -203,9 +211,25 @@ function executionEnvelope(projectRoot: string, run: TestRun): Record<string, un
   const requiredUserQuestion = shouldOfferPythonRegression
     ? '测试已完成，并且本次流程符合生成回归脚本的条件。是否基于本次已验证流程生成 Python 回归脚本草稿？'
     : undefined;
+  const next = run.guidedPending?.type === 'execute_action'
+    ? `Execute only the approved action: ${run.guidedPending.action}`
+    : run.guidedPending?.type === 'result_verdict'
+      ? `Present step ${run.guidedPending.stepId} and ask the QA whether the observed result matches expectations.`
+      : running && userLed
+        ? 'Ask the QA to approve exactly one next action before using a UI tool.'
+        : running
+          ? 'Execute the approved business flow and persist every UI action, screenshot, assertion, and cleanup.'
+          : shouldOfferPythonRegression
+            ? 'Present the Runtime report and PRD links, then ask requiredUserQuestion verbatim.'
+            : run.scenarioRegressionDrafts?.length
+              ? 'Present the Runtime report, PRD, and one generated regression draft for each completed Scenario.'
+              : run.reportGeneratedBy === 'qa-agent-runtime'
+                ? 'Stop UI execution and present every user-facing artifact link.'
+                : run.conclusion;
   return {
     ...run,
     executionMode: 'explore',
+    controlMode: userLed ? 'user-led' : 'ai-led',
     uiExecutionAllowed: uiAllowed,
     runId: running ? run.id : undefined,
     mustStop: !uiAllowed,
@@ -221,9 +245,9 @@ function executionEnvelope(projectRoot: string, run: TestRun): Record<string, un
       choices: ['生成回归脚本', '暂不生成'],
       consequence: '同意后只生成草稿；正式发布仍需要单独审核和批准。',
     } : undefined,
-    assetContract: { taskDirectory, runDirectory, runJson: `${runDirectory}/run.json`, report: `${runDirectory}/report.md`, screenshotsDirectory: `${runDirectory}/screenshots/`, evidenceDirectory: `${runDirectory}/evidence/` },
+    assetContract: { taskDirectory: taskDirectoryRelative, runDirectory, runJson: `${runDirectory}/run.json`, report: `${runDirectory}/report.md`, screenshotsDirectory: `${runDirectory}/screenshots/`, evidenceDirectory: `${runDirectory}/evidence/` },
     forbiddenActions: uiAllowed ? ['manual-report.write', 'pass.claim-before-run-complete'] : ['ui.execute', 'manual-report.write', 'pass.claim'],
-    next: guidedPhase === 'awaiting_action_approval' ? 'Ask the QA to approve exactly one next action before using a UI tool.' : guidedPhase === 'awaiting_result_verdict' ? `Present step ${run.guidedInteraction?.pendingStepId} and ask the QA whether the observed result matches expectations.` : running ? 'Execute the approved business flow and persist every UI action, screenshot, assertion, and cleanup.' : shouldOfferPythonRegression ? `Present the Runtime report and PRD links, summarize the result, then ask requiredUserQuestion verbatim. Do not end the reply without asking it.` : run.reportGeneratedBy === 'qa-agent-runtime' ? `Stop UI execution. Inspect the Runtime report and include every userFacingArtifacts[].markdownLink in the user-facing reply. Do not provide only a plain path.` : run.conclusion,
+    next,
   };
 }
 

@@ -49,10 +49,17 @@ function validateDomainObject(path: string): string[] {
   if (/\/tasks\/[^/]+\/source-run\/run\.json$/.test(path)) {
     if (!['pending', 'running', 'passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable', 'needs_confirmation', 'adapted'].includes(value.status)) errors.push(`${path}: invalid Source Run status.`);
     if (value.operationPlanId !== undefined || value.replayStatus !== undefined || value.replayStage !== undefined || value.replayCursor !== undefined || value.operationCandidates !== undefined || (value.steps ?? []).some((step: Record<string, unknown>) => step.operationAction !== undefined)) errors.push(`${path}: legacy replay or action fields remain; run qa-agent migrate.`);
-    if (value.guidedInteraction) {
-      if (!['awaiting_action_approval', 'ready_to_execute', 'awaiting_result_verdict', 'completed'].includes(value.guidedInteraction.phase)) errors.push(`${path}: invalid Guided interaction phase.`);
-      if (!Array.isArray(value.guidedInteraction.actionApprovals) || !Array.isArray(value.guidedInteraction.verdicts)) errors.push(`${path}: Guided interaction history is incomplete.`);
-      if (value.completedAt && (value.steps ?? []).some((step: Record<string, unknown>) => step.source === 'ui' && !step.humanVerdict)) errors.push(`${path}: completed Guided Run has a UI step without a QA verdict.`);
+    if (value.guidedPending) {
+      if (!['execute_action', 'result_verdict'].includes(value.guidedPending.type)) errors.push(`${path}: invalid user-led pending interaction.`);
+      if (value.guidedPending.type === 'execute_action' && (!isSafeId(value.guidedPending.scenarioId) || typeof value.guidedPending.action !== 'string' || typeof value.guidedPending.expected !== 'string' || !isHumanApprover(value.guidedPending.approval?.confirmedBy))) errors.push(`${path}: user-led approved action is incomplete.`);
+      if (value.guidedPending.type === 'result_verdict' && typeof value.guidedPending.stepId !== 'string') errors.push(`${path}: user-led result verdict target is missing.`);
+      if (value.completedAt) errors.push(`${path}: completed user-led Run must not keep a pending interaction.`);
+    }
+    if (value.completedAt && (value.steps ?? []).some((step: Record<string, unknown>) => step.humanApproval && !step.humanVerdict)) errors.push(`${path}: completed user-led Run has an approved UI step without a QA verdict.`);
+    if (Array.isArray(value.scenarioRegressionDrafts)) {
+      for (const draft of value.scenarioRegressionDrafts) {
+        if (!isSafeId(draft.scenarioId) || !isSafeId(draft.scriptId) || typeof draft.scriptRef !== 'string' || typeof draft.manifestRef !== 'string' || !Array.isArray(draft.sourceStepIds) || !draft.sourceStepIds.length || !draft.sourceFlowHash || !draft.scriptHash) errors.push(`${path}: invalid Scenario regression draft traceability.`);
+      }
     }
     if (value.completedAt) {
       if (!value.planHash) errors.push(`${path}: completed Run requires planHash.`);
@@ -75,6 +82,18 @@ function validateDomainObject(path: string): string[] {
       }
     }
     if (['passed', 'adapted'].includes(value.status) && (!Array.isArray(value.screenshots) || !value.screenshots.length || !(value.visualFindings ?? []).length)) errors.push(`${path}: successful Run requires screenshot-backed findings.`);
+  }
+  if (/\/tasks\/[^/]+\/source-run\/scenario-regressions\/[^/]+\/manifest\.json$/.test(path)) {
+    if (value.apiVersion !== 'qa-agent/scenario-regression-draft/v1' || value.kind !== 'ScenarioRegressionDraft' || !isSafeId(value.scenarioId) || !isSafeId(value.scriptId)) errors.push(`${path}: invalid Scenario regression draft manifest.`);
+    if (!value.runId || !value.sourceFlowHash || !value.scriptHash || !Array.isArray(value.sourceStepIds) || !value.sourceStepIds.length) errors.push(`${path}: Scenario regression draft traceability is incomplete.`);
+    const scriptPath = join(dirname(path), 'script.py');
+    if (!existsSync(scriptPath)) errors.push(`${path}: Scenario regression draft script is missing.`);
+    else {
+      const script = readFileSync(scriptPath, 'utf8');
+      if (![textHash(script), textHash(script.trimEnd())].includes(value.scriptHash)) errors.push(`${scriptPath}: Scenario regression draft hash mismatch.`);
+      if (pythonContainsRawSecret(script)) errors.push(`${scriptPath}: potential raw secret.`);
+      if (!script.includes('QA_AGENT_RESULT_PATH') || !script.includes('QA_AGENT_SCREENSHOT_DIR') || !script.includes('qa-agent/python-regression-result/v1')) errors.push(`${scriptPath}: Scenario regression result contract missing.`);
+    }
   }
   if (/\/tasks\/[^/]+\/regression\/[^/]+\.json$/.test(path)) {
     if (value.apiVersion !== 'qa-agent/python-regression/v2' || value.kind !== 'PythonRegression' || !isSafeId(value.id) || !['approved_unverified', 'validated', 'stale', 'deprecated'].includes(value.status)) errors.push(`${path}: invalid Python regression manifest.`);

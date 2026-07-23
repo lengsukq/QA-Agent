@@ -175,10 +175,10 @@ function strictTaskWithRun(root: string, moduleId: string, taskId: string, risk:
   return { task: readTask(root, moduleId, taskId), run: completed };
 }
 
-test('initializes v0.3.6 without replay directories and exposes simplified help', () => {
+test('initializes v0.3.7 without replay directories and exposes simplified help', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-init-'));
   run(root, 'init', '--id', 'fixture');
-  assert.equal(run(root, '--version').trim(), '0.3.6');
+  assert.equal(run(root, '--version').trim(), '0.3.7');
   const help = run(root, 'help');
   for (const commandName of ['init', 'check', 'continue', 'finish', 'doctor', 'update']) assert.match(help, new RegExp(commandName));
   assert.doesNotMatch(help, /operation plan|operation replay/i);
@@ -198,7 +198,7 @@ test('initializes v0.3.6 without replay directories and exposes simplified help'
   assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'operation.schema.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'regression-suite.schema.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'skills', 'built-in', 'operation-replay.json')), false);
-  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.6');
+  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.7');
   assert.equal(validateProject(root).valid, true);
 });
 
@@ -348,7 +348,7 @@ test('unresolved QA questions block PRD confirmation until answers are applied',
   assert.equal(reviewed.metadata.planReview?.statement, '确认测试方案');
 });
 
-test('Guided QA enforces one human-approved action and one human verdict at a time', () => {
+test('User-led QA keeps one pending interaction and generates one regression script per Scenario', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-guided-'));
   run(root, 'init', '--id', 'guided'); importHost(root);
   const prepared = json(root, 'check', '--mode', 'guided', '--request', '验证首次安装 Welcome Dialog');
@@ -360,6 +360,7 @@ test('Guided QA enforces one human-approved action and one human verdict at a ti
 
   const started = json(root, 'test', '--module', task.metadata.moduleId, '--task', task.metadata.id);
   assert.equal(started.status, 'running');
+  assert.equal(started.controlMode, 'user-led');
   const guidedRunId = started.runId as string;
   assert.equal(guidedRunId !== undefined, true);
   assert.equal(started.uiExecutionAllowed, false);
@@ -386,7 +387,7 @@ test('Guided QA enforces one human-approved action and one human verdict at a ti
   });
   const step = afterStep.steps.at(-1)!;
   assert.equal(step.status, 'needs_confirmation');
-  assert.equal(afterStep.guidedInteraction?.phase, 'awaiting_result_verdict');
+  assert.equal(afterStep.guidedPending?.type, 'result_verdict');
   assert.throws(() => approveGuidedAction(root, guidedRunId, {
     scenarioId: scenario.id, plannedStepId: scenario.plannedSteps[1]!.id,
     confirmedBy: 'project-owner', statement: '继续下一步',
@@ -399,7 +400,7 @@ test('Guided QA enforces one human-approved action and one human verdict at a ti
   assert.equal(verdict.uiExecutionAllowed, false);
   const afterVerdict = JSON.parse(readFileSync(taskSourceRunPath(root, task.metadata.moduleId, task.metadata.id), 'utf8')) as TestRun;
   assert.equal(afterVerdict.steps.at(-1)?.humanVerdict?.status, 'passed');
-  assert.equal(afterVerdict.guidedInteraction?.phase, 'awaiting_action_approval');
+  assert.equal(afterVerdict.guidedPending, undefined);
 
   for (const assertion of scenario.visualAssertions ?? []) recordVisualFinding(root, guidedRunId, {
     assertionId: assertion.id, expected: assertion.expected, actual: assertion.expected,
@@ -407,9 +408,18 @@ test('Guided QA enforces one human-approved action and one human verdict at a ti
   });
   const completed = completeAgentGuidedRun(root, task, guidedRunId);
   assert.equal(completed.status, 'passed');
-  assert.equal(completed.guidedInteraction?.phase, 'completed');
+  assert.equal(completed.guidedPending, undefined);
+  assert.equal(completed.scenarioRegressionDrafts?.length, 1);
+  const scenarioDraft = completed.scenarioRegressionDrafts![0]!;
+  const scenarioScriptPath = join(taskSourceRunDirectory(root, task.metadata.moduleId, task.metadata.id), scenarioDraft.scriptRef);
+  assert.ok(existsSync(scenarioScriptPath));
+  const scenarioScript = readFileSync(scenarioScriptPath, 'utf8');
+  assert.match(scenarioScript, /QA_AGENT_BRIDGE/);
+  assert.match(scenarioScript, /QA_AGENT_RESULT_PATH/);
+  assert.match(scenarioScript, new RegExp(step.id));
   const report = readFileSync(taskSourceRunReportPath(root, task.metadata.moduleId, task.metadata.id), 'utf8');
-  assert.match(report, /Guided QA Decisions/);
+  assert.match(report, /User-led QA Decisions/);
+  assert.match(report, /Scenario Regression Drafts/);
   assert.match(report, /project-owner/);
   assert.equal(validateProject(root).valid, true);
 });
@@ -573,7 +583,7 @@ test('Migration selects one Source Run, preserves extra history, and upgrades Py
   assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'operation.schema.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'regression-suite.schema.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'skills', 'built-in', 'operation-replay.json')), false);
-  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.6');
+  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.7');
   const migrated = JSON.parse(readFileSync(manifestPath, 'utf8'));
   assert.equal(migrated.apiVersion, 'qa-agent/python-regression/v2');
   assert.ok(migrated.sourceFlowHash);

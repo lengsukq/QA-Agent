@@ -14,6 +14,7 @@ import { inspectPythonRegressionEligibility, listPythonRegressions } from './pyt
 import type { ExecutionSnapshot, Locator, UiAction, RunStatus, StepExecutionMode, TestRun, TestTask, VisualInspectionStatus } from './types.ts';
 import { assertHumanApprover, executionContractIsCurrent, requiresTestPlanApproval, testPlanHash } from './approval.ts';
 import { assertRecoveryAction, assertSafeAction } from './safety.ts';
+import { generateGuidedScenarioRegressions } from './scenario-regression.ts';
 
 type RunContextInput = Partial<ExecutionSnapshot> & { scenarioId?: string };
 
@@ -42,7 +43,6 @@ function newRun(root: string, task: TestTask, input: RunContextInput = {}): Test
     status: 'pending',
     safeMode: policy.safeMode,
     mode: 'explore',
-    guidedInteraction: task.metadata.mode === 'guided' ? { phase: 'awaiting_action_approval', actionApprovals: [], verdicts: [] } : undefined,
     steps: [], scenarioResults: [], evidence: [], visualFindings: [],
     scenarioId: input.scenarioId, screenshots: [], recoveryAttempts: [], cleanupFindings: [], startedAt,
   };
@@ -60,6 +60,7 @@ function finish(root: string, task: TestTask, run: TestRun): TestRun {
     }
   }
   run.pythonRegressionEligibility = inspectPythonRegressionEligibility(task, run);
+  if (task.metadata.mode === 'guided' && !['blocked', 'paused', 'needs_confirmation', 'inconclusive'].includes(run.status)) generateGuidedScenarioRegressions(root, task, run);
   const taskStateBeforeFinish = normalizeTaskState(task.metadata.status);
   const targetTaskState = run.status === 'paused'
     ? 'paused'
@@ -171,42 +172,36 @@ export function approveGuidedAction(root: string, runId: string, input: { scenar
   const run = readRunById(root, runId);
   if (run.status !== 'running') throw new Error(`Run ${runId} is not running.`);
   const task = readTask(root, run.moduleId, run.taskId);
-  if (task.metadata.mode !== 'guided' || !run.guidedInteraction) throw new Error(`Run ${runId} is not a Guided QA Run.`);
+  if (task.metadata.mode !== 'guided') throw new Error(`Run ${runId} is not a user-led QA Run.`);
   if (!executionContractIsCurrent(task, run.planHash)) throw new Error(`Task ${task.metadata.id} plan changed after Run ${run.id} started.`);
-  if (run.guidedInteraction.phase === 'awaiting_result_verdict') throw new Error(`Guided Run ${run.id} is waiting for the QA verdict on step ${run.guidedInteraction.pendingStepId}.`);
-  if (run.guidedInteraction.phase === 'ready_to_execute') throw new Error(`Guided Run ${run.id} already has an approved action waiting to execute.`);
-  if (run.guidedInteraction.phase === 'completed') throw new Error(`Guided Run ${run.id} is complete.`);
+  if (run.guidedPending?.type === 'result_verdict') throw new Error(`User-led Run ${run.id} is waiting for the QA verdict on step ${run.guidedPending.stepId}.`);
+  if (run.guidedPending?.type === 'execute_action') throw new Error(`User-led Run ${run.id} already has an approved action waiting to execute.`);
+  if (run.completedAt) throw new Error(`User-led Run ${run.id} is complete.`);
   assertHumanApprover(input.confirmedBy);
-  if (!input.statement.trim()) throw new Error('Guided action approval requires the QA reply that authorized this action.');
+  if (!input.statement.trim()) throw new Error('User-led action approval requires the QA reply that authorized this action.');
   const confirmationSource = input.confirmationSource ?? 'current-chat-explicit-approval';
-  if (!['current-chat-explicit-approval', 'external-review-record'].includes(confirmationSource)) throw new Error('Guided action confirmationSource must be current-chat-explicit-approval or external-review-record.');
+  if (!['current-chat-explicit-approval', 'external-review-record'].includes(confirmationSource)) throw new Error('User-led action confirmationSource must be current-chat-explicit-approval or external-review-record.');
   const scenarioId = input.scenarioId ?? run.scenarioId ?? (task.scenarios.length === 1 ? task.scenarios[0]?.id : undefined);
-  if (!scenarioId) throw new Error('Guided action approval must specify a Scenario when the Task contains multiple Scenarios.');
+  if (!scenarioId) throw new Error('User-led action approval must specify a Scenario when the Task contains multiple Scenarios.');
   const scenario = task.scenarios.find(item => item.id === scenarioId);
   if (!scenario) throw new Error(`Scenario ${scenarioId} does not belong to Task ${task.metadata.id}.`);
   const planned = input.plannedStepId ? scenario.plannedSteps.find(step => step.id === input.plannedStepId) : undefined;
   if (input.plannedStepId && !planned) throw new Error(`Planned step ${input.plannedStepId} does not belong to Scenario ${scenarioId}.`);
   const action = (planned?.action ?? input.action)?.trim();
   const expected = (planned?.expected ?? input.expected)?.trim();
-  if (!action || !expected) throw new Error('Guided action approval requires either --planned-step or both --action and --expected.');
+  if (!action || !expected) throw new Error('User-led action approval requires either --planned-step or both --action and --expected.');
   if (planned && input.action?.trim() && input.action.trim() !== planned.action) throw new Error('The supplied action does not match the approved PRD planned step.');
   if (planned && input.expected?.trim() && input.expected.trim() !== planned.expected) throw new Error('The supplied expected result does not match the approved PRD planned step.');
-  if (hasSecrets({ action, expected, statement: input.statement })) throw new Error('Guided action approval contains a potential secret.');
+  if (hasSecrets({ action, expected, statement: input.statement })) throw new Error('User-led action approval contains a potential secret.');
   const approval = {
-    id: `guided-approval-${run.guidedInteraction.actionApprovals.length + 1}`,
-    scenarioId,
-    plannedStepId: planned?.id,
-    action,
-    expected,
+    id: `guided-approval-${run.steps.filter(step => step.humanApproval).length + 1}`,
     confirmedBy: input.confirmedBy,
     confirmationSource,
     statement: input.statement.trim(),
     confirmedAt: now(),
   };
-  run.guidedInteraction.actionApprovals.push(approval);
-  run.guidedInteraction.pendingApprovalId = approval.id;
-  run.guidedInteraction.phase = 'ready_to_execute';
-  run.evidence.push({ type: 'qa-action-approval', summary: `${input.confirmedBy} approved guided action: ${action}` });
+  run.guidedPending = { type: 'execute_action', scenarioId, plannedStepId: planned?.id, action, expected, approval };
+  run.evidence.push({ type: 'qa-action-approval', summary: `${input.confirmedBy} approved user-led action: ${action}` });
   checkpointRun(root, run);
   return run;
 }
@@ -215,40 +210,36 @@ export function recordGuidedVerdict(root: string, runId: string, input: { stepId
   const run = readRunById(root, runId);
   if (run.status !== 'running') throw new Error(`Run ${runId} is not running.`);
   const task = readTask(root, run.moduleId, run.taskId);
-  if (task.metadata.mode !== 'guided' || !run.guidedInteraction) throw new Error(`Run ${runId} is not a Guided QA Run.`);
-  if (run.guidedInteraction.phase !== 'awaiting_result_verdict' || run.guidedInteraction.pendingStepId !== input.stepId) throw new Error(`Guided Run ${run.id} is not waiting for a verdict on step ${input.stepId}.`);
+  if (task.metadata.mode !== 'guided') throw new Error(`Run ${runId} is not a user-led QA Run.`);
+  if (run.guidedPending?.type !== 'result_verdict' || run.guidedPending.stepId !== input.stepId) throw new Error(`User-led Run ${run.id} is not waiting for a verdict on step ${input.stepId}.`);
   assertHumanApprover(input.confirmedBy);
-  if (!input.statement.trim()) throw new Error('Guided result verdict requires the QA reply that judged the observed result.');
+  if (!input.statement.trim()) throw new Error('User-led result verdict requires the QA reply that judged the observed result.');
   const confirmationSource = input.confirmationSource ?? 'current-chat-explicit-approval';
-  if (!['current-chat-explicit-approval', 'external-review-record'].includes(confirmationSource)) throw new Error('Guided verdict confirmationSource must be current-chat-explicit-approval or external-review-record.');
+  if (!['current-chat-explicit-approval', 'external-review-record'].includes(confirmationSource)) throw new Error('User-led verdict confirmationSource must be current-chat-explicit-approval or external-review-record.');
   const step = run.steps.find(item => item.id === input.stepId);
-  if (!step || step.source !== 'ui' || !step.guidedApprovalId) throw new Error(`Step ${input.stepId} is not a Guided UI step.`);
+  if (!step || step.source !== 'ui' || !step.humanApproval) throw new Error(`Step ${input.stepId} is not a user-led UI step.`);
   step.status = input.status;
-  step.humanVerdict = { status: input.status, confirmedBy: input.confirmedBy, statement: input.statement.trim(), note: input.note?.trim(), confirmedAt: now() };
-  run.guidedInteraction.verdicts.push({ stepId: input.stepId, status: input.status, confirmedBy: input.confirmedBy, confirmationSource, statement: input.statement.trim(), note: input.note?.trim(), confirmedAt: step.humanVerdict.confirmedAt });
-  run.guidedInteraction.pendingStepId = undefined;
-  run.guidedInteraction.phase = 'awaiting_action_approval';
+  step.humanVerdict = { status: input.status, confirmedBy: input.confirmedBy, confirmationSource, statement: input.statement.trim(), note: input.note?.trim(), confirmedAt: now() };
+  delete run.guidedPending;
   run.evidence.push({ type: 'qa-result-verdict', summary: `${input.confirmedBy} marked ${step.action} as ${input.status}${input.note ? `: ${input.note}` : ''}` });
   checkpointRun(root, run);
   return run;
 }
 
-export function recordAgentStep(root: string, runId: string, input: { action: string; uiAction?: UiAction; safetyAction?: string; detail: string; status?: RunStatus; screenshotPath?: string; visualInspection?: VisualInspectionStatus; source?: TestRun['steps'][number]['source']; executionMode?: StepExecutionMode; scenarioId?: string; locator?: Locator; actualLocator?: Locator; inputRefs?: Record<string, string>; expectedState?: string; actualState?: string; adaptation?: string }): TestRun {
+export function recordAgentStep(root: string, runId: string, input: { action: string; plannedStepId?: string; uiAction?: UiAction; safetyAction?: string; detail: string; status?: RunStatus; screenshotPath?: string; visualInspection?: VisualInspectionStatus; source?: TestRun['steps'][number]['source']; executionMode?: StepExecutionMode; scenarioId?: string; locator?: Locator; actualLocator?: Locator; inputRefs?: Record<string, string>; expectedState?: string; actualState?: string; adaptation?: string }): TestRun {
   const run = readRunById(root, runId);
   if (run.status !== 'running') throw new Error(`Run ${runId} is not running.`);
   const task = readTask(root, run.moduleId, run.taskId);
   if (!executionContractIsCurrent(task, run.planHash)) throw new Error(requiresTestPlanApproval(task) ? `Task ${task.metadata.id} plan changed after Run ${run.id} started; stop UI execution and obtain a new TestPlan approval.` : `Quick Task ${task.metadata.id} execution contract changed after Run ${run.id} started; stop UI execution and refresh the Task.`);
-  const scenarioId = input.scenarioId ?? run.scenarioId ?? (task.scenarios.length === 1 ? task.scenarios[0]?.id : undefined);
-  if (!scenarioId) throw new Error('A UI step must specify --scenario when the Task contains multiple scenarios.');
   const source = input.source ?? 'ui';
+  const guidedApproval = task.metadata.mode === 'guided' && source === 'ui' && run.guidedPending?.type === 'execute_action' ? run.guidedPending : undefined;
+  const scenarioId = input.scenarioId ?? guidedApproval?.scenarioId ?? run.scenarioId ?? (task.scenarios.length === 1 ? task.scenarios[0]?.id : undefined);
+  if (!scenarioId) throw new Error('A UI step must specify --scenario when the Task contains multiple scenarios.');
   const visualInspection = input.visualInspection ?? 'not-required';
   const executionMode = input.executionMode ?? 'host-automated';
-  const guidedApproval = task.metadata.mode === 'guided' && source === 'ui'
-    ? run.guidedInteraction?.actionApprovals.find(item => item.id === run.guidedInteraction?.pendingApprovalId)
-    : undefined;
   if (task.metadata.mode === 'guided' && source === 'ui') {
-    if (!run.guidedInteraction || run.guidedInteraction.phase !== 'ready_to_execute' || !guidedApproval) throw new Error('Guided QA requires a QA-approved action before every UI operation. Use qa-agent run guide-approve first.');
-    if (guidedApproval.scenarioId !== scenarioId) throw new Error(`The approved Guided action belongs to Scenario ${guidedApproval.scenarioId}, not ${scenarioId}.`);
+    if (!guidedApproval) throw new Error('User-led QA requires a QA-approved action before every UI operation. Use qa-agent run guide-approve first.');
+    if (guidedApproval.scenarioId !== scenarioId) throw new Error(`The approved user-led action belongs to Scenario ${guidedApproval.scenarioId}, not ${scenarioId}.`);
     if (guidedApproval.action !== input.action.trim()) throw new Error(`The executed action must exactly match the QA-approved action: ${guidedApproval.action}`);
     if (input.expectedState?.trim() && input.expectedState.trim() !== guidedApproval.expected) throw new Error('The executed step expected state does not match the QA-approved expected result.');
   }
@@ -258,13 +249,29 @@ export function recordAgentStep(root: string, runId: string, input: { action: st
   const stepId = `agent-${run.steps.length + 1}`;
   if (source === 'ui' && !input.screenshotPath) throw new Error('Every real UI action requires --screenshot.');
   const screenshotPath = input.screenshotPath ? captureScreenshot(root, run, stepId, input.screenshotPath, visualInspection, `${input.action}: ${input.detail}`) : undefined;
-  run.steps.push({ id: stepId, action: input.action, uiAction: input.uiAction, safetyAction: input.safetyAction, status: guidedApproval ? 'needs_confirmation' : input.status ?? 'passed', detail: input.detail, at: now(), scenarioId, screenshotPath, visualInspection, source, executionMode, locator: input.locator, actualLocator: input.actualLocator, inputRefs: input.inputRefs, expectedState: input.expectedState ?? guidedApproval?.expected, actualState: input.actualState, adaptation: input.adaptation, guidedApprovalId: guidedApproval?.id });
-  if (guidedApproval && run.guidedInteraction) {
-    guidedApproval.consumedByStepId = stepId;
-    run.guidedInteraction.pendingApprovalId = undefined;
-    run.guidedInteraction.pendingStepId = stepId;
-    run.guidedInteraction.phase = 'awaiting_result_verdict';
-  }
+  run.steps.push({
+    id: stepId,
+    plannedStepId: guidedApproval?.plannedStepId ?? input.plannedStepId,
+    action: input.action,
+    uiAction: input.uiAction,
+    safetyAction: input.safetyAction,
+    status: guidedApproval ? 'needs_confirmation' : input.status ?? 'passed',
+    detail: input.detail,
+    at: now(),
+    scenarioId,
+    screenshotPath,
+    visualInspection,
+    source,
+    executionMode,
+    locator: input.locator,
+    actualLocator: input.actualLocator,
+    inputRefs: input.inputRefs,
+    expectedState: input.expectedState ?? guidedApproval?.expected,
+    actualState: input.actualState,
+    adaptation: input.adaptation,
+    humanApproval: guidedApproval?.approval,
+  });
+  if (guidedApproval) run.guidedPending = { type: 'result_verdict', stepId };
   checkpointRun(root, run);
   return run;
 }
@@ -361,11 +368,15 @@ export function completeAgentGuidedRun(root: string, task: TestTask, runId: stri
   if (!executionContractIsCurrent(currentTask, run.planHash)) return block(root, currentTask, run, requiresTestPlanApproval(currentTask) ? 'Task plan changed after this Run started. Stop execution and obtain a new TestPlan approval before retrying.' : 'Quick Task execution contract changed after this Run started. Stop execution and refresh the Task before retrying.', 'needs_confirmation');
   task = currentTask;
   if (task.metadata.mode === 'guided') {
-    if (!run.guidedInteraction) throw new Error(`Guided Run ${run.id} is missing its interaction state.`);
-    if (run.guidedInteraction.phase === 'ready_to_execute') throw new Error(`Guided Run ${run.id} has an approved action that has not been executed.`);
-    if (run.guidedInteraction.phase === 'awaiting_result_verdict') throw new Error(`Guided Run ${run.id} is waiting for the QA verdict on step ${run.guidedInteraction.pendingStepId}.`);
-    const missingVerdicts = run.steps.filter(step => step.source === 'ui' && !step.humanVerdict).map(step => step.id);
-    if (missingVerdicts.length) throw new Error(`Guided Run ${run.id} cannot complete until QA confirms every UI result: ${missingVerdicts.join(', ')}.`);
+    if (run.guidedPending?.type === 'execute_action') throw new Error(`User-led Run ${run.id} has an approved action that has not been executed.`);
+    if (run.guidedPending?.type === 'result_verdict') throw new Error(`User-led Run ${run.id} is waiting for the QA verdict on step ${run.guidedPending.stepId}.`);
+    const missingVerdicts = run.steps.filter(step => step.source === 'ui' && (!step.humanApproval || !step.humanVerdict)).map(step => step.id);
+    if (missingVerdicts.length) throw new Error(`User-led Run ${run.id} cannot complete until QA approves and confirms every UI result: ${missingVerdicts.join(', ')}.`);
+    const missingScenarioExecution = task.scenarios
+      .filter(scenario => !run.scenarioId || scenario.id === run.scenarioId)
+      .filter(scenario => !run.steps.some(step => step.source === 'ui' && step.scenarioId === scenario.id && step.humanApproval && step.humanVerdict))
+      .map(scenario => scenario.id);
+    if (missingScenarioExecution.length) throw new Error(`User-led Run ${run.id} requires at least one confirmed UI step for every selected Scenario: ${missingScenarioExecution.join(', ')}.`);
   }
   const active = task.scenarios.filter(scenario => !run.scenarioId || scenario.id === run.scenarioId);
   const closureIssues = active.flatMap(scenario => {
@@ -387,7 +398,6 @@ export function completeAgentGuidedRun(root: string, task: TestTask, runId: stri
     return { scenarioId: scenario.id, status: finalStatus([...findings.map(item => item.status), ...cleanup.map(item => item.status)]), detail: [...findings.map(item => `${item.assertionId}: ${item.status}`), ...cleanup.map(item => `cleanup ${item.cleanup}: ${item.status}`)].join('; ') };
   });
   run.status = finalStatus(run.scenarioResults.filter(item => item.status !== 'not_applicable').map(item => item.status));
-  if (run.guidedInteraction) run.guidedInteraction.phase = 'completed';
   run.conclusion = run.status === 'passed'
     ? 'All selected scenarios satisfied their declared business assertions.'
     : run.status === 'adapted'

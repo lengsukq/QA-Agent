@@ -68,7 +68,7 @@ export type ContinueStatus = 'action_ready' | 'human_decision_required' | 'block
 
 export type FinishStatus = 'finished' | 'task_preserved' | 'blocked' | 'no_active_task' | 'task_selection_required';
 
-export type UserFacingArtifactKind = 'task-prd' | 'source-run-report' | 'source-run-diagnostic' | 'python-regression-report' | 'python-regression-diagnostic';
+export type UserFacingArtifactKind = 'task-prd' | 'source-run-report' | 'source-run-diagnostic' | 'python-regression-report' | 'python-regression-diagnostic' | 'scenario-regression-draft';
 
 export interface UserFacingArtifact {
   kind: UserFacingArtifactKind;
@@ -657,6 +657,29 @@ export interface ProjectMemory {
   updatedAt: string;
 }
 
+export interface HumanStepApproval {
+  id: string;
+  confirmedBy: string;
+  confirmationSource: 'current-chat-explicit-approval' | 'external-review-record';
+  statement: string;
+  confirmedAt: string;
+}
+
+export type GuidedPendingInteraction =
+  | { type: 'execute_action'; scenarioId: string; plannedStepId?: string; action: string; expected: string; approval: HumanStepApproval }
+  | { type: 'result_verdict'; stepId: string };
+
+export interface ScenarioRegressionDraft {
+  scenarioId: string;
+  scriptId: string;
+  scriptRef: string;
+  manifestRef: string;
+  sourceStepIds: string[];
+  sourceFlowHash: string;
+  scriptHash: string;
+  generatedAt: string;
+}
+
 export interface TestRun {
   $schema: string;
   id: string;
@@ -668,14 +691,8 @@ export interface TestRun {
   status: RunStatus;
   safeMode: boolean;
   mode: 'explore';
-  guidedInteraction?: {
-    phase: 'awaiting_action_approval' | 'ready_to_execute' | 'awaiting_result_verdict' | 'completed';
-    actionApprovals: Array<{ id: string; scenarioId: string; plannedStepId?: string; action: string; expected: string; confirmedBy: string; confirmationSource: 'current-chat-explicit-approval' | 'external-review-record'; statement: string; confirmedAt: string; consumedByStepId?: string }>;
-    verdicts: Array<{ stepId: string; status: 'passed' | 'failed' | 'blocked' | 'paused' | 'inconclusive' | 'adapted'; confirmedBy: string; confirmationSource: 'current-chat-explicit-approval' | 'external-review-record'; statement: string; note?: string; confirmedAt: string }>;
-    pendingApprovalId?: string;
-    pendingStepId?: string;
-  };
-  steps: Array<{ id: string; action: string; uiAction?: UiAction; safetyAction?: string; status: RunStatus; detail: string; at: string; scenarioId?: string; screenshotPath?: string; visualInspection?: VisualInspectionStatus; source?: 'ui' | 'internal' | 'recovery'; executionMode?: StepExecutionMode; locator?: Locator; actualLocator?: Locator; inputRefs?: Record<string, string>; expectedState?: string; actualState?: string; adaptation?: string; guidedApprovalId?: string; humanVerdict?: { status: RunStatus; confirmedBy: string; statement: string; note?: string; confirmedAt: string } }>;
+  guidedPending?: GuidedPendingInteraction;
+  steps: Array<{ id: string; plannedStepId?: string; action: string; uiAction?: UiAction; safetyAction?: string; status: RunStatus; detail: string; at: string; scenarioId?: string; screenshotPath?: string; visualInspection?: VisualInspectionStatus; source?: 'ui' | 'internal' | 'recovery'; executionMode?: StepExecutionMode; locator?: Locator; actualLocator?: Locator; inputRefs?: Record<string, string>; expectedState?: string; actualState?: string; adaptation?: string; humanApproval?: HumanStepApproval; humanVerdict?: { status: RunStatus; confirmedBy: string; confirmationSource?: 'current-chat-explicit-approval' | 'external-review-record'; statement: string; note?: string; confirmedAt: string } }>;
   scenarioResults: Array<{ scenarioId: string; status: RunStatus; detail?: string }>;
   evidence: Array<{ type: string; path?: string; summary: string }>;
   conclusion?: string;
@@ -688,6 +705,7 @@ export interface TestRun {
   recoveryAttempts: Array<{ id: string; reason: string; action: string; outcome: 'continued' | 'blocked' | 'paused' | 'failed'; detail: string; failedStepId?: string; at: string }>;
   cleanupFindings: Array<{ scenarioId: string; cleanup: string; actual: string; status: RunStatus; screenshotPath?: string; at: string }>;
   pythonRegressionEligibility?: { eligible: boolean; sourceStepIds: string[]; scenarioIds: string[]; flowHash?: string; issues: Array<{ scenarioId: string; reasons: string[] }> };
+  scenarioRegressionDrafts?: ScenarioRegressionDraft[];
   memoryCandidates?: string[];
   visualFindings: Array<{ scenarioId: string; assertionId: string; expected: string; actual: string; status: RunStatus; screenshotPath?: string; visualInspection: 'performed'; inspectionProvider?: string; at: string }>;
   startedAt: string;

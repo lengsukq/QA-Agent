@@ -48,25 +48,25 @@ function runProgressKey(run?: TestRun): string | undefined { return run ? [run.s
 
 function runningNextActions(task: NonNullable<ReturnType<typeof readTask>>, run: TestRun): NextAction[] {
   const active = task.scenarios.filter(s => !run.scenarioId || s.id === run.scenarioId);
-  if (task.metadata.mode === 'guided' && run.guidedInteraction) {
-    if (run.guidedInteraction.phase === 'ready_to_execute') return [{ id: 'execute_guided_action', command: 'qa-agent run step', description: 'Execute the single QA-approved action, capture a screenshot, and report the observed result.', requiresHuman: false, requiredActor: 'agent' }];
-    if (run.guidedInteraction.phase === 'awaiting_result_verdict') return [{ id: 'request_guided_verdict', command: 'qa-agent run guide-verdict', description: `Present step ${run.guidedInteraction.pendingStepId} to the QA and ask whether the observed result matches expectations.`, requiresHuman: true, requiredActor: 'human', blockingGate: 'guided_result_verdict' }];
-    if (run.guidedInteraction.phase === 'awaiting_action_approval') {
-      const approvedPlannedSteps = new Set(run.guidedInteraction.actionApprovals.filter(item => item.plannedStepId).map(item => `${item.scenarioId}:${item.plannedStepId}`));
-      const nextPlanned = active.flatMap(scenario => scenario.plannedSteps.map(step => ({ scenario, step }))).find(item => !approvedPlannedSteps.has(`${item.scenario.id}:${item.step.id}`));
-      if (nextPlanned) return [{ id: 'request_guided_action_approval', command: 'qa-agent run guide-approve', description: `Ask the QA whether to execute the next PRD step: ${nextPlanned.step.action} Expected: ${nextPlanned.step.expected}`, requiresHuman: true, requiredActor: 'human', blockingGate: 'guided_action_approval' }];
-    }
+  if (task.metadata.mode === 'guided') {
+    if (run.guidedPending?.type === 'execute_action') return [{ id: 'execute_guided_action', command: 'qa-agent run step', description: `Execute the single QA-approved action: ${run.guidedPending.action}`, requiresHuman: false, requiredActor: 'agent' }];
+    if (run.guidedPending?.type === 'result_verdict') return [{ id: 'request_guided_verdict', command: 'qa-agent run guide-verdict', description: `Present step ${run.guidedPending.stepId} to the QA and ask whether the observed result matches expectations.`, requiresHuman: true, requiredActor: 'human', blockingGate: 'guided_result_verdict' }];
+    const completedPlannedSteps = new Set(run.steps.filter(step => step.source === 'ui' && step.humanApproval && step.humanVerdict && step.plannedStepId).map(step => `${step.scenarioId}:${step.plannedStepId}`));
+    const nextPlanned = active.flatMap(scenario => scenario.plannedSteps.map(step => ({ scenario, step }))).find(item => !completedPlannedSteps.has(`${item.scenario.id}:${item.step.id}`));
+    if (nextPlanned) return [{ id: 'request_guided_action_approval', command: 'qa-agent run guide-approve', description: `Ask the QA whether to execute the next PRD step: ${nextPlanned.step.action} Expected: ${nextPlanned.step.expected}`, requiresHuman: true, requiredActor: 'human', blockingGate: 'guided_action_approval' }];
   }
   const missingAssertion = active.flatMap(s => (s.visualAssertions ?? []).map(a => ({ s, a }))).find(({ s, a }) => !run.visualFindings.some(f => f.scenarioId === s.id && f.assertionId === a.id));
   if (missingAssertion) {
     const hasUi = run.steps.some(step => step.source === 'ui');
     return hasUi
       ? [{ id: 'record_business_assertion', command: 'qa-agent run observe', description: `Record assertion ${missingAssertion.a.id} for Scenario ${missingAssertion.s.id}.`, requiresHuman: false, requiredActor: 'agent' }]
-      : [{ id: 'execute_scenario', command: 'qa-agent run step', description: 'Execute the next approved UI action and persist its screenshot and observed state.', requiresHuman: false, requiredActor: 'agent' }];
+      : task.metadata.mode === 'guided'
+        ? [{ id: 'request_guided_action_approval', command: 'qa-agent run guide-approve', description: `Ask the QA to approve the first UI action for Scenario ${missingAssertion.s.id}.`, requiresHuman: true, requiredActor: 'human', blockingGate: 'guided_action_approval' }]
+        : [{ id: 'execute_scenario', command: 'qa-agent run step', description: 'Execute the next approved UI action and persist its screenshot and observed state.', requiresHuman: false, requiredActor: 'agent' }];
   }
   const missingCleanup = active.flatMap(s => s.cleanup.map(cleanup => ({ s, cleanup }))).find(({ s, cleanup }) => !run.cleanupFindings.some(f => f.scenarioId === s.id && f.cleanup === cleanup));
   if (missingCleanup) return [{ id: 'record_cleanup', command: 'qa-agent run cleanup', description: `Execute and record cleanup for Scenario ${missingCleanup.s.id}: ${missingCleanup.cleanup}.`, requiresHuman: false, requiredActor: 'agent' }];
-  return [{ id: 'complete_run', command: 'qa-agent run complete', description: 'Complete the Run and let Runtime generate the authoritative report and Python-regression eligibility result.', requiresHuman: false, requiredActor: 'agent' }];
+  return [{ id: 'complete_run', command: 'qa-agent run complete', description: task.metadata.mode === 'guided' ? 'Complete the user-led Run, generate the authoritative report, and create one regression draft per Scenario.' : 'Complete the AI-led Run and let Runtime generate the authoritative report and Python-regression eligibility result.', requiresHuman: false, requiredActor: 'agent' }];
 }
 
 function breadcrumb(input: { moduleId: string; taskId: string; taskState: string; phase: WorkflowPhase; runId?: string; blockingGates: string[]; allowedActions: string[]; forbiddenActions: string[]; nextAction?: NextAction }): string {
@@ -106,12 +106,16 @@ export function workflowStatus(root: string, moduleId: string, taskId: string, r
   else if (run?.completedAt) {
     status = ['blocked', 'paused', 'needs_confirmation'].includes(run.status) ? 'blocked' : 'completed'; phase = status === 'blocked' ? 'recovery' : 'result_review'; reasonCode = status === 'blocked' ? 'latest_run_blocked' : 'runtime_result_ready';
     if (status === 'blocked') nextActions = [{ id: 'resolve_run_blocker', description: 'Resolve the Runtime blocker and retry through qa-agent test; do not bypass the gate.', requiresHuman: run.status === 'needs_confirmation', requiredActor: run.status === 'needs_confirmation' ? 'human' : 'agent' }];
+    else if (task?.metadata.mode === 'guided' && run.scenarioRegressionDrafts?.length) {
+      status = 'result_ready'; phase = 'regression'; reasonCode = 'scenario_regression_drafts_ready';
+      nextActions = [{ id: 'review_scenario_regressions', description: `Present the Runtime report and ${run.scenarioRegressionDrafts.length} Scenario regression draft(s). Each Scenario has one independent script and publication still requires review.`, requiresHuman: true, requiredActor: 'human' }];
+    }
     else if (run.pythonRegressionEligibility?.eligible && !scripts.length) nextActions = [{ id: 'offer_python_regression', description: '测试已完成，并且本次流程符合生成回归脚本的条件。是否基于本次已验证流程生成 Python 回归脚本草稿？同意后只生成草稿，正式发布仍需单独审核和批准。', requiresHuman: true, requiredActor: 'human' }];
     else if (validatedScripts.length) nextActions = [{ id: 'archive_or_continue', command: 'qa-agent archive', description: 'Archive when the approved Python regressions, evidence, cleanup, and memory gates are satisfied.', requiresHuman: false, requiredActor: 'agent' }];
     else nextActions = [{ id: 'review_runtime_result', description: 'Present the Runtime report, screenshots, evidence, and Python-regression eligibility.', requiresHuman: false, requiredActor: 'agent' }];
   } else { status = 'ready_to_run'; phase = 'preflight'; reasonCode = 'approved_task_ready'; nextActions = [{ id: 'start_test', command: 'qa-agent test', description: 'Start the approved execution through the semantic test command.', requiresHuman: false, requiredActor: 'agent' }]; }
 
-  const guidedUiReady = task?.metadata.mode !== 'guided' || run?.guidedInteraction?.phase === 'ready_to_execute';
+  const guidedUiReady = task?.metadata.mode !== 'guided' || run?.guidedPending?.type === 'execute_action';
   const uiExecutionAllowed = status === 'running' && Boolean(run?.id) && guidedUiReady; const mustStop = !uiExecutionAllowed;
   const gates: WorkflowGate[] = [gate('task_assets_ready', taskReady, taskReady ? 'task_assets_ready' : 'task_assets_missing', 'runtime'), gate('task_plan_ready', planReady, planReady ? 'task_prd_and_detailed_steps_ready' : 'task_prd_or_detailed_steps_missing', 'agent', task ? testPlanHash(task) : undefined, taskReady), gate('requirement_questions_resolved', questionsResolved, questionsResolved ? 'no_unresolved_qa_questions' : 'qa_questions_unresolved', 'human', task ? testPlanHash(task) : undefined, planReady), gate('test_plan_requirements_confirmed', requirementsConfirmed, requirementsConfirmed ? 'qa_confirmed_prd_matches_requirements' : 'qa_prd_confirmation_required', 'human', task ? testPlanHash(task) : undefined, planReady && questionsResolved), gate('test_plan_approved', executionAuthorized, executionAuthorized ? 'explicit_start_confirmation_recorded' : 'explicit_start_confirmation_required', 'human', task ? testPlanHash(task) : undefined, approvalRequired && requirementsConfirmed), gate('host_capabilities_ready', capabilityReady, capabilityReady ? 'host_capabilities_ready' : 'host_capability_missing', 'host', undefined, executionAuthorized), gate('task_assets_finalized', quickFinalizationCurrent, quickFinalizationCurrent ? 'task_assets_finalized' : 'task_finalization_pending', 'runtime', task?.finalization?.artifactHash, quickFinalizationRequired)];
   const allowedActions = uiExecutionAllowed ? ['ui.execute', 'run.step', 'run.evidence', 'run.observe', 'run.cleanup', 'run.recover', 'run.complete'] : [...new Set(nextActions.map(action => action.command).filter((v): v is string => Boolean(v)).concat(['workflow.status']))];
