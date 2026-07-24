@@ -87,7 +87,7 @@ function usableBinding(root: string, binding: QaSessionBinding): boolean {
   try {
     if (!existsSync(taskPath(root, binding.moduleId, binding.taskId))) return false;
     const task = readTask(root, binding.moduleId, binding.taskId);
-    return !['archived', 'deprecated', 'superseded'].includes(resolveTaskState(task.metadata.status));
+    return !['archived', 'retired'].includes(resolveTaskState(task.metadata.status));
   } catch {
     return false;
   }
@@ -253,7 +253,7 @@ export function resolveActiveTaskSession(root: string, explicitSessionKey?: stri
   if (readTaskSessionClosure(root, explicitSessionKey)) return { status: 'no_active_task', candidates: [] };
 
   const active = tasks
-    .filter(task => !['completed', 'archived', 'deprecated', 'superseded'].includes(task.taskState))
+    .filter(task => !['completed', 'archived', 'retired'].includes(task.taskState))
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   const candidates = active.map(candidateFromIndex);
   if (!candidates.length) return { status: 'no_active_task', candidates: [] };

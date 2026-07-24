@@ -22,7 +22,7 @@ function validateDomainObject(path: string): string[] {
   if (path.endsWith('module.json') && (!isSafeId(value.id) || !['active', 'deprecated', 'archived'].includes(value.status) || typeof value.revision !== 'number')) errors.push(`${path}: invalid module id, revision, or status.`);
   if (/\/tasks\/[^/]+\/task\.json$/.test(path)) {
     if (value.apiVersion !== 'qa-agent/v2' || !value.metadata || !isSafeId(value.metadata.id) || !isSafeId(value.metadata.moduleId)) errors.push(`${path}: invalid Task contract.`);
-    const statuses = ['draft', 'planning', 'awaiting_approval', 'ready', 'running', 'reviewing_result', 'completed', 'archived', 'needs_input', 'blocked', 'paused', 'deprecated', 'superseded'];
+    const statuses = ['draft', 'planning', 'awaiting_approval', 'ready', 'running', 'reviewing_result', 'completed', 'archived', 'blocked', 'paused', 'retired'];
     if (!statuses.includes(value.metadata?.status)) errors.push(`${path}: invalid Task lifecycle state ${value.metadata?.status}.`);
     if (value.metadata?.mode && !['quick', 'guided', 'regression'].includes(value.metadata.mode)) errors.push(`${path}: invalid QA mode ${value.metadata.mode}.`);
     if (value.metadata?.approvalPolicy !== 'test-plan-and-side-effects') errors.push(`${path}: every Task must require reviewed TestPlan and explicit start confirmation.`);
@@ -45,7 +45,7 @@ function validateDomainObject(path: string): string[] {
   if (path.endsWith('/requirements.json') && (value.apiVersion !== 'qa-agent/v2' || value.kind !== 'TestRequirements' || !isSafeId(value.taskId) || !isSafeId(value.moduleId))) errors.push(`${path}: invalid requirements.`);
   if (/\/memory\/[^/]+\.json$/.test(path) || /\/shared-memory\/entries\/[^/]+\.json$/.test(path)) { if (!isSafeId(value.id) || !['candidate', 'active', 'superseded', 'deprecated'].includes(value.status)) errors.push(`${path}: invalid memory.`); if (hasSecrets({ content: value.content, structuredRule: value.structuredRule })) errors.push(`${path}: contains a potential secret.`); }
   if (/\/tasks\/[^/]+\/source-run\/run\.json$/.test(path)) {
-    if (!['pending', 'running', 'passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable', 'needs_confirmation', 'adapted'].includes(value.status)) errors.push(`${path}: invalid Source Run status.`);
+    if (!['pending', 'running', 'passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable', 'adapted'].includes(value.status)) errors.push(`${path}: invalid Source Run status.`);
     if (value.guidedPending) {
       if (!['execute_action', 'result_verdict'].includes(value.guidedPending.type)) errors.push(`${path}: invalid user-led pending interaction.`);
       if (value.guidedPending.type === 'execute_action' && (!isSafeId(value.guidedPending.scenarioId) || typeof value.guidedPending.action !== 'string' || typeof value.guidedPending.expected !== 'string' || !isHumanApprover(value.guidedPending.approval?.confirmedBy))) errors.push(`${path}: user-led approved action is incomplete.`);
@@ -158,7 +158,7 @@ export function validateProject(root: string): ValidationResult {
   for (const [path, fields] of files) if (existsSync(path)) { errors.push(...validateObject(path, fields)); try { errors.push(...validateDomainObject(path)); } catch (error) { errors.push(`${path}: ${(error as Error).message}`); } }
   errors.push(...inspectManagedRuntimeAssets(qaPath(root)));
 
-  const validStates = new Set<TaskLifecycleState>(['draft', 'planning', 'awaiting_approval', 'ready', 'running', 'reviewing_result', 'completed', 'archived', 'needs_input', 'blocked', 'paused', 'deprecated', 'superseded']);
+  const validStates = new Set<TaskLifecycleState>(['draft', 'planning', 'awaiting_approval', 'ready', 'running', 'reviewing_result', 'completed', 'archived', 'blocked', 'paused', 'retired']);
   for (const manifestPath of listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/task\.json$/.test(path))) {
     const manifest = readJson<Record<string, any>>(manifestPath); const moduleId = manifest.metadata?.moduleId; const taskId = manifest.metadata?.id; if (!moduleId || !taskId) continue;
     const taskDir = dirname(manifestPath); const task = readTask(root, moduleId, taskId);
@@ -199,7 +199,7 @@ export function validateProject(root: string): ValidationResult {
 export function validateSkill(skillRoot: string): ValidationResult {
   const path = join(skillRoot, 'SKILL.md'); if (!existsSync(path)) return { valid: false, errors: [`${path}: not found`], checked: 0 };
   const text = readFileSync(path, 'utf8'); const errors: string[] = [];
-  if (!/^---\nname: [a-z0-9-]+\ndescription: .+\n---\n/s.test(text)) errors.push('SKILL.md: invalid frontmatter.');
+  if (!new RegExp('^---\\nname: [a-z0-9-]+\\ndescription: .+\\n---\\n', 's').test(text)) errors.push('SKILL.md: invalid frontmatter.');
   if (text.includes('[TODO:')) errors.push('SKILL.md: contains TODO text.');
   const workflowPath = join(skillRoot, 'references', 'workflow.md'); const pythonPath = join(skillRoot, 'references', 'python-regression.md'); const recommendedStackPath = join(skillRoot, 'references', 'recommended-regression-stack.md');
   for (const file of [workflowPath, pythonPath, recommendedStackPath]) if (!existsSync(file)) errors.push(`${file}: not found`);

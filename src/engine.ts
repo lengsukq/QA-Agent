@@ -60,11 +60,11 @@ function finish(root: string, task: TestTask, run: TestRun): TestRun {
     }
   }
   run.pythonRegressionEligibility = inspectPythonRegressionEligibility(task, run);
-  if (task.metadata.mode === 'guided' && !['blocked', 'paused', 'needs_confirmation', 'inconclusive'].includes(run.status)) generateGuidedScenarioRegressions(root, task, run);
+  if (task.metadata.mode === 'guided' && !['blocked', 'paused', 'inconclusive'].includes(run.status)) generateGuidedScenarioRegressions(root, task, run);
   const taskStateBeforeFinish = resolveTaskState(task.metadata.status);
   const targetTaskState = run.status === 'paused'
     ? 'paused'
-    : ['blocked', 'needs_confirmation', 'inconclusive'].includes(run.status) || run.steps.some(step => step.id === 'preflight')
+    : ['blocked', 'inconclusive'].includes(run.status) || run.steps.some(step => step.id === 'preflight')
       ? 'blocked'
       : 'reviewing_result';
   if (taskStateBeforeFinish === targetTaskState) {
@@ -86,16 +86,17 @@ function finish(root: string, task: TestTask, run: TestRun): TestRun {
   return run;
 }
 
-function preflightStatus(detail: string): RunStatus {
-  return /plan hash|approval|scenario|business|confirmation|flow/i.test(detail) ? 'needs_confirmation' : 'blocked';
+function preflightBlockActor(detail: string): 'human' | 'host' | 'agent' {
+  return /plan hash|approval|scenario|business|confirmation|flow/i.test(detail) ? 'human' : 'host';
 }
 
-function block(root: string, task: TestTask, run: TestRun, detail: string, status: RunStatus = preflightStatus(detail)): TestRun {
-  run.status = status;
-  run.steps.push({ id: 'preflight', action: 'Execution preflight', status, detail, at: now(), source: 'internal' });
+function block(root: string, task: TestTask, run: TestRun, detail: string, blockActor: 'human' | 'host' | 'agent' = preflightBlockActor(detail)): TestRun {
+  run.status = 'blocked';
+  run.blockActor = blockActor;
+  run.steps.push({ id: 'preflight', action: 'Execution preflight', status: 'blocked', detail, at: now(), source: 'internal' });
   run.evidence.push({ type: 'preflight', summary: detail });
-  run.scenarioResults = task.scenarios.map(scenario => ({ scenarioId: scenario.id, status, detail }));
-  run.conclusion = status === 'needs_confirmation'
+  run.scenarioResults = task.scenarios.map(scenario => ({ scenarioId: scenario.id, status: 'blocked' as const, detail }));
+  run.conclusion = blockActor === 'human'
     ? 'Execution paused because the reviewed business contract needs user confirmation.'
     : 'Execution did not start because a capability, permission, device, environment, or safety precondition was unavailable.';
   return finish(root, task, run);
@@ -137,7 +138,7 @@ function resetSourceRunSlot(root: string, task: TestTask, previous: TestRun): vo
 function beginAgentGuidedRunUnlocked(root: string, task: TestTask, context: RunContextInput = {}): TestRun {
   const current = currentSourceRun(root, task);
   if (current?.status === 'running') {
-    if (!executionContractIsCurrent(task, current.planHash)) return block(root, task, current, `Task plan changed after active Source Run ${current.id} started. Stop execution and obtain a new TestPlan approval before resuming.`, 'needs_confirmation');
+    if (!executionContractIsCurrent(task, current.planHash)) return block(root, task, current, `Task plan changed after active Source Run ${current.id} started. Stop execution and obtain a new TestPlan approval before resuming.`, 'human');
     if (context.scenarioId && current.scenarioId && current.scenarioId !== context.scenarioId) throw new Error(`Task ${task.metadata.id} already has active Source Run ${current.id} for Scenario ${current.scenarioId}.`);
     const contextKeys = ['environment', 'platform', 'role', 'device', 'deviceModel', 'osVersion', 'appVersion', 'webBuild', 'testDataFingerprint'] as const;
     for (const key of contextKeys) if (context[key] !== undefined && context[key] !== current.context[key]) throw new Error(`Task ${task.metadata.id} already has active Source Run ${current.id} with ${key}=${current.context[key] ?? 'unknown'}, not ${context[key]}.`);
@@ -145,14 +146,14 @@ function beginAgentGuidedRunUnlocked(root: string, task: TestTask, context: RunC
   }
   if (current) resetSourceRunSlot(root, task, current);
   const taskState = resolveTaskState(task.metadata.status);
-  if (['archived', 'deprecated', 'superseded'].includes(taskState)) throw new Error(`Task ${task.metadata.id} is ${taskState} and cannot start a new Run.`);
+  if (['archived', 'retired'].includes(taskState)) throw new Error(`Task ${task.metadata.id} is ${taskState} and cannot start a new Run.`);
   if (!['ready', 'reviewing_result', 'completed', 'blocked', 'paused'].includes(taskState)) throw new Error(`Task status is ${task.metadata.status}; present the Task PRD, obtain “确认测试方案”, and then obtain the separate “确认开始测试” authorization before creating a Run.`);
   if (!executionContractIsCurrent(task)) throw new Error('The Task plan is unapproved or changed after approval. Present the current Task PRD, obtain the exact QA reply “确认测试方案”, and then obtain the separate “确认开始测试” authorization before creating a Run.');
   const run = newRun(root, task, context);
   const required = [...new Set([...task.capabilities.required, ...platformCapabilities(run.context.platform)])];
   const capabilities = checkCapabilities(root, required, task.capabilities.optional);
-  if (capabilities.missing.length) return block(root, task, run, `Missing required capabilities: ${capabilities.missing.join(', ')}. ${capabilityAdvice(capabilities.missing).join(' ')}`, 'blocked');
-  if (run.context.platform !== 'web' && run.context.permissionSnapshot.status !== 'verified') return block(root, task, run, 'macOS/MCP permissions are not verified. Run host doctor --platform android|ios, grant Screen Recording and Accessibility, then retry.', 'blocked');
+  if (capabilities.missing.length) return block(root, task, run, `Missing required capabilities: ${capabilities.missing.join(', ')}. ${capabilityAdvice(capabilities.missing).join(' ')}`, 'host');
+  if (run.context.platform !== 'web' && run.context.permissionSnapshot.status !== 'verified') return block(root, task, run, 'macOS/MCP permissions are not verified. Run host doctor --platform android|ios, grant Screen Recording and Accessibility, then retry.', 'host');
   run.status = 'running';
   run.steps.push({ id: 'agent-guided-preflight', action: 'Agent-guided test preflight', status: 'passed', detail: 'Required capabilities are available. Persist every real UI action, screenshot, assertion, and cleanup.', at: now(), source: 'internal' });
   task.sourceRunRef = 'source-run/run.json';
@@ -255,7 +256,7 @@ export function recordAgentStep(root: string, runId: string, input: { action: st
     action: input.action,
     uiAction: input.uiAction,
     safetyAction: input.safetyAction,
-    status: guidedApproval ? 'needs_confirmation' : input.status ?? 'passed',
+    status: guidedApproval ? 'blocked' : input.status ?? 'passed',
     detail: input.detail,
     at: now(),
     scenarioId,
@@ -313,7 +314,7 @@ export function recordRecoveryAttempt(root: string, runId: string, input: { reas
   assertRecoveryAction(input.action);
   const task = readTask(root, run.moduleId, run.taskId);
   const max = task.recoveryPolicy.maxRecoveryAttempts;
-  if (run.recoveryAttempts.length >= max) return block(root, task, run, `Recovery attempt limit ${max} was reached.`, 'blocked');
+  if (run.recoveryAttempts.length >= max) return block(root, task, run, `Recovery attempt limit ${max} was reached.`, 'host');
   if (input.action === 'reset-sandbox-data' && !task.recoveryPolicy.allowSandboxDataReset) throw new Error('Task recovery policy does not allow sandbox data reset.');
   const attempt = { id: `recovery-${run.recoveryAttempts.length + 1}`, reason: input.reason, action: input.action, outcome: input.outcome, detail: input.detail, failedStepId: input.failedStepId, at: now() };
   run.recoveryAttempts.push(attempt);
@@ -328,7 +329,7 @@ export function recordRecoveryAttempt(root: string, runId: string, input: { reas
 export function recordVisualFinding(root: string, runId: string, input: { scenarioId: string; assertionId: string; expected: string; actual: string; status: RunStatus; screenshotPath?: string; inspectionProvider?: string }): TestRun {
   const run = readRunById(root, runId);
   if (run.status !== 'running') throw new Error(`Run ${runId} is not running.`);
-  if (!['passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable', 'needs_confirmation', 'adapted'].includes(input.status)) throw new Error('A visual observation must use a terminal QA conclusion status.');
+  if (!['passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable', 'adapted'].includes(input.status)) throw new Error('A visual observation must use a terminal QA conclusion status.');
   const task = readTask(root, run.moduleId, run.taskId);
   if (!executionContractIsCurrent(task, run.planHash)) throw new Error(requiresTestPlanApproval(task) ? `Task ${task.metadata.id} plan changed after Run ${run.id} started; stop assertion recording and obtain a new TestPlan approval.` : `Quick Task ${task.metadata.id} execution contract changed after Run ${run.id} started; stop assertion recording and refresh the Task.`);
   const scenario = task.scenarios.find(item => item.id === input.scenarioId);
@@ -352,7 +353,7 @@ export function recordCleanupFinding(root: string, runId: string, input: { scena
   if (!scenario) throw new Error(`Scenario ${input.scenarioId} does not belong to task ${run.taskId}.`);
   if (run.scenarioId && run.scenarioId !== input.scenarioId) throw new Error(`Run is scoped to scenario ${run.scenarioId}; received cleanup for ${input.scenarioId}.`);
   if (!scenario.cleanup.includes(input.cleanup)) throw new Error(`Cleanup ${input.cleanup} is not declared for scenario ${input.scenarioId}.`);
-  if (!['passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable', 'needs_confirmation'].includes(input.status)) throw new Error('Cleanup must use a terminal status.');
+  if (!['passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable'].includes(input.status)) throw new Error('Cleanup must use a terminal status.');
   const screenshotPath = input.screenshotPath ? captureScreenshot(root, run, `cleanup-${run.cleanupFindings.length + 1}`, input.screenshotPath, 'performed', `Cleanup: ${input.cleanup}`) : undefined;
   const finding = { scenarioId: input.scenarioId, cleanup: input.cleanup, actual: input.actual, status: input.status, screenshotPath, at: now() };
   run.cleanupFindings.push(finding);
@@ -365,7 +366,7 @@ export function completeAgentGuidedRun(root: string, task: TestTask, runId: stri
   const run = readRunById(root, runId);
   if (run.status !== 'running') throw new Error(`Run ${runId} is not running.`);
   const currentTask = readTask(root, run.moduleId, run.taskId);
-  if (!executionContractIsCurrent(currentTask, run.planHash)) return block(root, currentTask, run, requiresTestPlanApproval(currentTask) ? 'Task plan changed after this Run started. Stop execution and obtain a new TestPlan approval before retrying.' : 'Quick Task execution contract changed after this Run started. Stop execution and refresh the Task before retrying.', 'needs_confirmation');
+  if (!executionContractIsCurrent(currentTask, run.planHash)) return block(root, currentTask, run, requiresTestPlanApproval(currentTask) ? 'Task plan changed after this Run started. Stop execution and obtain a new TestPlan approval before retrying.' : 'Quick Task execution contract changed after this Run started. Stop execution and refresh the Task before retrying.', 'human');
   task = currentTask;
   if (task.metadata.mode === 'guided') {
     if (run.guidedPending?.type === 'execute_action') throw new Error(`User-led Run ${run.id} has an approved action that has not been executed.`);
@@ -411,7 +412,6 @@ export function completeAgentGuidedRun(root: string, task: TestTask, runId: stri
 function finalStatus(statuses: RunStatus[]): RunStatus {
   if (!statuses.length || statuses.includes('pending') || statuses.includes('running')) return 'blocked';
   if (statuses.includes('failed')) return 'failed';
-  if (statuses.includes('needs_confirmation')) return 'needs_confirmation';
   if (statuses.includes('inconclusive')) return 'inconclusive';
   if (statuses.includes('paused')) return 'paused';
   if (statuses.includes('blocked')) return 'blocked';

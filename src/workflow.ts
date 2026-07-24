@@ -89,7 +89,7 @@ export function workflowStatus(root: string, moduleId: string, taskId: string, r
   const capabilityStatus = task ? checkCapabilities(root, [...new Set([...task.capabilities.required, ...platformCapabilities(task.scope.platforms[0] ?? 'web')])], task.capabilities.optional) : undefined;
   const capabilityReady = Boolean(capabilityStatus && !capabilityStatus.missing.length);
   const taskState = resolveTaskState(task?.metadata.status);
-  const quickFinalizationRequired = Boolean(task?.metadata.mode === 'quick' && run?.completedAt && !['blocked', 'paused', 'needs_confirmation', 'inconclusive'].includes(run.status));
+  const quickFinalizationRequired = Boolean(task?.metadata.mode === 'quick' && run?.completedAt && !['blocked', 'paused', 'inconclusive'].includes(run.status));
   const quickFinalizationCurrent = Boolean(task && run && quickFinalizationRequired && taskFinalizationIsCurrent(root, task, run));
   let status: QaWorkflowState['workflowStatus']; let phase: WorkflowPhase; let reasonCode: string; let nextActions: NextAction[];
 
@@ -104,8 +104,8 @@ export function workflowStatus(root: string, moduleId: string, taskId: string, r
   else if (run?.status === 'running') { status = 'running'; phase = 'execution'; reasonCode = 'test_run_active'; nextActions = runningNextActions(task!, run); }
   else if (unverifiedScripts.length) { status = 'ready_to_run'; phase = 'regression'; reasonCode = 'python_regression_requires_validation'; nextActions = [{ id: 'run_python_regression', command: `qa-agent regression run ${unverifiedScripts[0]!.id} --module ${moduleId} --task ${taskId}`, description: 'Run the approved Python script once and validate its execution contract.', requiresHuman: false, requiredActor: 'host' }]; }
   else if (run?.completedAt) {
-    status = ['blocked', 'paused', 'needs_confirmation'].includes(run.status) ? 'blocked' : 'completed'; phase = status === 'blocked' ? 'recovery' : 'result_review'; reasonCode = status === 'blocked' ? 'latest_run_blocked' : 'runtime_result_ready';
-    if (status === 'blocked') nextActions = [{ id: 'resolve_run_blocker', description: 'Resolve the Runtime blocker and retry through qa-agent test; do not bypass the gate.', requiresHuman: run.status === 'needs_confirmation', requiredActor: run.status === 'needs_confirmation' ? 'human' : 'agent' }];
+    status = ['blocked', 'paused'].includes(run.status) ? 'blocked' : 'completed'; phase = status === 'blocked' ? 'recovery' : 'result_review'; reasonCode = status === 'blocked' ? 'latest_run_blocked' : 'runtime_result_ready';
+    if (status === 'blocked') nextActions = [{ id: 'resolve_run_blocker', description: 'Resolve the Runtime blocker and retry through qa-agent test; do not bypass the gate.', requiresHuman: run.blockActor === 'human', requiredActor: run.blockActor === 'human' ? 'human' : 'agent' }];
     else if (task?.metadata.mode === 'guided' && run.scenarioRegressionDrafts?.length) {
       status = 'result_ready'; phase = 'regression'; reasonCode = 'scenario_regression_drafts_ready';
       nextActions = [{ id: 'review_scenario_regressions', description: `Present the Runtime report and ${run.scenarioRegressionDrafts.length} Scenario regression draft(s). Each Scenario has one independent script and publication still requires review.`, requiresHuman: true, requiredActor: 'human' }];

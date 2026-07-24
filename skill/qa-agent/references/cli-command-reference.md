@@ -68,7 +68,7 @@ There is no exploratory `runs/<run-id>/` history. Before formal script publicati
 | `qa-agent run guide-approve RUN --scenario ID --action TEXT --expected TEXT --confirmed-by HUMAN --confirmation-text TEXT` | Persist one QA-added action and its explicit expected result. |
 | `qa-agent run guide-verdict RUN --step STEP --status passed|failed|blocked|paused|inconclusive|adapted --confirmed-by HUMAN --confirmation-text TEXT [--note TEXT]` | Persist the QA judgment of the observed result. |
 
-A Guided UI step cannot run without a pending action approval. After it runs, Runtime sets it to `needs_confirmation` and blocks further UI until the QA verdict is recorded. `run complete` rejects any Guided UI step without a human verdict.
+A Guided UI step cannot run without a pending action approval. After it runs, Runtime sets it to `blocked` and blocks further UI until the QA verdict is recorded. `run complete` rejects any Guided UI step without a human verdict.
 
 ## PlanDraft example
 

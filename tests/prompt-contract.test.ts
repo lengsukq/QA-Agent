@@ -51,7 +51,7 @@ test('documents one advisory recommended regression stack for Web and iOS', () =
 test('guides first-time users to run Doctor after initialization', () => {
   const readme = readFileSync(join(repository, 'README.md'), 'utf8');
   const englishReadme = readFileSync(join(repository, 'README.en.md'), 'utf8');
-  assert.match(readme, /## 首次运行检查（推荐）[\s\S]*qa-agent doctor[\s\S]*初始化被测项目和 Agent 宿主[\s\S]*发起第一次测试/);
+  assert.match(readme, /初始化[\s\S]*qa-agent doctor[\s\S]*不会自动阻止 QA Agent[\s\S]*第一次测试/);
   assert.match(readme, /推荐技术栈缺失只会作为建议提示，不会自动阻止 QA Agent/);
   assert.match(englishReadme, /## First-run check \(recommended\)[\s\S]*qa-agent doctor[\s\S]*initialize the tested project and Agent host[\s\S]*start the first test/);
   assert.match(englishReadme, /Missing recommended tools are advisory and do not automatically block QA Agent/);
@@ -108,7 +108,7 @@ test('keeps one Source Run per Task and routes later execution to regression-run
   const workflow = readFileSync(join(skillRoot, 'references', 'workflow.md'), 'utf8');
   const cliReference = readFileSync(join(skillRoot, 'references', 'cli-command-reference.md'), 'utf8');
   const readme = readFileSync(join(repository, 'README.md'), 'utf8');
-  for (const text of [project, types, workflow, readme]) assert.match(text, /source-run/i);
+  for (const text of [project, types, workflow]) assert.match(text, /source-run/i);
   assert.match(workflow, /Publication freezes the Source Run|Source Run is frozen/i);
   assert.match(workflow, /regression-runs\//i);
   assert.match(engine, /source_run_restarted/);

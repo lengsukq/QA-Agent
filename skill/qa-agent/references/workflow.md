@@ -31,7 +31,7 @@ Quick mode is AI-led after both planning gates:
 1. Call `qa-agent test` and wait for a Run ID with `uiExecutionAllowed=true`.
 2. Execute the approved flow and persist every real UI action with a screenshot.
 3. Record every declared business/visual assertion and Cleanup result.
-4. Complete through `qa-agent run complete`.
+4. Complete through `qa-agent run complete`. This step is mandatory in the same turn once all assertions and Cleanup are recorded; the Agent must not end the conversation while the Run is still `running`.
 5. Runtime writes `source-run/run.json`, `source-run/report.md`, screenshots, evidence, and the Task PRD result update. `report.md` must embed every recorded screenshot using Markdown image syntax; a list of screenshot paths is not a valid formal report. The user-facing completion reply must include clickable links for both `report.md` and the finalized `prd.md`.
 6. When eligible and no formal script exists, the same completion reply must end with the Runtime-provided `requiredUserQuestion` asking whether to generate a Python script draft from the exact completed Run. Do not wait for the user to raise regression generation.
 7. Generation consent permits only draft creation. Show the complete script or diff and publish only after a separate script-publication approval.
@@ -51,7 +51,7 @@ After both PRD gates and `qa-agent test`:
 6. Persist the QA's verdict with `qa-agent run guide-verdict`.
 7. Do not execute another UI operation or complete the Run while a verdict is pending.
 
-The QA may add a new action during execution. Record its explicit operation and expected result; do not silently alter an existing PRD expectation. A negative verdict remains a failure unless the QA later approves a new plan or retry. Runtime persists only the current pending interaction; completed approvals and verdicts live on their Step. When the QA asks to save the Case, ensure every UI step has both records, record all assertions and Cleanup, then complete through Runtime. Completion automatically generates one independent Python regression draft for every selected Scenario under `source-run/scenario-regressions/<scenario-id>/`. Present all Scenario script links; do not ask the generic full-flow generation question used by Quick mode.
+The QA may add a new action during execution. Record its explicit operation and expected result; do not silently alter an existing PRD expectation. A negative verdict remains a failure unless the QA later approves a new plan or retry. Runtime persists only the current pending interaction; completed approvals and verdicts live on their Step. When the QA asks to save the Case, ensure every UI step has both records, record all assertions and Cleanup, then MUST complete through `qa-agent run complete` in the same turn. Completion automatically generates one independent Python regression draft for every selected Scenario under `source-run/scenario-regressions/<scenario-id>/`. Present all Scenario script links; do not ask the generic full-flow generation question used by Quick mode.
 
 ## Strict and release workflow
 

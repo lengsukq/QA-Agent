@@ -1,6 +1,6 @@
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
-export type TaskLifecycleState = 'draft' | 'planning' | 'awaiting_approval' | 'ready' | 'running' | 'reviewing_result' | 'completed' | 'archived' | 'needs_input' | 'blocked' | 'paused' | 'deprecated' | 'superseded';
-export type RunStatus = 'pending' | 'running' | 'passed' | 'failed' | 'blocked' | 'paused' | 'inconclusive' | 'not_applicable' | 'needs_confirmation' | 'adapted';
+export type TaskLifecycleState = 'draft' | 'planning' | 'awaiting_approval' | 'ready' | 'running' | 'reviewing_result' | 'completed' | 'archived' | 'blocked' | 'paused' | 'retired';
+export type RunStatus = 'pending' | 'running' | 'passed' | 'failed' | 'blocked' | 'paused' | 'inconclusive' | 'not_applicable' | 'adapted';
 export type RunMode = 'explore';
 export type VisualInspectionStatus = 'performed' | 'not-required' | 'not-applicable' | 'skipped';
 export type KnowledgeLevel = 'confirmed' | 'observed' | 'inferred' | 'suspected' | 'deprecated';
@@ -624,7 +624,7 @@ export interface ReleaseCheck {
   impactAnalysis: ImpactAnalysis;
   selection: PythonRegressionSelection;
   regressionRunId?: string;
-  status: 'planned' | 'running' | 'passed' | 'failed' | 'blocked' | 'needs_confirmation' | 'review';
+  status: 'planned' | 'running' | 'passed' | 'failed' | 'blocked' | 'review';
   releaseDecision: 'pending' | 'go' | 'no-go' | 'review';
   blockers: Array<{ moduleId: string; taskId: string; regressionId: string; scenarioIds: string[]; status: PythonRegressionBusinessStatus; detail?: string }>;
   requiredAssetGaps: Array<{ moduleId: string; taskId: string; priority: TestPriority; releaseGate: boolean; goldenPath: boolean; reason: string }>;
@@ -687,6 +687,7 @@ export interface TestRun {
   context: ExecutionSnapshot;
   git: { branch?: string; commit?: string; dirtyWorkspace: boolean; changedFiles: string[] };
   status: RunStatus;
+  blockActor?: 'human' | 'host' | 'agent';
   safeMode: boolean;
   mode: 'explore';
   guidedPending?: GuidedPendingInteraction;

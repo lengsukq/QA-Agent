@@ -41,7 +41,7 @@ When the QA asks to save the Case:
 
 - ensure every UI step has both a human approval and a human verdict;
 - record all declared assertions and Cleanup;
-- complete through `qa-agent run complete`;
+- complete through `qa-agent run complete` in the same turn—never defer it to a later conversation;
 - Runtime automatically generates one independent regression draft for every selected Scenario under `source-run/scenario-regressions/<scenario-id>/`;
 - present the Runtime report, saved PRD, and every Scenario script through their clickable `userFacingArtifacts[].markdownLink`; the formal report must embed its real screenshots with Markdown image syntax rather than listing screenshot paths only;
 - do not ask the generic post-test regression-generation question in user-led mode, because the Scenario drafts already exist;

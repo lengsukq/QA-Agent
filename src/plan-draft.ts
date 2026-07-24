@@ -146,7 +146,7 @@ export function applyPlanDraft(root: string, draft: PlanDraft): PlanDraftApplyRe
   const task = readTask(root, draft.moduleId, draft.taskId);
   const state = resolveTaskState(task.metadata.status);
   if (state === 'running') throw new Error(`Task ${task.metadata.id} has an active Run; complete or stop it before applying a changed PlanDraft.`);
-  if (['archived', 'deprecated', 'superseded'].includes(state)) throw new Error(`Task ${task.metadata.id} is ${state}; its TestPlan cannot be replaced.`);
+  if (['archived', 'retired'].includes(state)) throw new Error(`Task ${task.metadata.id} is ${state}; its TestPlan cannot be replaced.`);
 
   const previousPlanHash = testPlanHash(task);
   task.metadata.name = draft.taskName?.trim() || task.metadata.name;

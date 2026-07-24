@@ -3,19 +3,17 @@ import { now } from './store.ts';
 import type { TaskLifecycleState, TestTask } from './types.ts';
 
 const allowedTransitions: Record<TaskLifecycleState, TaskLifecycleState[]> = {
-  draft: ['planning', 'awaiting_approval', 'ready', 'needs_input', 'deprecated', 'superseded'],
-  planning: ['awaiting_approval', 'needs_input', 'blocked', 'paused', 'deprecated', 'superseded'],
-  awaiting_approval: ['planning', 'ready', 'needs_input', 'blocked', 'paused', 'deprecated', 'superseded'],
-  ready: ['planning', 'awaiting_approval', 'running', 'blocked', 'paused', 'deprecated', 'superseded'],
+  draft: ['planning', 'awaiting_approval', 'ready', 'blocked', 'retired'],
+  planning: ['awaiting_approval', 'blocked', 'paused', 'retired'],
+  awaiting_approval: ['planning', 'ready', 'blocked', 'paused', 'retired'],
+  ready: ['planning', 'awaiting_approval', 'running', 'blocked', 'paused', 'retired'],
   running: ['reviewing_result', 'blocked', 'paused'],
-  reviewing_result: ['planning', 'awaiting_approval', 'running', 'completed', 'blocked', 'paused', 'deprecated', 'superseded'],
-  completed: ['planning', 'awaiting_approval', 'running', 'archived', 'deprecated', 'superseded'],
+  reviewing_result: ['planning', 'awaiting_approval', 'running', 'completed', 'blocked', 'paused', 'retired'],
+  completed: ['planning', 'awaiting_approval', 'running', 'archived', 'retired'],
   archived: [],
-  needs_input: ['planning', 'awaiting_approval', 'blocked', 'paused', 'deprecated', 'superseded'],
-  blocked: ['planning', 'awaiting_approval', 'ready', 'running', 'paused', 'deprecated', 'superseded'],
-  paused: ['planning', 'awaiting_approval', 'ready', 'running', 'blocked', 'deprecated', 'superseded'],
-  deprecated: ['superseded'],
-  superseded: [],
+  blocked: ['planning', 'awaiting_approval', 'ready', 'running', 'paused', 'retired'],
+  paused: ['planning', 'awaiting_approval', 'ready', 'running', 'blocked', 'retired'],
+  retired: [],
 };
 
 export function taskState(status: TestTask['metadata']['status'] | undefined): TaskLifecycleState {

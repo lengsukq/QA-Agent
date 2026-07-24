@@ -385,7 +385,7 @@ test('User-led QA keeps one pending interaction and generates one regression scr
     actualLocator: { strategy: 'role', value: 'button:Open' }, expectedState: plannedStep.expected, actualState: plannedStep.expected,
   });
   const step = afterStep.steps.at(-1)!;
-  assert.equal(step.status, 'needs_confirmation');
+  assert.equal(step.status, 'blocked');
   assert.equal(afterStep.guidedPending?.type, 'result_verdict');
   assert.throws(() => approveGuidedAction(root, guidedRunId, {
     scenarioId: scenario.id, plannedStepId: scenario.plannedSteps[1]!.id,
