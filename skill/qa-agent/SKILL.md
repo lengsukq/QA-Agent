@@ -29,7 +29,7 @@ Read `references/workflow.md` first. Runtime owns Task/Run state, evidence, safe
 5. Inspect source/configuration, entry points, installed targets, and capabilities to determine one platform: `web` or `ios`. Persist it in `PlanDraft.platformDeclaration`, set `declaredBy` to `qa-agent`, align `scope.platforms`, and reapply. Ask the QA only when evidence is ambiguous.
 6. Resolve `userQuestions` and any material uncertainty one question at a time. Persist answers in `confirmedDecisions`, clear resolved questions, and reapply the PlanDraft.
 7. Set `PlanDraft.executionIntent` explicitly to `read-only` or `state-changing`. Runtime computes `confirmationMode`: eligible ordinary read-only Tasks use `merged`; all other Tasks use `strict`.
-8. For `merged`, ask only for the exact reply `确认测试并开始执行` and persist it through `qa-agent plan review`. For `strict`, persist `确认测试方案` through `qa-agent plan review`, then require `确认开始测试` through `qa-agent review`.
+8. Detect the user's language. For `merged`, request `确认测试并开始执行` or `confirm test and start execution`; persist through `qa-agent plan review`. For `strict`, request `确认测试方案` / `confirm test plan`, then `确认开始测试` / `confirm start testing`.
 9. Only after the computed confirmation mode is satisfied and platform capabilities pass may `qa-agent test` create the Task's single Source Run or any UI tool be used.
 
 Do not treat “可以”, “继续”, or “没问题” as PRD confirmation or start authorization. Do not manually edit `task.json` approval metadata; use Runtime/CLI commands.

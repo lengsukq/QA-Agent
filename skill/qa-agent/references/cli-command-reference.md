@@ -38,7 +38,7 @@ qa-agent check [--mode guided]
 → qa-agent test
 ```
 
-Before the computed confirmation is complete, `qa-agent test` fails without creating a Run and UI tools remain forbidden. `merged` uses `确认测试并开始执行`; `strict` uses `确认测试方案` followed by `确认开始测试`.
+Before the computed confirmation is complete, `qa-agent test` fails without creating a Run and UI tools remain forbidden. `merged` uses `确认测试并开始执行` / `confirm test and start execution`; `strict` uses `确认测试方案` / `confirm test plan` followed by `确认开始测试` / `confirm start testing`. The Agent detects the user's language and requests the matching phrase.
 
 ## UI execution (act commands)
 

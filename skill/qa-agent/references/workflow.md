@@ -19,7 +19,7 @@ Both Quick and Guided modes use the same planning contract:
 5. After the plan is generated, inspect source, configuration, entry points, installed targets, and capabilities to determine exactly one platform. Put `web` or `ios` in `PlanDraft.platformDeclaration.platform`, set `declaredBy` to `qa-agent`, make `scope.platforms` contain the same single platform, and apply the updated PlanDraft again. Ask the QA only when evidence leaves multiple platforms or no platform candidate.
 6. Resolve every `userQuestions` entry with the QA. Ask one concrete question at a time, store the answer under `confirmedDecisions`, remove the resolved question, and apply the updated PlanDraft again.
 7. If the Agent has any material uncertainty not yet listed—requirements, environment, role, account, test data, expected behavior, or safety—it must add the question and stop.
-8. Set `PlanDraft.executionIntent` explicitly. If Runtime reports `confirmationMode=merged`, wait for `确认测试并开始执行` and persist it with `qa-agent plan review`; this records both plan review and start authorization. Otherwise wait for `确认测试方案`, persist it with `qa-agent plan review`, then separately wait for `确认开始测试` and persist it with `qa-agent review`.
+8. Set `PlanDraft.executionIntent` explicitly. Detect the user's language. If Runtime reports `confirmationMode=merged`, wait for `确认测试并开始执行` or `confirm test and start execution` and persist it with `qa-agent plan review`; this records both plan review and start authorization. Otherwise wait for `确认测试方案` / `confirm test plan`, persist it with `qa-agent plan review`, then separately wait for `确认开始测试` / `confirm start testing` and persist it with `qa-agent review`.
 9. Only after the computed confirmation mode and host capabilities pass may `qa-agent test` create the Task's single Source Run or any UI tool be used.
 
 Vague replies such as “可以”, “继续”, or “没问题” do not satisfy the computed confirmation gate. Runtime/CLI writes `task.json`; the Agent must not edit approval metadata manually.
@@ -54,7 +54,7 @@ The QA may add a new action during execution. Record its explicit operation and 
 
 ## Strict and release workflow
 
-A fixed Scenario matrix, release scope, impact analysis, Release Gate, or GO/NO-GO remains part of the main `qa-agent` Skill. It uses the same PRD questions, `确认测试方案`, and separate `确认开始测试` gates. Task, Module, and Release regression select validated regression steps directly.
+A fixed Scenario matrix, release scope, impact analysis, Release Gate, or GO/NO-GO remains part of the main `qa-agent` Skill. It uses the same PRD questions, `确认测试方案` / `confirm test plan`, and separate `确认开始测试` / `confirm start testing` gates. Task, Module, and Release regression select validated regression steps directly.
 
 ## Session finish
 

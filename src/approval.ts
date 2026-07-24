@@ -15,6 +15,15 @@ export const START_TEST_CONFIRMATION_EN = 'confirm start testing';
 export const MERGED_TEST_CONFIRMATION_ZH = '确认测试并开始执行';
 export const MERGED_TEST_CONFIRMATION_EN = 'confirm test and start execution';
 
+/** Bilingual display string for user-facing output. */
+export function confirmationPhrase(zh: string, en: string): string {
+  return `"${zh}" / "${en}"`;
+}
+
+export const MERGED_CONFIRMATION_DISPLAY = confirmationPhrase(MERGED_TEST_CONFIRMATION_ZH, MERGED_TEST_CONFIRMATION_EN);
+export const PLAN_REVIEW_CONFIRMATION_DISPLAY = confirmationPhrase(PLAN_REQUIREMENTS_CONFIRMATION_ZH, PLAN_REQUIREMENTS_CONFIRMATION_EN);
+export const START_CONFIRMATION_DISPLAY = confirmationPhrase(START_TEST_CONFIRMATION_ZH, START_TEST_CONFIRMATION_EN);
+
 export function executionIntent(task: TestTask): ExecutionIntent {
   return task.metadata.executionIntent ?? 'state-changing';
 }

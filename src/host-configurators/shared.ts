@@ -86,14 +86,14 @@ Load the qa-agent Skill and references/workflow.md.
 
 - First: load qa-agent-doctor; run qa-agent doctor and fix blockers.
 - Web/iOS only: use the built-in Runner via qa-agent act. Web navigate/click/fill/assert; iOS launch/tap/type-text/swipe/describe/assert. Never call MCP or direct UI tools.
-- After a TestPlan, have the Agent infer one Web/iOS platform from source/configuration and write PlanDraft.platformDeclaration before review. Ask only when ambiguous. On mismatch, run qa-agent doctor --platforms <web|ios>, reapply, then run qa-agent test --platform <web|ios>.
+- After a TestPlan, infer one Web/iOS platform from source/configuration and write PlanDraft.platformDeclaration before review. Ask only when ambiguous. On mismatch, run qa-agent doctor --platforms <web|ios>, reapply, then qa-agent test --platform <web|ios>.
 - check/start only creates planning assets. Apply Scenario steps and present Task prd.md through clickable userFacingArtifacts markdownLink.
 - Resolve requirement, account, expected-result, environment, and safety questions; persist confirmedDecisions and reapply.
-- Require exact “确认测试并开始执行” for eligible read-only Tasks; otherwise require exact “确认测试方案”, then “确认开始测试”. Vague approval never authorizes UI.
+- Detect user language. Require exact "确认测试并开始执行"/"confirm test and start execution" for read-only Tasks; otherwise "确认测试方案"/"confirm test plan", then "确认开始测试"/"confirm start testing". Vague approval never authorizes.
 - Runtime owns JSON, state, evidence, reports, approvals, and results. Never edit JSON or duplicate reports. Embed screenshots, never plain paths; link report/PRD.
 - Load qa-agent-guided for user-led testing. Keep one pending interaction: approve, operate with a screenshot, then record one QA verdict.
 - Use qa-agent continue after interruption. Use qa-agent act only with uiExecutionAllowed=true, mustStop=false, and runId; each call records Step/Evidence. Pass QA_AGENT_SESSION_KEY.
-- After an eligible report, consent exports one regression-steps draft (.steps.json) only. Replays must call qa-agent regression run, which invokes python3 -m qa_agent_runner replay; never write or invent a competing test flow.
+- After an eligible report, consent exports one regression-steps draft (.steps.json) only. Replays must call qa-agent regression run, which invokes python3 -m qa_agent_runner replay; never invent a competing test flow.
 - Load qa-agent-regression-test for reruns.
 - Ask one question per turn. Never bypass safety or fabricate evidence.
 `;

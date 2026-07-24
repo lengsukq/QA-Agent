@@ -13,7 +13,7 @@ import { clearTaskResultSection, finalizeTask } from './task-finalizer.ts';
 import { curateFailedRun, curateObservedBusinessRules } from './memory.ts';
 import { inspectPythonRegressionEligibility, listPythonRegressions } from './python-regression.ts';
 import type { ExecutionSnapshot, Locator, UiAction, RunStatus, StepExecutionMode, TestRun, TestTask, VisualInspectionStatus } from './types.ts';
-import { assertHumanApprover, confirmationMode, executionContractIsCurrent, MERGED_TEST_CONFIRMATION_ZH, PLAN_REQUIREMENTS_CONFIRMATION_ZH, requiresTestPlanApproval, START_TEST_CONFIRMATION_ZH, testPlanHash } from './approval.ts';
+import { assertHumanApprover, confirmationMode, executionContractIsCurrent, MERGED_CONFIRMATION_DISPLAY, PLAN_REVIEW_CONFIRMATION_DISPLAY, requiresTestPlanApproval, START_CONFIRMATION_DISPLAY, testPlanHash } from './approval.ts';
 import { assertRecoveryAction, assertSafeAction } from './safety.ts';
 import { generateGuidedScenarioRegressions } from './scenario-regression.ts';
 
@@ -158,8 +158,8 @@ function beginAgentGuidedRunUnlocked(root: string, task: TestTask, context: RunC
   const taskState = resolveTaskState(task.metadata.status);
   if (['archived', 'retired'].includes(taskState)) throw new Error(`Task ${task.metadata.id} is ${taskState} and cannot start a new Run.`);
   if (!task.requirements?.platformDeclaration) throw new Error('The TestPlan has no platform declaration. The Agent must determine Web or iOS from source/configuration, write PlanDraft.platformDeclaration, and reapply the PlanDraft before starting. Run qa-agent doctor --platforms <web|ios> to verify the selected environment.');
-  if (!['ready', 'reviewing_result', 'completed', 'blocked', 'paused'].includes(taskState)) throw new Error(`Task status is ${task.metadata.status}; present the Task PRD and obtain the required ${confirmationMode(task) === 'merged' ? `“${MERGED_TEST_CONFIRMATION_ZH}”` : `“${PLAN_REQUIREMENTS_CONFIRMATION_ZH}” followed by “${START_TEST_CONFIRMATION_ZH}”`} before creating a Run.`);
-  if (!executionContractIsCurrent(task)) throw new Error(`The Task plan is unapproved or changed after approval. Present the current Task PRD and obtain the required ${confirmationMode(task) === 'merged' ? `“${MERGED_TEST_CONFIRMATION_ZH}”` : `“${PLAN_REQUIREMENTS_CONFIRMATION_ZH}” followed by “${START_TEST_CONFIRMATION_ZH}”`}.`);
+  if (!['ready', 'reviewing_result', 'completed', 'blocked', 'paused'].includes(taskState)) throw new Error(`Task status is ${task.metadata.status}; present the Task PRD and obtain the required ${confirmationMode(task) === 'merged' ? MERGED_CONFIRMATION_DISPLAY : `${PLAN_REVIEW_CONFIRMATION_DISPLAY} followed by ${START_CONFIRMATION_DISPLAY}`} before creating a Run.`);
+  if (!executionContractIsCurrent(task)) throw new Error(`The Task plan is unapproved or changed after approval. Present the current Task PRD and obtain the required ${confirmationMode(task) === 'merged' ? MERGED_CONFIRMATION_DISPLAY : `${PLAN_REVIEW_CONFIRMATION_DISPLAY} followed by ${START_CONFIRMATION_DISPLAY}`}.`);
   const run = newRun(root, task, context);
   const required = [...new Set([...task.capabilities.required, ...platformCapabilities(run.context.platform)])];
   const capabilities = checkCapabilities(root, required, task.capabilities.optional);

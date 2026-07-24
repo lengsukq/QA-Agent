@@ -65,8 +65,8 @@ test('exports a reviewed regression steps draft, publishes it into the Task, and
   const prepared = JSON.parse(run(root, 'check', '测试登录回归脚本'));
   assert.equal(prepared.runId, undefined);
   assert.equal(prepared.planningRequired, true);
-  assert.equal(prepared.requiredRequirementsConfirmationAfterPlanning, '确认测试方案');
-  assert.equal(prepared.requiredConfirmationAfterPlanning, '确认开始测试');
+  assert.equal(prepared.requiredRequirementsConfirmationAfterPlanning, '"确认测试方案" / "confirm test plan"');
+  assert.equal(prepared.requiredConfirmationAfterPlanning, '"确认开始测试" / "confirm start testing"');
   assert.ok(existsSync(prepared.prdPath));
   assert.match(readFileSync(prepared.prdPath, 'utf8'), /等待 Agent 根据项目生成详细步骤/);
   const initialTask = readTask(root, prepared.quickCheck.moduleId, prepared.quickCheck.taskId);
@@ -96,8 +96,8 @@ test('exports a reviewed regression steps draft, publishes it into the Task, and
     }],
   }, null, 2));
   const applied = JSON.parse(run(root, 'plan', 'apply', '--file', planFile));
-  assert.equal(applied.requiredRequirementsConfirmation, '确认测试方案');
-  assert.equal(applied.requiredConfirmation, '确认开始测试');
+  assert.equal(applied.requiredRequirementsConfirmation, '"确认测试方案" / "confirm test plan"');
+  assert.equal(applied.requiredConfirmation, '"确认开始测试" / "confirm start testing"');
   assert.equal(applied.userFacingArtifacts[0].kind, 'task-prd');
   assert.match(applied.userFacingArtifacts[0].markdownLink, /^\[查看测试方案 PRD\]\(.+\/prd\.md\)$/);
   assert.match(readFileSync(prepared.prdPath, 'utf8'), /\| 步骤 \| 操作 \| 预期结果 \|/);

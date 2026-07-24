@@ -13,7 +13,7 @@ import { buildModuleRegressionSelection, buildReleaseRegressionSelection, buildT
 import { createReleaseCheck, finalizeReleaseCheck } from '../src/release.ts';
 import { createPythonRegressionDraft, publishPythonRegression, readPythonRegression, runPythonRegression } from '../src/python-regression.ts';
 import { validateProject } from '../src/validation.ts';
-import { approvalIsCurrent, confirmationMode, MERGED_TEST_CONFIRMATION_ZH, testPlanHash } from '../src/approval.ts';
+import { approvalIsCurrent, confirmationMode, MERGED_CONFIRMATION_DISPLAY, MERGED_TEST_CONFIRMATION_ZH, PLAN_REVIEW_CONFIRMATION_DISPLAY, START_CONFIRMATION_DISPLAY, testPlanHash } from '../src/approval.ts';
 import type { PythonRegressionManifest, TestRun, TestTask } from '../src/types.ts';
 
 const repository = process.cwd();
@@ -90,10 +90,10 @@ function applyDetailedPlan(root: string, task: TestTask, options: { userQuestion
   }, null, 2));
   const applied = json(root, 'plan', 'apply', '--file', planPath);
   assert.equal(applied.requirementsConfirmationRequired, !approvalWasCurrent || platformChanged || Boolean(options.userQuestions?.length));
-  assert.equal(applied.requiredRequirementsConfirmation, applied.confirmationMode === 'merged' ? MERGED_TEST_CONFIRMATION_ZH : '确认测试方案');
+  assert.equal(applied.requiredRequirementsConfirmation, applied.confirmationMode === 'merged' ? MERGED_CONFIRMATION_DISPLAY : PLAN_REVIEW_CONFIRMATION_DISPLAY);
   assert.deepEqual(applied.unresolvedQuestions, options.userQuestions ?? []);
   assert.equal(applied.approvalRequired, !approvalWasCurrent || platformChanged || Boolean(options.userQuestions?.length));
-  assert.equal(applied.requiredConfirmation, applied.confirmationMode === 'merged' ? MERGED_TEST_CONFIRMATION_ZH : '确认开始测试');
+  assert.equal(applied.requiredConfirmation, applied.confirmationMode === 'merged' ? MERGED_CONFIRMATION_DISPLAY : START_CONFIRMATION_DISPLAY);
   return readTask(root, task.metadata.moduleId, task.metadata.id);
 }
 function prepareQuickTask(root: string, request: string): { prepared: any; task: TestTask } {
@@ -102,8 +102,8 @@ function prepareQuickTask(root: string, request: string): { prepared: any; task:
   assert.equal(prepared.uiExecutionAllowed, false);
   assert.equal(prepared.mustStop, true);
   assert.equal(prepared.planningRequired, true);
-  assert.equal(prepared.requiredRequirementsConfirmationAfterPlanning, '确认测试方案');
-  assert.equal(prepared.requiredConfirmationAfterPlanning, '确认开始测试');
+  assert.equal(prepared.requiredRequirementsConfirmationAfterPlanning, PLAN_REVIEW_CONFIRMATION_DISPLAY);
+  assert.equal(prepared.requiredConfirmationAfterPlanning, START_CONFIRMATION_DISPLAY);
   assert.ok(existsSync(prepared.prdPath));
   assert.equal(prepared.userFacingArtifacts[0].kind, 'task-prd');
   assert.match(prepared.userFacingArtifacts[0].markdownLink, /^\[查看测试方案 PRD\]\(.+\/prd\.md\)$/);
