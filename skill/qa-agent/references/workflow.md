@@ -16,18 +16,17 @@ Both Quick and Guided modes use the same planning contract:
 2. Inspect relevant source, routes, configuration, tests, existing QA assets, and tools.
 3. Build and apply a structured PlanDraft. Every Scenario must have ordered `steps`; every step needs an operation and expected result.
 4. Present the complete Runtime-written Task PRD and include its Runtime-provided clickable `userFacingArtifacts[].markdownLink` in the same reply.
-5. After the plan is generated, ask the QA to declare exactly one platform: Web or iOS Simulator. Put `web` or `ios` in `PlanDraft.platformDeclaration.platform`, make `scope.platforms` contain the same single platform, and apply the updated PlanDraft again. Never infer this declaration from the project default.
+5. After the plan is generated, inspect source, configuration, entry points, installed targets, and capabilities to determine exactly one platform. Put `web` or `ios` in `PlanDraft.platformDeclaration.platform`, set `declaredBy` to `qa-agent`, make `scope.platforms` contain the same single platform, and apply the updated PlanDraft again. Ask the QA only when evidence leaves multiple platforms or no platform candidate.
 6. Resolve every `userQuestions` entry with the QA. Ask one concrete question at a time, store the answer under `confirmedDecisions`, remove the resolved question, and apply the updated PlanDraft again.
 7. If the Agent has any material uncertainty not yet listed—requirements, environment, role, account, test data, expected behavior, or safety—it must add the question and stop.
-8. Wait for the exact reply `确认测试方案`, then persist it with `qa-agent plan review`. This confirms that the PRD matches the QA requirement; it does not authorize UI execution.
-9. Separately wait for the exact reply `确认开始测试`, then persist it with `qa-agent review`.
-10. Only after the platform declaration and both gates may `qa-agent test` create the Task's single Source Run or any UI tool be used.
+8. Set `PlanDraft.executionIntent` explicitly. If Runtime reports `confirmationMode=merged`, wait for `确认测试并开始执行` and persist it with `qa-agent plan review`; this records both plan review and start authorization. Otherwise wait for `确认测试方案`, persist it with `qa-agent plan review`, then separately wait for `确认开始测试` and persist it with `qa-agent review`.
+9. Only after the computed confirmation mode and host capabilities pass may `qa-agent test` create the Task's single Source Run or any UI tool be used.
 
-Vague replies such as “可以”, “继续”, or “没问题” do not satisfy either planning gate.
+Vague replies such as “可以”, “继续”, or “没问题” do not satisfy the computed confirmation gate. Runtime/CLI writes `task.json`; the Agent must not edit approval metadata manually.
 
 ## Daily Quick workflow
 
-Quick mode is AI-led after both planning gates:
+Quick mode is AI-led after the computed confirmation gate:
 
 1. Call `qa-agent test` and wait for a Run ID with `uiExecutionAllowed=true`.
 2. Execute the approved flow using `qa-agent act` commands (navigate, click, fill, assert-text, etc.). Each command auto-screenshots and auto-records.
@@ -41,7 +40,7 @@ Quick mode is AI-led after both planning gates:
 
 Guided mode is QA-led and uses `qa-agent check --mode guided`.
 
-After both PRD gates and `qa-agent test`:
+After the strict PRD gates and `qa-agent test`:
 
 1. Propose exactly one next action and expected result.
 2. Ask the QA whether to execute it. Persist approval with `qa-agent run guide-approve`, preferably using the matching PRD `--planned-step`.

@@ -17,6 +17,8 @@ export type RegressionFrequency = 'every-change' | 'every-release' | 'scheduled'
 export type RegressionProfile = 'fast' | 'normal' | 'full';
 export type QaMode = 'quick' | 'guided' | 'regression';
 export type ApprovalPolicy = 'test-plan-and-side-effects';
+export type ExecutionIntent = 'read-only' | 'state-changing';
+export type ConfirmationMode = 'merged' | 'strict';
 export type RegressionSelectionScope = 'task' | 'module' | 'release';
 export type RegressionSelectionPolicy = 'all-validated-python-regressions' | 'priority-filtered' | 'release-gate-plus-impact';
 export type PythonRegressionStatus = 'approved_unverified' | 'validated' | 'stale' | 'deprecated';
@@ -243,6 +245,7 @@ export interface QaWorkflowState {
   workflowStatus: WorkflowStatus;
   taskState: TaskLifecycleState;
   workflowPhase: WorkflowPhase;
+  confirmationMode: ConfirmationMode;
   reasonCode: string;
   gates: WorkflowGate[];
   uiExecutionAllowed: boolean;
@@ -476,6 +479,7 @@ export interface PlanDraft {
   taskName?: string;
   description: string;
   objectives: string[];
+  executionIntent?: ExecutionIntent;
   scope?: {
     platforms?: string[];
     environments?: string[];
@@ -506,6 +510,7 @@ export interface TestTask {
     priority: TestPriority; tags: string[];
     mode?: QaMode;
     approvalPolicy?: ApprovalPolicy;
+    executionIntent?: ExecutionIntent;
     frequency?: RegressionFrequency; releaseGate?: boolean; estimatedDurationMinutes?: number;
     planReview?: { confirmedBy: string; confirmedAt: string; confirmationSource: 'current-chat-explicit-approval' | 'external-review-record'; statement: string; planHash: string };
     approval?: { confirmedBy: string; confirmedAt: string; confirmationSource: 'current-chat-explicit-approval' | 'external-review-record'; statement: string; planHash: string };

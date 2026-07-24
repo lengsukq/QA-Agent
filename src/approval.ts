@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { TestTask } from './types.ts';
+import type { ConfirmationMode, ExecutionIntent, TestTask } from './types.ts';
 
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -12,6 +12,12 @@ export const PLAN_REQUIREMENTS_CONFIRMATION_ZH = '确认测试方案';
 export const PLAN_REQUIREMENTS_CONFIRMATION_EN = 'confirm test plan';
 export const START_TEST_CONFIRMATION_ZH = '确认开始测试';
 export const START_TEST_CONFIRMATION_EN = 'confirm start testing';
+export const MERGED_TEST_CONFIRMATION_ZH = '确认测试并开始执行';
+export const MERGED_TEST_CONFIRMATION_EN = 'confirm test and start execution';
+
+export function executionIntent(task: TestTask): ExecutionIntent {
+  return task.metadata.executionIntent ?? 'state-changing';
+}
 
 export function isExplicitPlanRequirementsConfirmation(value: string | undefined): boolean {
   const normalized = value?.trim().toLowerCase();
@@ -21,6 +27,26 @@ export function isExplicitPlanRequirementsConfirmation(value: string | undefined
 export function isExplicitStartConfirmation(value: string | undefined): boolean {
   const normalized = value?.trim().toLowerCase();
   return normalized === START_TEST_CONFIRMATION_ZH || normalized === START_TEST_CONFIRMATION_EN;
+}
+
+export function isExplicitMergedConfirmation(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === MERGED_TEST_CONFIRMATION_ZH || normalized === MERGED_TEST_CONFIRMATION_EN;
+}
+
+export function isMergedConfirmationEligible(task: TestTask): boolean {
+  return executionIntent(task) === 'read-only'
+    && task.metadata.mode !== 'guided'
+    && task.metadata.releaseGate !== true
+    && Boolean(task.requirements?.platformDeclaration)
+    && !(task.requirements?.testDataRefs?.length)
+    && !(task.requirements?.userQuestions?.length)
+    && task.scenarios.length > 0
+    && task.scenarios.every(scenario => scenario.risk === 'low' || scenario.risk === 'medium');
+}
+
+export function confirmationMode(task: TestTask): ConfirmationMode {
+  return isMergedConfirmationEligible(task) ? 'merged' : 'strict';
 }
 
 export function isHumanApprover(value: string | undefined): boolean {
@@ -41,6 +67,7 @@ export function testPlanHash(task: TestTask): string {
     id: task.metadata.id, moduleId: task.metadata.moduleId,
     scope: { platforms: task.scope.platforms, environments: task.scope.environments, roles: task.scope.roles },
     preconditions: task.preconditions,
+    executionIntent: executionIntent(task),
     requirements: {
       testDataRefs: task.requirements?.testDataRefs ?? [],
       environments: task.requirements?.environments ?? [],
@@ -54,19 +81,26 @@ export function testPlanHash(task: TestTask): string {
 }
 
 export function planReviewIsCurrent(task: TestTask): boolean {
+  const statement = task.metadata.planReview?.statement;
+  const statementIsValid = isExplicitPlanRequirementsConfirmation(statement)
+    || (isExplicitMergedConfirmation(statement) && confirmationMode(task) === 'merged');
   return Boolean(task.metadata.planReview?.planHash
     && task.metadata.planReview.confirmationSource
     && isHumanApprover(task.metadata.planReview.confirmedBy)
-    && isExplicitPlanRequirementsConfirmation(task.metadata.planReview.statement)
+    && statementIsValid
     && !(task.requirements?.userQuestions?.length));
 }
 
 export function approvalIsCurrent(task: TestTask): boolean {
+  const statement = task.metadata.approval?.statement;
+  const statementIsValid = confirmationMode(task) === 'merged'
+    ? isExplicitMergedConfirmation(statement)
+    : isExplicitStartConfirmation(statement);
   return Boolean(planReviewIsCurrent(task)
     && task.metadata.approval?.planHash
     && task.metadata.approval.confirmationSource
     && isHumanApprover(task.metadata.approval.confirmedBy)
-    && isExplicitStartConfirmation(task.metadata.approval.statement)
+    && statementIsValid
   );
 }
 

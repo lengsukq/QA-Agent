@@ -18,9 +18,10 @@
 
 | Command | Purpose |
 | --- | --- |
-| `qa-agent plan apply --file PLAN.json` | Apply a structured PlanDraft and update Task `prd.md`. After generation, the QA must declare `web` or `ios` in `platformDeclaration` before review. |
-| `qa-agent plan review --module MODULE --task TASK --approve --confirmed-by HUMAN --confirmation-text "确认测试方案"` | Record that the QA reviewed the full PRD and confirmed it matches the requirement. Fails while the platform is undeclared or `userQuestions` remain. |
-| `qa-agent review --module MODULE --task TASK --approve --confirmed-by HUMAN --confirmation-text "确认开始测试"` | Record the separate authorization to begin execution. Requires a current PRD review. |
+| `qa-agent plan apply --file PLAN.json` | Apply a structured PlanDraft and update Task `prd.md`. The Agent must infer a unique platform and set `platformDeclaration` plus `executionIntent`; ask the QA only when platform evidence is ambiguous. |
+| `qa-agent plan review --module MODULE --task TASK --approve --confirmed-by HUMAN --confirmation-text "确认测试并开始执行"` | For an eligible read-only Task, record both PRD review and start authorization in one Runtime operation. |
+| `qa-agent plan review --module MODULE --task TASK --approve --confirmed-by HUMAN --confirmation-text "确认测试方案"` | In strict mode, record that the QA reviewed the full PRD and confirmed it matches the requirement. Fails while the platform is missing or `userQuestions` remain. |
+| `qa-agent review --module MODULE --task TASK --approve --confirmed-by HUMAN --confirmation-text "确认开始测试"` | In strict mode, record the separate authorization to begin execution. Requires a current PRD review. |
 | `qa-agent test --module MODULE --task TASK [--scenario ID]` | Start or resume the Task's single Source Run only after both approvals. |
 
 The execution order is mandatory for both Quick and Guided modes:
@@ -31,14 +32,13 @@ qa-agent check [--mode guided]
 → qa-agent plan apply
 → present complete Task prd.md
 → resolve every QA question and reapply the plan
-→ QA replies exactly “确认测试方案”
-→ qa-agent plan review
-→ QA separately replies exactly “确认开始测试”
-→ qa-agent review
+→ QA replies with the exact phrase required by confirmationMode
+→ qa-agent plan review (merged records both approvals; strict records plan review)
+→ qa-agent review only for strict Tasks
 → qa-agent test
 ```
 
-Before both exact confirmations, `qa-agent test` fails without creating a Run and UI tools remain forbidden.
+Before the computed confirmation is complete, `qa-agent test` fails without creating a Run and UI tools remain forbidden. `merged` uses `确认测试并开始执行`; `strict` uses `确认测试方案` followed by `确认开始测试`.
 
 ## UI execution (act commands)
 
@@ -126,8 +126,9 @@ A Guided UI step cannot run without a pending action approval. After it runs, Ru
   "taskId": "welcome-dialog-first-install",
   "description": "验证首次安装展示 Welcome Dialog，后续启动不重复展示。",
   "objectives": ["验证 Welcome Dialog 首次展示和持久化状态"],
+  "executionIntent": "read-only",
   "scope": { "platforms": ["ios"], "environments": ["local"], "roles": ["default"] },
-  "platformDeclaration": { "platform": "ios", "statement": "本次测试平台：iOS Simulator" },
+  "platformDeclaration": { "platform": "ios", "statement": "本次测试平台：iOS Simulator", "declaredBy": "qa-agent" },
   "userQuestions": [],
   "confirmedDecisions": ["Continue as Guest 关闭弹窗并进入首页"],
   "scenarios": [{

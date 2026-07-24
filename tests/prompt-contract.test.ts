@@ -185,9 +185,9 @@ test('requires clickable artifacts, Markdown-embedded screenshots, and an explic
   assert.match(readFileSync(join(repository, 'src', 'cli.ts'), 'utf8'), /mustAskUserQuestion/);
 });
 
-test('publishes v0.3.95 with the Runner but without source and lockfile implementation payloads', () => {
+test('publishes v0.3.96 with the Runner but without source and lockfile implementation payloads', () => {
   const pkg = JSON.parse(readFileSync(join(repository, 'package.json'), 'utf8')) as { version: string; files: string[] };
-  assert.equal(pkg.version, '0.3.95');
+  assert.equal(pkg.version, '0.3.96');
   assert.equal(pkg.files.includes('src/'), false);
   assert.equal(pkg.files.includes('package-lock.json'), false);
   assert.equal(pkg.files.includes('runner/qa_agent_runner/*.py'), true);

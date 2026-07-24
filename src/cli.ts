@@ -13,7 +13,7 @@ import { validateProject, validateSkill } from './validation.ts';
 import { createMemoryCandidate, reviewMemory } from './memory.ts';
 import { configuredHostRecords, installHostIntegration, recordHostInstall, supportedHosts, updateHostIntegrations } from './host-adapters.ts';
 import { detectConfiguredHosts, hostsFromFlags, HOST_PLATFORMS } from './host-configurators/registry.ts';
-import { approvalIsCurrent, assertHumanApprover, isExplicitPlanRequirementsConfirmation, isExplicitStartConfirmation, PLAN_REQUIREMENTS_CONFIRMATION_ZH, planReviewIsCurrent, START_TEST_CONFIRMATION_ZH, testPlanHash } from './approval.ts';
+import { approvalIsCurrent, assertHumanApprover, confirmationMode, isExplicitMergedConfirmation, isExplicitPlanRequirementsConfirmation, isExplicitStartConfirmation, MERGED_TEST_CONFIRMATION_ZH, PLAN_REQUIREMENTS_CONFIRMATION_ZH, planReviewIsCurrent, START_TEST_CONFIRMATION_ZH, testPlanHash } from './approval.ts';
 import { PLATFORM_DECLARATION_PROMPT_ZH } from './platform.ts';
 import { hostCapabilityDiagnosis } from './capabilities.ts';
 import { buildModuleRegressionSelection, buildReleaseRegressionSelection, buildTaskRegressionSelection, runRegressionSelection } from './regression.ts';
@@ -297,11 +297,15 @@ function archiveTask(projectRoot: string, moduleId: string, taskId: string): voi
 
 function reviewPlanRequirements(projectRoot: string, moduleId: string, taskId: string): TestTask {
   const task = readTask(projectRoot, moduleId, taskId);
-  if (!task.requirements?.platformDeclaration) throw new Error(`${PLATFORM_DECLARATION_PROMPT_ZH}。请在 PlanDraft.platformDeclaration 中写入 web 或 ios，并让 scope.platforms 只包含该平台，然后重新执行 qa-agent plan apply。`);
+  if (!task.requirements?.platformDeclaration) throw new Error(`Agent must determine the test platform from project source/configuration and write it to PlanDraft.platformDeclaration before requesting confirmation. ${PLATFORM_DECLARATION_PROMPT_ZH}。`);
   if (!args.includes('--approve')) throw new Error('Plan review requires --approve after the QA has reviewed the complete Task PRD.');
   const confirmedBy = requiredFlag('--confirmed-by'); assertHumanApprover(confirmedBy);
   const confirmationText = requiredFlag('--confirmation-text');
-  if (!isExplicitPlanRequirementsConfirmation(confirmationText)) throw new Error(`The QA must explicitly reply “${PLAN_REQUIREMENTS_CONFIRMATION_ZH}” after confirming the PRD matches the requirement.`);
+  const mode = confirmationMode(task);
+  const merged = isExplicitMergedConfirmation(confirmationText);
+  if (merged && mode !== 'merged') throw new Error(`This Task requires strict confirmation. The merged reply “${MERGED_TEST_CONFIRMATION_ZH}” is only valid for read-only, low-risk, non-Guided Tasks. Request “${PLAN_REQUIREMENTS_CONFIRMATION_ZH}”, then “${START_TEST_CONFIRMATION_ZH}”.`);
+  if (mode === 'merged' && !merged) throw new Error(`This Task uses merged confirmation. The QA must explicitly reply “${MERGED_TEST_CONFIRMATION_ZH}” after reviewing the Task PRD.`);
+  if (mode === 'strict' && !isExplicitPlanRequirementsConfirmation(confirmationText)) throw new Error(`The QA must explicitly reply “${PLAN_REQUIREMENTS_CONFIRMATION_ZH}” after reviewing the Task PRD.`);
   const confirmationSource = flag('--confirmation-source') ?? 'current-chat-explicit-approval';
   if (!['current-chat-explicit-approval', 'external-review-record'].includes(confirmationSource)) throw new Error('--confirmation-source must be current-chat-explicit-approval or external-review-record.');
   if (!task.scenarios.length || task.scenarios.some(scenario => scenario.planningStatus !== 'applicable' || !scenario.plannedSteps?.length || scenario.plannedSteps.some(step => !step.action.trim() || !step.expected.trim()))) throw new Error('Plan review requires complete applicable Scenarios and detailed steps.');
@@ -310,10 +314,23 @@ function reviewPlanRequirements(projectRoot: string, moduleId: string, taskId: s
   const prdPath = taskPrdPath(projectRoot, moduleId, taskId);
   if (!planningPrdIsCurrent(prdPath, task)) throw new Error(`Task PRD is missing or stale. Regenerate ${prdPath} before requesting QA confirmation.`);
   const currentPlanHash = testPlanHash(task);
-  if (planReviewIsCurrent(task) && task.metadata.planReview?.confirmedBy === confirmedBy && task.metadata.planReview.statement === confirmationText.trim()) return task;
+  if (approvalIsCurrent(task) && task.metadata.planReview?.confirmedBy === confirmedBy && task.metadata.planReview.statement === confirmationText.trim() && mode === 'merged') return task;
+  if (planReviewIsCurrent(task) && task.metadata.planReview?.confirmedBy === confirmedBy && task.metadata.planReview.statement === confirmationText.trim() && mode === 'strict') return task;
   if (resolveTaskState(task.metadata.status) === 'running') throw new Error(`Task ${task.metadata.id} has an active Run; its requirements cannot be re-approved.`);
+  const confirmedAt = now();
+  const approvalRecord = { confirmedBy, confirmedAt, confirmationSource: confirmationSource as 'current-chat-explicit-approval' | 'external-review-record', statement: confirmationText.trim(), planHash: currentPlanHash };
+  if (merged) {
+    const currentState = resolveTaskState(task.metadata.status);
+    if (currentState !== 'awaiting_approval' && currentState !== 'ready') transitionTaskState(projectRoot, task, 'awaiting_approval', 'test_plan_approval_requested', 'merged_confirmation_requested', { actor: { type: 'agent', id: 'qa-agent' }, artifactHash: currentPlanHash, idempotencyKey: `merged-confirmation-requested:${task.metadata.id}:${currentPlanHash}` });
+    task.metadata.planReview = approvalRecord;
+    task.metadata.approval = approvalRecord;
+    appendTaskEvent(projectRoot, { type: 'test_plan_requirements_confirmed', actor: { type: 'human', id: confirmedBy }, moduleId, taskId, fromState: resolveTaskState(task.metadata.status), toState: resolveTaskState(task.metadata.status), reasonCode: 'qa_confirmed_prd_and_authorized_execution', artifactHash: currentPlanHash, idempotencyKey: `plan-and-start-confirmed:${taskId}:${currentPlanHash}:${confirmedBy}` });
+    if (resolveTaskState(task.metadata.status) !== 'ready') transitionTaskState(projectRoot, task, 'ready', 'test_plan_approved', 'merged_explicit_chat_approval', { actor: { type: 'human', id: confirmedBy }, artifactHash: currentPlanHash, idempotencyKey: `test-plan-approved:${task.metadata.id}:${currentPlanHash}:${confirmedBy}` });
+    task.metadata.version += 1; task.updatedAt = now(); saveTask(projectRoot, task); rebuildIndexes(projectRoot);
+    return readTask(projectRoot, moduleId, taskId);
+  }
   delete task.metadata.approval;
-  task.metadata.planReview = { confirmedBy, confirmedAt: now(), confirmationSource: confirmationSource as 'current-chat-explicit-approval' | 'external-review-record', statement: confirmationText.trim(), planHash: currentPlanHash };
+  task.metadata.planReview = approvalRecord;
   appendTaskEvent(projectRoot, { type: 'test_plan_requirements_confirmed', actor: { type: 'human', id: confirmedBy }, moduleId, taskId, fromState: resolveTaskState(task.metadata.status), toState: resolveTaskState(task.metadata.status), reasonCode: 'qa_confirmed_prd_matches_requirements', artifactHash: currentPlanHash, idempotencyKey: `plan-requirements-confirmed:${taskId}:${currentPlanHash}:${confirmedBy}` });
   task.metadata.version += 1; task.updatedAt = now(); saveTask(projectRoot, task); rebuildIndexes(projectRoot);
   return readTask(projectRoot, moduleId, taskId);
@@ -325,6 +342,7 @@ function reviewTask(projectRoot: string, moduleId: string, taskId: string): Test
   const confirmedBy = requiredFlag('--confirmed-by'); assertHumanApprover(confirmedBy);
   if (!planReviewIsCurrent(task)) throw new Error(`The current Task PRD has not been confirmed by QA. Present it and obtain the exact reply “${PLAN_REQUIREMENTS_CONFIRMATION_ZH}” through qa-agent plan review first.`);
   const confirmationText = requiredFlag('--confirmation-text');
+  if (isExplicitMergedConfirmation(confirmationText)) throw new Error(`The merged confirmation must be recorded through qa-agent plan review after the Task is classified as read-only and low-risk.`);
   if (!isExplicitStartConfirmation(confirmationText)) throw new Error(`The user must explicitly reply “${START_TEST_CONFIRMATION_ZH}” before testing. Pass that exact reply with --confirmation-text.`);
   const confirmationSource = flag('--confirmation-source') ?? 'current-chat-explicit-approval';
   if (!['current-chat-explicit-approval', 'external-review-record'].includes(confirmationSource)) throw new Error('--confirmation-source must be current-chat-explicit-approval or external-review-record.');
@@ -433,8 +451,9 @@ async function main(): Promise<void> {
     const session = bindTaskSession(projectRoot, { sessionKey: flag('--session'), host: flag('--session-host'), moduleId: prepared.moduleId, taskId: prepared.taskId });
     const prdPath = taskPrdPath(projectRoot, prepared.moduleId, prepared.taskId);
     const userFacingArtifacts = [userFacingArtifact(projectRoot, prdPath, '查看测试方案 PRD', 'task-prd')];
+    const preparedConfirmationMode = confirmationMode(prepared.task);
     output({
-      message: `${mode === 'guided' ? 'Guided' : 'Quick'} Task prepared. Inspect the project, apply a detailed PlanDraft, present the PRD with its clickable artifact link, resolve all questions, and request QA requirement confirmation before start authorization.`,
+      message: `${mode === 'guided' ? 'Guided' : 'Quick'} Task prepared. Inspect the project, determine the unique platform from source/configuration, apply a detailed PlanDraft, present the PRD with its clickable artifact link, resolve all questions, and request the confirmation required by the computed confirmation mode.`,
       check: { moduleId: prepared.moduleId, taskId: prepared.taskId, mode, moduleCreated: prepared.moduleCreated, taskCreated: prepared.taskCreated, approvalPolicy: 'test-plan-and-side-effects' },
       quickCheck: { moduleId: prepared.moduleId, taskId: prepared.taskId, moduleCreated: prepared.moduleCreated, taskCreated: prepared.taskCreated, approvalPolicy: 'test-plan-and-side-effects' },
       prdPath,
@@ -443,8 +462,9 @@ async function main(): Promise<void> {
       planningRequired: true,
       platformDeclarationRequired: !prepared.task.requirements?.platformDeclaration,
       requiredPlatformDeclaration: PLATFORM_DECLARATION_PROMPT_ZH,
-      requiredRequirementsConfirmationAfterPlanning: PLAN_REQUIREMENTS_CONFIRMATION_ZH,
-      requiredConfirmationAfterPlanning: START_TEST_CONFIRMATION_ZH,
+      confirmationMode: preparedConfirmationMode,
+      requiredRequirementsConfirmationAfterPlanning: preparedConfirmationMode === 'merged' ? MERGED_TEST_CONFIRMATION_ZH : PLAN_REQUIREMENTS_CONFIRMATION_ZH,
+      requiredConfirmationAfterPlanning: preparedConfirmationMode === 'merged' ? MERGED_TEST_CONFIRMATION_ZH : START_TEST_CONFIRMATION_ZH,
       uiExecutionAllowed: false,
       mustStop: true,
       session,
@@ -483,7 +503,8 @@ async function main(): Promise<void> {
       const task = reviewPlanRequirements(projectRoot, moduleId, taskId);
       const session = bindTaskSession(projectRoot, { sessionKey: flag('--session'), host: flag('--session-host'), moduleId, taskId });
       const userFacingArtifacts = [userFacingArtifact(projectRoot, taskPrdPath(projectRoot, moduleId, taskId), '查看已确认的测试方案 PRD', 'task-prd')];
-      output({ task, session, requiredStartConfirmation: START_TEST_CONFIRMATION_ZH, workflow: workflowStatus(projectRoot, moduleId, taskId), userFacingArtifacts, requiredUserFacingLinks: artifactLinksSentence(userFacingArtifacts), next: 'Include the PRD markdownLink in the user-facing reply, then request the separate exact start confirmation.' });
+      const mode = confirmationMode(task);
+      output({ task, session, confirmationMode: mode, requiredConfirmation: mode === 'merged' ? MERGED_TEST_CONFIRMATION_ZH : START_TEST_CONFIRMATION_ZH, workflow: workflowStatus(projectRoot, moduleId, taskId), userFacingArtifacts, requiredUserFacingLinks: artifactLinksSentence(userFacingArtifacts), next: mode === 'merged' ? `Include the PRD markdownLink in the user-facing reply, then request the exact merged confirmation “${MERGED_TEST_CONFIRMATION_ZH}”.` : 'Include the PRD markdownLink in the user-facing reply, then request the separate exact start confirmation.' });
       return;
     }
     if (action !== 'apply') throw new Error(`Plan command must be apply or review.\n\n${advancedUsage}`);

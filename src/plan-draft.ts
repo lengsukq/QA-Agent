@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { approvalIsCurrent, invalidateApproval, PLAN_REQUIREMENTS_CONFIRMATION_ZH, planReviewIsCurrent, START_TEST_CONFIRMATION_ZH, testPlanHash } from './approval.ts';
+import { approvalIsCurrent, confirmationMode, invalidateApproval, MERGED_TEST_CONFIRMATION_ZH, PLAN_REQUIREMENTS_CONFIRMATION_ZH, planReviewIsCurrent, START_TEST_CONFIRMATION_ZH, testPlanHash } from './approval.ts';
 import { platformCapabilities } from './capabilities.ts';
 import { appendTaskEvent } from './events.ts';
 import { rebuildIndexes } from './indexer.ts';
@@ -24,6 +24,7 @@ export interface PlanDraftApplyResult {
   platformDeclaration?: PlatformDeclaration;
   unresolvedQuestions: string[];
   approvalRequired: boolean;
+  confirmationMode: ReturnType<typeof confirmationMode>;
   requiredConfirmation: string;
   prdPath: string;
   scenarioIds: string[];
@@ -158,6 +159,8 @@ export function applyPlanDraft(root: string, draft: PlanDraft): PlanDraftApplyRe
   task.description = requiredText(draft.description, 'PlanDraft description');
   task.objectives = stringArray(draft.objectives, 'PlanDraft objectives');
   if (!task.objectives.length) throw new Error('PlanDraft objectives must not be empty.');
+  if (draft.executionIntent !== undefined && !['read-only', 'state-changing'].includes(draft.executionIntent)) throw new Error('PlanDraft executionIntent must be read-only or state-changing.');
+  task.metadata.executionIntent = draft.executionIntent ?? task.metadata.executionIntent ?? 'state-changing';
   task.preconditions = stringArray(draft.preconditions, 'PlanDraft preconditions');
   const draftPlatforms = normalizeSupportedPlatforms(stringArray(draft.scope?.platforms, 'PlanDraft scope.platforms', task.scope.platforms), ['web'], 'PlanDraft scope.platforms');
   if (draft.platformDeclaration !== undefined && (!draft.platformDeclaration || typeof draft.platformDeclaration !== 'object')) throw new Error('PlanDraft platformDeclaration must be an object with platform, optional statement, and optional declaredBy.');
@@ -198,7 +201,7 @@ export function applyPlanDraft(root: string, draft: PlanDraft): PlanDraftApplyRe
     const nextPlatformDeclaration = {
       platform: declaredPlatform,
       statement: requiredText(draft.platformDeclaration?.statement ?? `本次测试平台：${declaredPlatform === 'web' ? 'Web' : 'iOS Simulator'}`, 'PlanDraft platformDeclaration.statement'),
-      declaredBy: draft.platformDeclaration?.declaredBy?.trim() || undefined,
+      declaredBy: draft.platformDeclaration?.declaredBy?.trim() || 'qa-agent',
       declaredAt: now(),
     };
     task.requirements.platformDeclaration = previousPlatformDeclaration
@@ -211,14 +214,15 @@ export function applyPlanDraft(root: string, draft: PlanDraft): PlanDraftApplyRe
     delete task.requirements.platformDeclaration;
   }
   const platformDeclarationChanged = JSON.stringify(previousPlatformDeclaration) !== JSON.stringify(task.requirements.platformDeclaration);
+  const platformSelectionChanged = previousPlatformDeclaration?.platform !== task.requirements.platformDeclaration?.platform;
 
   let planHash = testPlanHash(task);
-  if (planHash === previousPlanHash && !platformDeclarationChanged) return { changed: false, moduleId: draft.moduleId, taskId: draft.taskId, planHash, previousPlanHash, requirementsConfirmationRequired: !task.requirements?.platformDeclaration || !planReviewIsCurrent(task), requiredRequirementsConfirmation: PLAN_REQUIREMENTS_CONFIRMATION_ZH, platformDeclarationRequired: !task.requirements?.platformDeclaration, requiredPlatformDeclaration: PLATFORM_DECLARATION_PROMPT_ZH, platformDeclaration: task.requirements?.platformDeclaration, unresolvedQuestions: task.requirements?.userQuestions ?? [], approvalRequired: !approvalIsCurrent(task), requiredConfirmation: START_TEST_CONFIRMATION_ZH, prdPath: taskPrdPath(root, draft.moduleId, draft.taskId), scenarioIds: task.scenarios.map(scenario => scenario.id), task };
+  if (planHash === previousPlanHash && !platformDeclarationChanged) return { changed: false, moduleId: draft.moduleId, taskId: draft.taskId, planHash, previousPlanHash, requirementsConfirmationRequired: !task.requirements?.platformDeclaration || !planReviewIsCurrent(task), requiredRequirementsConfirmation: confirmationMode(task) === 'merged' ? MERGED_TEST_CONFIRMATION_ZH : PLAN_REQUIREMENTS_CONFIRMATION_ZH, platformDeclarationRequired: !task.requirements?.platformDeclaration, requiredPlatformDeclaration: PLATFORM_DECLARATION_PROMPT_ZH, platformDeclaration: task.requirements?.platformDeclaration, unresolvedQuestions: task.requirements?.userQuestions ?? [], approvalRequired: !approvalIsCurrent(task), confirmationMode: confirmationMode(task), requiredConfirmation: confirmationMode(task) === 'merged' ? MERGED_TEST_CONFIRMATION_ZH : START_TEST_CONFIRMATION_ZH, prdPath: taskPrdPath(root, draft.moduleId, draft.taskId), scenarioIds: task.scenarios.map(scenario => scenario.id), task };
   task.requirements.updatedAt = now();
   planHash = testPlanHash(task);
 
   const fromState = resolveTaskState(task.metadata.status);
-  const needsFreshConfirmation = Boolean(task.requirements?.userQuestions?.length);
+  const needsFreshConfirmation = Boolean(task.requirements?.userQuestions?.length || platformSelectionChanged);
   if (needsFreshConfirmation) invalidateApproval(task);
   if (!approvalIsCurrent(task)) {
     if (fromState !== 'awaiting_approval') transitionTaskState(root, task, 'awaiting_approval', 'test_plan_changed', needsFreshConfirmation ? 'new_qa_question_requires_confirmation' : 'plan_draft_applied', { actor: { type: 'agent', id: 'qa-agent' }, artifactHash: planHash, idempotencyKey: `plan-draft-state:${task.metadata.id}:${planHash}` });
@@ -226,7 +230,7 @@ export function applyPlanDraft(root: string, draft: PlanDraft): PlanDraftApplyRe
     transitionTaskState(root, task, 'ready', 'test_plan_updated', 'existing_approval_preserved', { actor: { type: 'agent', id: 'qa-agent' }, artifactHash: planHash, idempotencyKey: `plan-draft-ready:${task.metadata.id}:${planHash}` });
   }
   appendTaskEvent(root, {
-    type: 'plan_draft_applied', actor: { type: 'agent', id: 'qa-agent' }, moduleId: task.metadata.moduleId, taskId: task.metadata.id, reasonCode: 'structured_plan_materialized', artifactHash: planHash, idempotencyKey: `plan-draft-applied:${task.metadata.id}:${planHash}`, metadata: { previousPlanHash, scenarioIds: task.scenarios.map(scenario => scenario.id) },
+    type: 'plan_draft_applied', actor: { type: 'agent', id: 'qa-agent' }, moduleId: task.metadata.moduleId, taskId: task.metadata.id, reasonCode: platformSelectionChanged ? 'platform_changed_requires_reapproval' : 'structured_plan_materialized', artifactHash: planHash, idempotencyKey: `plan-draft-applied:${task.metadata.id}:${planHash}`, metadata: { previousPlanHash, scenarioIds: task.scenarios.map(scenario => scenario.id) },
   });
   task.metadata.version += 1;
   task.updatedAt = now();
@@ -234,5 +238,5 @@ export function applyPlanDraft(root: string, draft: PlanDraft): PlanDraftApplyRe
   markPythonRegressionsStaleForPlanHash(root, task, planHash);
   rebuildIndexes(root);
   const updatedTask = readTask(root, draft.moduleId, draft.taskId);
-  return { changed: true, moduleId: draft.moduleId, taskId: draft.taskId, planHash, previousPlanHash, requirementsConfirmationRequired: !updatedTask.requirements?.platformDeclaration || !planReviewIsCurrent(updatedTask), requiredRequirementsConfirmation: PLAN_REQUIREMENTS_CONFIRMATION_ZH, platformDeclarationRequired: !updatedTask.requirements?.platformDeclaration, requiredPlatformDeclaration: PLATFORM_DECLARATION_PROMPT_ZH, platformDeclaration: updatedTask.requirements?.platformDeclaration, unresolvedQuestions: updatedTask.requirements?.userQuestions ?? [], approvalRequired: !approvalIsCurrent(updatedTask), requiredConfirmation: START_TEST_CONFIRMATION_ZH, prdPath: taskPrdPath(root, draft.moduleId, draft.taskId), scenarioIds: updatedTask.scenarios.map(scenario => scenario.id), task: updatedTask };
+  return { changed: true, moduleId: draft.moduleId, taskId: draft.taskId, planHash, previousPlanHash, requirementsConfirmationRequired: !updatedTask.requirements?.platformDeclaration || !planReviewIsCurrent(updatedTask), requiredRequirementsConfirmation: confirmationMode(updatedTask) === 'merged' ? MERGED_TEST_CONFIRMATION_ZH : PLAN_REQUIREMENTS_CONFIRMATION_ZH, platformDeclarationRequired: !updatedTask.requirements?.platformDeclaration, requiredPlatformDeclaration: PLATFORM_DECLARATION_PROMPT_ZH, platformDeclaration: updatedTask.requirements?.platformDeclaration, unresolvedQuestions: updatedTask.requirements?.userQuestions ?? [], approvalRequired: !approvalIsCurrent(updatedTask), confirmationMode: confirmationMode(updatedTask), requiredConfirmation: confirmationMode(updatedTask) === 'merged' ? MERGED_TEST_CONFIRMATION_ZH : START_TEST_CONFIRMATION_ZH, prdPath: taskPrdPath(root, draft.moduleId, draft.taskId), scenarioIds: updatedTask.scenarios.map(scenario => scenario.id), task: updatedTask };
 }

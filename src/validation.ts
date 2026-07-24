@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { qaPath, readTask, taskPrdPath, taskSourceRunPath, taskSourceRunReportPath } from './project.ts';
 import { hasSecrets, isSafeId, listFiles, readJson } from './store.ts';
-import { isExplicitPlanRequirementsConfirmation, isExplicitStartConfirmation, isHumanApprover, testPlanHash } from './approval.ts';
+import { approvalIsCurrent, confirmationMode, isExplicitMergedConfirmation, isExplicitPlanRequirementsConfirmation, isExplicitStartConfirmation, isHumanApprover, planReviewIsCurrent, testPlanHash } from './approval.ts';
 import { hasRuntimeReportMarker, RUNTIME_REPORT_GENERATOR } from './report-contract.ts';
 import type { RegressionRun, TaskLifecycleState, TestRun } from './types.ts';
 import { readTaskEvents } from './events.ts';
@@ -26,9 +26,17 @@ function validateDomainObject(path: string): string[] {
     const statuses = ['draft', 'planning', 'awaiting_approval', 'ready', 'running', 'reviewing_result', 'completed', 'archived', 'blocked', 'paused', 'retired'];
     if (!statuses.includes(value.metadata?.status)) errors.push(`${path}: invalid Task lifecycle state ${value.metadata?.status}.`);
     if (value.metadata?.mode && !['quick', 'guided', 'regression'].includes(value.metadata.mode)) errors.push(`${path}: invalid QA mode ${value.metadata.mode}.`);
-    if (value.metadata?.approvalPolicy !== 'test-plan-and-side-effects') errors.push(`${path}: every Task must require reviewed TestPlan and explicit start confirmation.`);
-    if (['ready', 'running', 'reviewing_result', 'completed', 'archived'].includes(value.metadata?.status) && (!isHumanApprover(value.metadata.planReview?.confirmedBy) || !value.metadata.planReview?.confirmedAt || !value.metadata.planReview?.confirmationSource || !value.metadata.planReview?.planHash || !isExplicitPlanRequirementsConfirmation(value.metadata.planReview?.statement))) errors.push(`${path}: executable or completed Task requires QA confirmation that the PRD matches requirements.`);
-    if (['ready', 'running', 'reviewing_result', 'completed', 'archived'].includes(value.metadata?.status) && (!isHumanApprover(value.metadata.approval?.confirmedBy) || !value.metadata.approval?.confirmedAt || !value.metadata.approval?.confirmationSource || !value.metadata.approval?.planHash || !isExplicitStartConfirmation(value.metadata.approval?.statement))) errors.push(`${path}: executable or completed Task requires the exact human start confirmation.`);
+    if (value.metadata?.executionIntent !== undefined && !['read-only', 'state-changing'].includes(value.metadata.executionIntent)) errors.push(`${path}: invalid executionIntent.`);
+    if (value.metadata?.approvalPolicy !== 'test-plan-and-side-effects') errors.push(`${path}: every Task must require a reviewed TestPlan and the Runtime-computed confirmation mode.`);
+    const executable = ['ready', 'running', 'reviewing_result', 'completed', 'archived'].includes(value.metadata?.status);
+    if (executable) {
+      const statementIsMerged = isExplicitMergedConfirmation(value.metadata.planReview?.statement) && isExplicitMergedConfirmation(value.metadata.approval?.statement);
+      const planReviewValid = isHumanApprover(value.metadata.planReview?.confirmedBy) && value.metadata.planReview?.confirmedAt && value.metadata.planReview?.confirmationSource && value.metadata.planReview?.planHash && (isExplicitPlanRequirementsConfirmation(value.metadata.planReview?.statement) || statementIsMerged);
+      const approvalValid = isHumanApprover(value.metadata.approval?.confirmedBy) && value.metadata.approval?.confirmedAt && value.metadata.approval?.confirmationSource && value.metadata.approval?.planHash && (isExplicitStartConfirmation(value.metadata.approval?.statement) || statementIsMerged);
+      if (!planReviewValid || !planReviewIsCurrent(readJson<any>(path))) errors.push(`${path}: executable or completed Task requires a current human plan confirmation.`);
+      if (!approvalValid || !approvalIsCurrent(readJson<any>(path))) errors.push(`${path}: executable or completed Task requires a current human start confirmation.`);
+      if (statementIsMerged && confirmationMode(readJson<any>(path)) !== 'merged') errors.push(`${path}: merged confirmation is not allowed for this Task's execution policy.`);
+    }
     if (!Array.isArray(value.scenarioRefs) || !value.scenarioRefs.length || value.scenarioRefs.some((ref: unknown) => typeof ref !== 'string' || !/^scenarios\/[a-z0-9][a-z0-9-]{0,62}\.json$/.test(ref))) errors.push(`${path}: invalid scenarioRefs.`);
     if (value.pythonRegressionRefs !== undefined && (!Array.isArray(value.pythonRegressionRefs) || value.pythonRegressionRefs.some((ref: unknown) => typeof ref !== 'string' || !/^regression\/[a-z0-9][a-z0-9-]{0,62}\.json$/.test(ref)))) errors.push(`${path}: invalid pythonRegressionRefs.`);
     if (value.sourceRunRef !== undefined && value.sourceRunRef !== 'source-run/run.json') errors.push(`${path}: sourceRunRef must be source-run/run.json.`);

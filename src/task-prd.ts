@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { approvalIsCurrent, PLAN_REQUIREMENTS_CONFIRMATION_ZH, planReviewIsCurrent, START_TEST_CONFIRMATION_ZH, testPlanHash } from './approval.ts';
+import { approvalIsCurrent, confirmationMode, executionIntent, MERGED_TEST_CONFIRMATION_ZH, PLAN_REQUIREMENTS_CONFIRMATION_ZH, planReviewIsCurrent, START_TEST_CONFIRMATION_ZH, testPlanHash } from './approval.ts';
 import { PLATFORM_DECLARATION_PROMPT_ZH } from './platform.ts';
 import { writeTextAtomic } from './store.ts';
 import type { TestTask } from './types.ts';
@@ -22,18 +22,19 @@ export function renderTaskPlanningPrd(task: TestTask): string {
   const planReady = task.scenarios.length > 0 && task.scenarios.every(scenario => scenario.planningStatus === 'applicable' && scenario.plannedSteps.length > 0);
   const unresolvedQuestions = task.requirements?.userQuestions ?? [];
   const platformDeclared = Boolean(task.requirements?.platformDeclaration);
+  const mode = confirmationMode(task);
   const requirementsConfirmed = planReady && platformDeclared && planReviewIsCurrent(task);
   const approved = requirementsConfirmed && approvalIsCurrent(task);
   const status = !planReady
     ? '等待 Agent 根据项目生成详细步骤，禁止请求确认或执行'
     : !platformDeclared
-      ? '等待 QA 声明本次测试平台（Web 或 iOS Simulator），禁止确认方案或执行'
+      ? '等待 Agent 根据源码、配置和可用能力确定唯一测试平台，禁止确认或执行'
     : unresolvedQuestions.length
       ? '存在待 QA 回答的问题，禁止确认方案或执行'
       : !requirementsConfirmed
-        ? '等待 QA 审阅测试场景、步骤和预期结果'
+        ? `等待 QA 回复“${mode === 'merged' ? MERGED_TEST_CONFIRMATION_ZH : PLAN_REQUIREMENTS_CONFIRMATION_ZH}”`
         : !approved
-          ? '测试方案已确认，等待 QA 授权开始测试'
+          ? mode === 'merged' ? `等待 QA 回复“${MERGED_TEST_CONFIRMATION_ZH}”` : `测试方案已确认，等待 QA 回复“${START_TEST_CONFIRMATION_ZH}”`
           : '测试方案和开始执行均已确认';
   const scenarioSections = task.scenarios.flatMap((scenario, scenarioIndex) => {
     const rows = scenario.plannedSteps.map((step, stepIndex) => `| ${scenarioIndex + 1}.${stepIndex + 1} | ${inline(step.action)} | ${inline(step.expected)} |`);
@@ -66,9 +67,11 @@ export function renderTaskPlanningPrd(task: TestTask): string {
     '## 测试计划（待 QA 审阅）',
     '',
     `> 当前状态：${status}`,
-    `> 平台声明：${platformDeclared ? `${task.requirements?.platformDeclaration?.platform}（${inline(task.requirements?.platformDeclaration?.statement)}）` : `${PLATFORM_DECLARATION_PROMPT_ZH}，然后重新应用 PlanDraft。`}`,
-    `> 方案确认口令：${planReady && platformDeclared && !unresolvedQuestions.length ? `QA 确认 PRD 符合需求后回复“${PLAN_REQUIREMENTS_CONFIRMATION_ZH}”。` : '当前不能确认测试方案。'}`,
-    `> 开始口令：${requirementsConfirmed ? `准备执行时，QA 还必须明确回复“${START_TEST_CONFIRMATION_ZH}”。` : `测试方案尚未确认；方案确认后，QA 还必须明确回复“${START_TEST_CONFIRMATION_ZH}”。`}`,
+    `> 执行意图：${executionIntent(task)}`,
+    `> 确认模式：${mode}`,
+    `> 平台声明：${platformDeclared ? `${task.requirements?.platformDeclaration?.platform}（${inline(task.requirements?.platformDeclaration?.statement)}，声明者：${inline(task.requirements?.platformDeclaration?.declaredBy ?? 'qa-agent')}）` : `Agent 必须根据源码和配置确定平台；${PLATFORM_DECLARATION_PROMPT_ZH}。`}`,
+    `> 确认口令：${planReady && platformDeclared && !unresolvedQuestions.length ? `回复“${mode === 'merged' ? MERGED_TEST_CONFIRMATION_ZH : PLAN_REQUIREMENTS_CONFIRMATION_ZH}”。` : '当前不能确认测试方案。'}`,
+    `> 开始口令：${mode === 'merged' ? '已合并到上面的确认口令。' : requirementsConfirmed ? `准备执行时，还必须明确回复“${START_TEST_CONFIRMATION_ZH}”。` : `方案确认后，还必须明确回复“${START_TEST_CONFIRMATION_ZH}”。`}`,
     '',
     '## Task 信息',
     '',

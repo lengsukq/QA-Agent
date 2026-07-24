@@ -29,5 +29,5 @@ export function platformMismatchAdvice(configured: string | undefined, requested
 }
 
 export function platformDeclarationAdvice(): string {
-  return `${PLATFORM_DECLARATION_PROMPT_ZH}。将平台声明写入 PlanDraft.platformDeclaration.platform，并让 scope.platforms 只包含同一个平台；未声明前不能确认或执行测试。`;
+  return `Agent must determine the unique platform from project source/configuration, write it to PlanDraft.platformDeclaration.platform, and keep scope.platforms to that single platform. Ask the user only when the source evidence leaves multiple platforms or no platform candidate.`;
 }

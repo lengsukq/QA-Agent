@@ -13,7 +13,7 @@ import { clearTaskResultSection, finalizeTask } from './task-finalizer.ts';
 import { curateFailedRun, curateObservedBusinessRules } from './memory.ts';
 import { inspectPythonRegressionEligibility, listPythonRegressions } from './python-regression.ts';
 import type { ExecutionSnapshot, Locator, UiAction, RunStatus, StepExecutionMode, TestRun, TestTask, VisualInspectionStatus } from './types.ts';
-import { assertHumanApprover, executionContractIsCurrent, requiresTestPlanApproval, testPlanHash } from './approval.ts';
+import { assertHumanApprover, confirmationMode, executionContractIsCurrent, MERGED_TEST_CONFIRMATION_ZH, PLAN_REQUIREMENTS_CONFIRMATION_ZH, requiresTestPlanApproval, START_TEST_CONFIRMATION_ZH, testPlanHash } from './approval.ts';
 import { assertRecoveryAction, assertSafeAction } from './safety.ts';
 import { generateGuidedScenarioRegressions } from './scenario-regression.ts';
 
@@ -157,9 +157,9 @@ function beginAgentGuidedRunUnlocked(root: string, task: TestTask, context: RunC
   if (current) resetSourceRunSlot(root, task, current);
   const taskState = resolveTaskState(task.metadata.status);
   if (['archived', 'retired'].includes(taskState)) throw new Error(`Task ${task.metadata.id} is ${taskState} and cannot start a new Run.`);
-  if (!task.requirements?.platformDeclaration) throw new Error('The TestPlan has no explicit platform declaration. Ask the QA to choose Web or iOS Simulator, reapply the PlanDraft with platformDeclaration, then repeat the normal confirmations. Run qa-agent doctor --platforms <web|ios> if the selected environment is uncertain.');
-  if (!['ready', 'reviewing_result', 'completed', 'blocked', 'paused'].includes(taskState)) throw new Error(`Task status is ${task.metadata.status}; present the Task PRD, obtain “确认测试方案”, and then obtain the separate “确认开始测试” authorization before creating a Run.`);
-  if (!executionContractIsCurrent(task)) throw new Error('The Task plan is unapproved or changed after approval. Present the current Task PRD, obtain the exact QA reply “确认测试方案”, and then obtain the separate “确认开始测试” authorization before creating a Run.');
+  if (!task.requirements?.platformDeclaration) throw new Error('The TestPlan has no platform declaration. The Agent must determine Web or iOS from source/configuration, write PlanDraft.platformDeclaration, and reapply the PlanDraft before starting. Run qa-agent doctor --platforms <web|ios> to verify the selected environment.');
+  if (!['ready', 'reviewing_result', 'completed', 'blocked', 'paused'].includes(taskState)) throw new Error(`Task status is ${task.metadata.status}; present the Task PRD and obtain the required ${confirmationMode(task) === 'merged' ? `“${MERGED_TEST_CONFIRMATION_ZH}”` : `“${PLAN_REQUIREMENTS_CONFIRMATION_ZH}” followed by “${START_TEST_CONFIRMATION_ZH}”`} before creating a Run.`);
+  if (!executionContractIsCurrent(task)) throw new Error(`The Task plan is unapproved or changed after approval. Present the current Task PRD and obtain the required ${confirmationMode(task) === 'merged' ? `“${MERGED_TEST_CONFIRMATION_ZH}”` : `“${PLAN_REQUIREMENTS_CONFIRMATION_ZH}” followed by “${START_TEST_CONFIRMATION_ZH}”`}.`);
   const run = newRun(root, task, context);
   const required = [...new Set([...task.capabilities.required, ...platformCapabilities(run.context.platform)])];
   const capabilities = checkCapabilities(root, required, task.capabilities.optional);

@@ -2,12 +2,12 @@
 
 QA Agent is a project-local AI testing runtime. Developers can request real UI checks in natural language while the Runtime persists Tasks, Runs, screenshots, business observations, cleanup, and reports.
 
-Current version: **v0.3.95**
+Current version: **v0.3.96**
 
-### What's new in v0.3.95
+### What's new in v0.3.96
 
-- **Declare the platform after planning** — after the detailed TestPlan is generated, the QA must explicitly choose Web or iOS Simulator before plan review or execution.
-- **Track platform intent** — changing platforms requires reapplying the matching PlanDraft, and WorkflowState exposes the declaration gate and repair action.
+- **Agent-inferred platform** — after the detailed TestPlan is generated, the Agent infers the unique Web or iOS platform from source/configuration and asks the QA only when the evidence is ambiguous.
+- **Risk-based confirmation** — eligible read-only checks use one `confirm test and start execution` reply; state-changing or high-risk flows retain separate plan and start confirmations.
 
 - **Locked built-in Runner** — npm ships the unified Runner; Web and iOS Simulator UI actions and JSON replay use it exclusively.
 - **qa-agent-doctor** — New first-run environment Skill that separates blocking capabilities from advisory tools and guides one repair step at a time.
@@ -15,14 +15,14 @@ Current version: **v0.3.95**
 - **Capability detection** — `qa-agent doctor` now auto-detects browser, simulator, device, and Python regression environment readiness.
 - **UI interaction primitives** — New `act` / `driver` modules unify how host Agent UI operations are invoked and verdicts recorded.
 - **Task lifecycle management** — Engine refactored with Source Run freeze, regression run isolation, and automatic `stale` marking when TestPlan changes.
-- **Fresh initialization** — v0.3.95 does not migrate older Runtime assets; initialize the project again and let Runner resolution use the global/npm package.
+- **Fresh initialization** — v0.3.96 does not migrate older Runtime assets; initialize the project again and let Runner resolution use the global/npm package.
 
 v0.3.91 puts AI-led and user-led execution on one Task, Plan, Run, Step, Evidence, and Report core. The modes differ only in who controls the next action:
 
 - the Agent derives a detailed Task PRD from the project;
 - every material requirement, environment, account, test-data, expected-result, or safety question must be resolved with the QA;
-- the QA first replies `确认测试方案` to confirm that the PRD matches the requirement;
-- the QA separately replies `确认开始测试` before Runtime may create a Run or allow UI tools;
+- eligible ordinary read-only Tasks accept one exact reply, `确认测试并开始执行`, which records both approvals;
+- strict Tasks still require `确认测试方案`, then separately `确认开始测试`, before Runtime may create a Run or allow UI tools;
 - AI-led mode executes the approved PRD continuously without a per-step prepare gate or human verdict;
 - user-led mode keeps only one pending interaction: approve one action, execute and screenshot it, then confirm its result;
 - approvals and verdicts are stored directly on the corresponding Step instead of in a second interaction-history state machine;
@@ -71,7 +71,7 @@ qa-agent --version
 Expected output:
 
 ```text
-0.3.95
+0.3.96
 ```
 
 ## Initialize a project
@@ -168,7 +168,7 @@ Use `simctl` for simulator, app, permission, and screenshot management; use `fb-
 
 ### Platform mismatch
 
-If the selected platform is wrong, stop and run `qa-agent doctor --platforms <web|ios>`, reapply the correct PlanDraft, repeat the normal confirmations, and then resume through `qa-agent act`. Do not use MCP to bridge a platform mismatch.
+If the selected platform is wrong, stop and run `qa-agent doctor --platforms <web|ios>`, reapply the correct PlanDraft, invalidate the old platform-bound approval, and complete the confirmation mode reported by Runtime. Do not use MCP to bridge a platform mismatch.
 
 ### Formal output
 
@@ -214,14 +214,13 @@ The shared planning order is mandatory:
 2. inspect relevant source, routes, tests, configuration, and existing QA assets;
 3. generate detailed Scenarios whose steps contain an action and expected result;
 4. write and present the complete Task `prd.md`;
-5. ask the QA to declare exactly one platform: Web or iOS Simulator; persist it in `PlanDraft.platformDeclaration` and reapply the matching plan;
+5. inspect source, configuration, entry points, and capabilities to infer exactly one platform; persist it in `PlanDraft.platformDeclaration` and reapply the matching plan; ask the QA only when the platform is ambiguous;
 6. ask the QA about every unresolved requirement, environment, account, test-data, expected-result, or safety question;
 7. persist answers in `confirmedDecisions`, clear resolved `userQuestions`, and reapply the plan;
-8. require the exact reply `确认测试方案` and persist it with `qa-agent plan review`;
-9. separately require `确认开始测试` and persist it with `qa-agent review`;
-10. only then run capability checks and create the Task's single Source Run.
+8. set `PlanDraft.executionIntent`; eligible read-only Tasks use one exact reply `确认测试并开始执行`, while other Tasks require `确认测试方案` followed by `确认开始测试`;
+9. only then run capability checks and create the Task's single Source Run.
 
-Vague approval does not satisfy either gate.
+Vague approval does not satisfy the computed confirmation mode. Runtime/CLI writes Task approval metadata; the Agent does not edit `task.json` manually.
 
 ## Quick and Guided checks
 
@@ -238,6 +237,15 @@ qa-agent check --mode guided --request "Test the first-install Welcome Dialog"
 ```
 
 After applying and presenting the PRD:
+
+For an eligible read-only Task (`confirmationMode=merged`):
+
+```bash
+qa-agent plan review   --module MODULE   --task TASK   --approve   --confirmed-by QA   --confirmation-text "确认测试并开始执行"
+qa-agent test --module MODULE --task TASK
+```
+
+For strict Tasks (`confirmationMode=strict`):
 
 ```bash
 qa-agent plan review   --module MODULE   --task TASK   --approve   --confirmed-by QA   --confirmation-text "确认测试方案"
@@ -305,9 +313,9 @@ Each Task keeps exactly one Source Run used to derive the reusable script:
 
 A Task no longer keeps multiple `runs/<run-id>/` histories. Before formal regression steps are published, another initial test replaces the unpublished Source Run and records the restart in `events.jsonl`. After publication, the Source Run is frozen and all later execution goes to `regression-runs/`.
 
-When the TestPlan changes, the old regression steps first become `stale`, while existing approval remains valid for ordinary plan or platform adjustments. Runtime may create a replacement Source Run without repeating both confirmations; new unresolved business questions still require QA confirmation.
+When the TestPlan changes, the old regression steps first become `stale`. A platform selection change invalidates platform-bound approvals; Runtime reports the confirmation mode needed after the corrected PlanDraft is applied. New unresolved business questions still require QA confirmation.
 
-v0.3.95 does not create duplicate `summary.md`, Quick observed-Scenario JSON, Source Run history indexes, or Session Journal files.
+v0.3.96 does not create duplicate `summary.md`, Quick observed-Scenario JSON, Source Run history indexes, or Session Journal files.
 
 ## Regression steps and the unified Runner
 
@@ -447,22 +455,22 @@ Show strict regression, release, and administration commands with:
 qa-agent help --advanced
 ```
 
-## Initialize v0.3.95
+## Initialize v0.3.96
 
 Install the CLI:
 
 ```bash
-npm install -g qa-agent-skill@0.3.95
+npm install -g qa-agent-skill@0.3.96
 ```
 
-For a clean v0.3.95 setup, back up the old Runtime directory if needed, then initialize again:
+For a clean v0.3.96 setup, back up the old Runtime directory if needed, then initialize again:
 
 ```bash
 mv .qa-agent .qa-agent.backup
 qa-agent init
 ```
 
-`qa-agent update` refreshes managed files only for an already initialized v0.3.95 project and resolves the global/npm Runner. Unsupported older versions must be backed up and initialized again.
+`qa-agent update` refreshes managed files only for an already initialized v0.3.96 project and resolves the global/npm Runner. Unsupported older versions must be backed up and initialized again.
 
 ## Validate a project
 
@@ -481,7 +489,7 @@ npm run pack:check
 
 ## Four Skills
 
-v0.3.95 installs:
+v0.3.96 installs:
 
 ```text
 qa-agent
