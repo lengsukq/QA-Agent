@@ -2,9 +2,18 @@
 
 QA Agent is a project-local AI testing runtime. Developers can request real UI checks in natural language while the Runtime persists Tasks, Runs, screenshots, business observations, cleanup, and reports.
 
-Current version: **v0.3.7**
+Current version: **v0.3.9**
 
-v0.3.7 puts AI-led and user-led execution on one Task, Plan, Run, Step, Evidence, and Report core. The modes differ only in who controls the next action:
+### What's new in v0.3.9
+
+- **Python Runtime Agent** — New `runner/` Python subsystem with Web interaction (Playwright), iOS simulator control (simctl + idb), and operation replay engine. Replaces the legacy Python Regression Contract.
+- **Regression step export** — New `regression-steps` command extracts validated steps from a Source Run into reusable regression scripts.
+- **Capability detection** — `qa-agent doctor` now auto-detects browser, simulator, device, and Python regression environment readiness.
+- **UI interaction primitives** — New `act` / `driver` modules unify how host Agent UI operations are invoked and verdicts recorded.
+- **Task lifecycle management** — Engine refactored with Source Run freeze, regression run isolation, and automatic `stale` marking when TestPlan changes.
+- **Migration framework removed** — Cross-version upgrade migration is no longer supported; fresh init only, simplifying project structure.
+
+v0.3.9 puts AI-led and user-led execution on one Task, Plan, Run, Step, Evidence, and Report core. The modes differ only in who controls the next action:
 
 - the Agent derives a detailed Task PRD from the project;
 - every material requirement, environment, account, test-data, expected-result, or safety question must be resolved with the QA;
@@ -58,7 +67,7 @@ qa-agent --version
 Expected output:
 
 ```text
-0.3.7
+0.3.9
 ```
 
 ## Initialize a project
@@ -173,6 +182,12 @@ Full reference:
 ```text
 skill/qa-agent/references/recommended-regression-stack.md
 ```
+
+Python Runtime Agent reference:
+
+```text
+skill/qa-agent/references/regression-runner.md
+```
 ## Simplest interaction
 
 For an AI-led check, say:
@@ -285,7 +300,7 @@ A Task no longer keeps multiple `runs/<run-id>/` histories. Before a formal Pyth
 
 When the TestPlan changes, the old Python script first becomes `stale`. After the user reviews and approves the changed plan, Runtime may create a replacement Source Run and a revised script.
 
-v0.3.7 does not create duplicate `summary.md`, Quick observed-Scenario JSON, Source Run history indexes, or Session Journal files.
+v0.3.9 does not create duplicate `summary.md`, Quick observed-Scenario JSON, Source Run history indexes, or Session Journal files.
 
 ## Python regression scripts
 
