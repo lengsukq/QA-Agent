@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { approvalIsCurrent, PLAN_REQUIREMENTS_CONFIRMATION_ZH, planReviewIsCurrent, START_TEST_CONFIRMATION_ZH, testPlanHash } from './approval.ts';
+import { PLATFORM_DECLARATION_PROMPT_ZH } from './platform.ts';
 import { writeTextAtomic } from './store.ts';
 import type { TestTask } from './types.ts';
 
@@ -20,10 +21,13 @@ export function renderTaskPlanningPrd(task: TestTask): string {
   const planHash = testPlanHash(task);
   const planReady = task.scenarios.length > 0 && task.scenarios.every(scenario => scenario.planningStatus === 'applicable' && scenario.plannedSteps.length > 0);
   const unresolvedQuestions = task.requirements?.userQuestions ?? [];
-  const requirementsConfirmed = planReady && planReviewIsCurrent(task);
+  const platformDeclared = Boolean(task.requirements?.platformDeclaration);
+  const requirementsConfirmed = planReady && platformDeclared && planReviewIsCurrent(task);
   const approved = requirementsConfirmed && approvalIsCurrent(task);
   const status = !planReady
     ? '等待 Agent 根据项目生成详细步骤，禁止请求确认或执行'
+    : !platformDeclared
+      ? '等待 QA 声明本次测试平台（Web 或 iOS Simulator），禁止确认方案或执行'
     : unresolvedQuestions.length
       ? '存在待 QA 回答的问题，禁止确认方案或执行'
       : !requirementsConfirmed
@@ -62,7 +66,8 @@ export function renderTaskPlanningPrd(task: TestTask): string {
     '## 测试计划（待 QA 审阅）',
     '',
     `> 当前状态：${status}`,
-    `> 方案确认口令：${planReady && !unresolvedQuestions.length ? `QA 确认 PRD 符合需求后回复“${PLAN_REQUIREMENTS_CONFIRMATION_ZH}”。` : '当前不能确认测试方案。'}`,
+    `> 平台声明：${platformDeclared ? `${task.requirements?.platformDeclaration?.platform}（${inline(task.requirements?.platformDeclaration?.statement)}）` : `${PLATFORM_DECLARATION_PROMPT_ZH}，然后重新应用 PlanDraft。`}`,
+    `> 方案确认口令：${planReady && platformDeclared && !unresolvedQuestions.length ? `QA 确认 PRD 符合需求后回复“${PLAN_REQUIREMENTS_CONFIRMATION_ZH}”。` : '当前不能确认测试方案。'}`,
     `> 开始口令：${requirementsConfirmed ? `准备执行时，QA 还必须明确回复“${START_TEST_CONFIRMATION_ZH}”。` : `测试方案尚未确认；方案确认后，QA 还必须明确回复“${START_TEST_CONFIRMATION_ZH}”。`}`,
     '',
     '## Task 信息',

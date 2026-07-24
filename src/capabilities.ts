@@ -80,6 +80,7 @@ export interface RunnerDiagnosis {
   xcrun: { available: boolean };
   simctl: { available: boolean; booted: boolean };
   idb: { available: boolean };
+  idbCompanion: { available: boolean };
   runnerDir: { available: boolean; path?: string; source?: string; error?: string };
   adapters: { web: { available: boolean; missing: string[] }; ios: { available: boolean; missing: string[] } };
 }
@@ -98,11 +99,12 @@ export function runnerDiagnosis(root: string): RunnerDiagnosis {
   const playwrightCheck = check(python, ['-c', 'import playwright; print(getattr(playwright, "__version__", "available"))']);
   const xcrunCheck = check('xcrun', ['--find', 'simctl']);
   const idbCheck = check(command, ['idb']);
+  const idbCompanionCheck = check(command, ['idb_companion']);
   const simctlDevices = xcrunCheck ? check('xcrun', ['simctl', 'list', 'devices', '--json']) : undefined;
   const runner = resolveRunner(root);
   const webMissing = [!runner.available ? 'runner' : '', !pythonVersion ? 'python3' : '', !playwrightCheck ? 'playwright' : ''].filter(Boolean);
   const simctlBooted = Boolean(simctlDevices && /"state"\s*:\s*"Booted"/i.test(simctlDevices));
-  const iosMissing = [!runner.available ? 'runner' : '', !pythonVersion ? 'python3' : '', !xcrunCheck ? 'xcrun simctl' : '', !idbCheck ? 'idb' : '', !simctlBooted ? 'booted-simulator' : ''].filter(Boolean);
+  const iosMissing = [!runner.available ? 'runner' : '', !pythonVersion ? 'python3' : '', !xcrunCheck ? 'xcrun simctl' : '', !idbCheck ? 'idb' : '', !idbCompanionCheck ? 'idb_companion' : '', !simctlBooted ? 'booted-simulator' : ''].filter(Boolean);
 
   return {
     python3: { available: !!pythonVersion, version: pythonVersion?.replace('Python ', '') },
@@ -110,6 +112,7 @@ export function runnerDiagnosis(root: string): RunnerDiagnosis {
     xcrun: { available: !!xcrunCheck },
     simctl: { available: !!simctlDevices, booted: simctlBooted },
     idb: { available: !!idbCheck },
+    idbCompanion: { available: !!idbCompanionCheck },
     runnerDir: { available: runner.available, path: runner.path, source: runner.source, error: runner.error },
     adapters: { web: { available: webMissing.length === 0, missing: webMissing }, ios: { available: iosMissing.length === 0, missing: iosMissing } },
   };

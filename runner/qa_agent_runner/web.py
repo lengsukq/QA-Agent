@@ -169,3 +169,7 @@ class WebDriver:
         key = params.get("key", "Enter")
         self._page.keyboard.press(key)
         return f"Pressed {key}"
+
+    # Keep the public act command name aligned with the iOS command surface.
+    def _cmd_key(self, params: dict[str, Any]) -> str:
+        return self._cmd_press(params)

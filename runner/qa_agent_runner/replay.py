@@ -81,14 +81,27 @@ def run_replay(steps_file: str) -> None:
         _write_failure(result_path, f"Driver init failed: {exc}")
         sys.exit(1)
 
-    # Execute steps (run all so every source step is reported with evidence)
+    # Execute business steps fail-fast. Once a critical step fails, do not
+    # continue operating on an unknown native-app state. Cleanup still runs
+    # below and is intentionally independent from the business flow.
     results: list[dict[str, Any]] = []
     start_time = time.time()
+    stopped_after_failure = False
 
     for step in steps:
         step_id = step.get("id", f"replay-{len(results) + 1}")
         cmd = step.get("cmd", "")
         params = step.get("params", {}) or {}
+        if stopped_after_failure:
+            results.append({
+                "id": step_id,
+                "name": _describe(step),
+                "status": "blocked",
+                "expected": params.get("expected", ""),
+                "actual": "Skipped because a previous business step failed.",
+                "screenshot": "",
+            })
+            continue
         try:
             res = driver.execute(cmd, params, step_id)
         except Exception as exc:
@@ -102,6 +115,8 @@ def run_replay(steps_file: str) -> None:
             "actual": res.get("actual") or res.get("error", ""),
             "screenshot": _screenshot_rel(res.get("screenshot")),
         })
+        if not ok:
+            stopped_after_failure = True
 
     # Execute cleanup (always, even if steps failed)
     cleanup_results: list[dict[str, Any]] = []
@@ -149,6 +164,7 @@ def run_replay(steps_file: str) -> None:
         "steps": results,
         "cleanup": cleanup_results,
         "screenshotDir": str(screenshot_dir),
+        "stoppedAfterFailure": stopped_after_failure,
     }
 
     result_path.parent.mkdir(parents=True, exist_ok=True)

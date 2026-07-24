@@ -18,8 +18,8 @@
 
 | Command | Purpose |
 | --- | --- |
-| `qa-agent plan apply --file PLAN.json` | Apply a structured PlanDraft and update Task `prd.md`. |
-| `qa-agent plan review --module MODULE --task TASK --approve --confirmed-by HUMAN --confirmation-text "确认测试方案"` | Record that the QA reviewed the full PRD and confirmed it matches the requirement. Fails while `userQuestions` remain. |
+| `qa-agent plan apply --file PLAN.json` | Apply a structured PlanDraft and update Task `prd.md`. After generation, the QA must declare `web` or `ios` in `platformDeclaration` before review. |
+| `qa-agent plan review --module MODULE --task TASK --approve --confirmed-by HUMAN --confirmation-text "确认测试方案"` | Record that the QA reviewed the full PRD and confirmed it matches the requirement. Fails while the platform is undeclared or `userQuestions` remain. |
 | `qa-agent review --module MODULE --task TASK --approve --confirmed-by HUMAN --confirmation-text "确认开始测试"` | Record the separate authorization to begin execution. Requires a current PRD review. |
 | `qa-agent test --module MODULE --task TASK [--scenario ID]` | Start or resume the Task's single Source Run only after both approvals. |
 
@@ -53,20 +53,39 @@ Only Web and iOS Simulator are supported. All UI interactions use `qa-agent act`
 | `qa-agent act select --run RUN --locator "strategy=value" --value VAL` | Select dropdown option (web). |
 | `qa-agent act assert-text --run RUN --locator "strategy=value" --expected TEXT` | Assert element text. |
 | `qa-agent act assert-visible --run RUN --locator "strategy=value"` | Assert element visible. |
-| `qa-agent act tap --run RUN --x N --y N` | Tap coordinates (iOS). |
+| `qa-agent act assert-value --run RUN --locator "strategy=value" --expected TEXT` | Assert an exact iOS accessibility value. |
+| `qa-agent act tap --run RUN --locator "strategy=value"` | Semantically tap an iOS element from the current accessibility tree. |
+| `qa-agent act tap --run RUN --x N --y N` | Tap coordinates (iOS fallback only). |
 | `qa-agent act type-text --run RUN --text TEXT` | Type text (iOS). |
+| `qa-agent act clear --run RUN --locator "type=TextField" [--max-chars N]` | Clear a focused iOS text field with HID events. |
 | `qa-agent act swipe --run RUN --direction DIR` | Swipe in a direction (iOS). |
+| `qa-agent act key --run RUN --keycode KEY` | Send a named or numeric iOS HID key, such as `return`, `right`, or `backspace`. |
 | `qa-agent act launch --run RUN --bundle-id ID` | Launch app (iOS). |
+| `qa-agent act terminate --run RUN --bundle-id ID` | Terminate an iOS app before a deterministic launch. |
+| `qa-agent act install --run RUN --app-path PATH` | Install an iOS app on the selected Simulator. |
 | `qa-agent act home --run RUN` | Press Home button (iOS). |
 | `qa-agent act back --run RUN` | Press Back button (iOS). |
 | `qa-agent act describe --run RUN` | Get accessibility tree (iOS). |
 | `qa-agent act wait --run RUN --ms N` | Wait for duration. |
 | `qa-agent act wait --run RUN --locator "strategy=value"` | Wait for element. |
 | `qa-agent act screenshot --run RUN --name NAME` | Take named screenshot. |
-| `qa-agent act scroll --run RUN --direction DIR` | Scroll page (web). |
+| `qa-agent act scroll --run RUN --direction DIR` | Scroll using dynamic accessibility-tree bounds (web, iOS). |
 | `qa-agent act hover --run RUN --locator "strategy=value"` | Hover element (web). |
 
 Locator format: `strategy=value` (e.g. `role=button:Login`, `css=#submit`, `text=Welcome`).
+
+For iOS, `text=`, `label=`, and `accessibility=` first prefer an exact accessibility value and then support a unique semantic match inside a compound `AXLabel` (for example `text=Bvlgari` matches `Bvlgari\nAviator Sunglasses...`). Ambiguous or invisible matches fail with an actionable error. Use `type=TextField` for native text fields and `value=...` for an exact `AXValue` lookup.
+
+The project includes a complete iOS example at [`ios-search-bvl.steps.json`](../../../ios-search-bvl.steps.json). It exercises launch, semantic text-field focus, HID clear, fill, `assert-value`, Return, semantic product tap, detail-page `assert-text`, dynamic scroll, and cleanup:
+
+```bash
+PYTHONPATH=runner \
+QA_AGENT_SCREENSHOT_DIR=/tmp/qa-agent-ios-example/screenshots \
+QA_AGENT_RESULT_PATH=/tmp/qa-agent-ios-example/result.json \
+python3 -m qa_agent_runner replay ios-search-bvl.steps.json
+```
+
+The JSON keeps native iOS commands (`tap`, `fill`, `clear`, `scroll`, `assert-text`) instead of converting them to Web `click` or `fill` actions.
 
 ## Runtime execution
 
@@ -107,6 +126,8 @@ A Guided UI step cannot run without a pending action approval. After it runs, Ru
   "taskId": "welcome-dialog-first-install",
   "description": "验证首次安装展示 Welcome Dialog，后续启动不重复展示。",
   "objectives": ["验证 Welcome Dialog 首次展示和持久化状态"],
+  "scope": { "platforms": ["ios"], "environments": ["local"], "roles": ["default"] },
+  "platformDeclaration": { "platform": "ios", "statement": "本次测试平台：iOS Simulator" },
   "userQuestions": [],
   "confirmedDecisions": ["Continue as Guest 关闭弹窗并进入首页"],
   "scenarios": [{

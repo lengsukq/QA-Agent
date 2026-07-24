@@ -78,6 +78,8 @@ test('exports a reviewed regression steps draft, publishes it into the Task, and
     taskId: initialTask.metadata.id,
     description: initialTask.description,
     objectives: initialTask.objectives,
+    scope: { platforms: ['web'], environments: ['local'], roles: ['default'] },
+    platformDeclaration: { platform: 'web', statement: '本次测试平台：Web', declaredBy: 'project-owner' },
     scenarios: [{
       id: scenario.id,
       title: scenario.title,

@@ -7,9 +7,9 @@ import { rebuildIndexes } from './indexer.ts';
 import { markPythonRegressionsStaleForPlanHash } from './python-regression.ts';
 import { readModule, readTask, saveTask, taskDirectory, taskPrdPath } from './project.ts';
 import { assertSafeId, hasSecrets, isSafeId, now } from './store.ts';
-import type { PlannedTestStep, PlanDraft, PlanDraftScenario, RequirementTrace, RiskLevel, TestScenario, TestTask, VisualAssertion } from './types.ts';
+import type { PlannedTestStep, PlanDraft, PlanDraftScenario, PlatformDeclaration, RequirementTrace, RiskLevel, TestScenario, TestTask, VisualAssertion } from './types.ts';
 import { taskState as resolveTaskState, transitionTaskState } from './workflow-model.ts';
-import { normalizeSupportedPlatforms } from './platform.ts';
+import { normalizeSupportedPlatforms, platformDeclarationAdvice, PLATFORM_DECLARATION_PROMPT_ZH } from './platform.ts';
 
 export interface PlanDraftApplyResult {
   changed: boolean;
@@ -19,6 +19,9 @@ export interface PlanDraftApplyResult {
   previousPlanHash: string;
   requirementsConfirmationRequired: boolean;
   requiredRequirementsConfirmation: string;
+  platformDeclarationRequired: boolean;
+  requiredPlatformDeclaration: string;
+  platformDeclaration?: PlatformDeclaration;
   unresolvedQuestions: string[];
   approvalRequired: boolean;
   requiredConfirmation: string;
@@ -156,8 +159,12 @@ export function applyPlanDraft(root: string, draft: PlanDraft): PlanDraftApplyRe
   task.objectives = stringArray(draft.objectives, 'PlanDraft objectives');
   if (!task.objectives.length) throw new Error('PlanDraft objectives must not be empty.');
   task.preconditions = stringArray(draft.preconditions, 'PlanDraft preconditions');
+  const draftPlatforms = normalizeSupportedPlatforms(stringArray(draft.scope?.platforms, 'PlanDraft scope.platforms', task.scope.platforms), ['web'], 'PlanDraft scope.platforms');
+  if (draft.platformDeclaration !== undefined && (!draft.platformDeclaration || typeof draft.platformDeclaration !== 'object')) throw new Error('PlanDraft platformDeclaration must be an object with platform, optional statement, and optional declaredBy.');
+  const declaredPlatform = draft.platformDeclaration ? normalizeSupportedPlatforms([requiredText(draft.platformDeclaration.platform, 'PlanDraft platformDeclaration.platform')], [], 'PlanDraft platformDeclaration.platform')[0] : undefined;
+  if (declaredPlatform && (draftPlatforms.length !== 1 || draftPlatforms[0] !== declaredPlatform)) throw new Error(`PlanDraft platformDeclaration.platform (${declaredPlatform}) must match the only PlanDraft scope.platforms entry. ${platformDeclarationAdvice()}`);
   task.scope = {
-    platforms: normalizeSupportedPlatforms(stringArray(draft.scope?.platforms, 'PlanDraft scope.platforms', task.scope.platforms), ['web'], 'PlanDraft scope.platforms'),
+    platforms: draftPlatforms,
     environments: stringArray(draft.scope?.environments, 'PlanDraft scope.environments', task.scope.environments),
     roles: stringArray(draft.scope?.roles, 'PlanDraft scope.roles', task.scope.roles),
   };
@@ -186,9 +193,27 @@ export function applyPlanDraft(root: string, draft: PlanDraft): PlanDraftApplyRe
   task.requirements.userQuestions = stringArray(draft.userQuestions, 'PlanDraft userQuestions');
   task.requirements.confirmedDecisions = stringArray(draft.confirmedDecisions, 'PlanDraft confirmedDecisions');
   task.requirements.requirementTrace = requirementTrace(task.scenarios);
+  const previousPlatformDeclaration = task.requirements.platformDeclaration;
+  if (declaredPlatform) {
+    const nextPlatformDeclaration = {
+      platform: declaredPlatform,
+      statement: requiredText(draft.platformDeclaration?.statement ?? `本次测试平台：${declaredPlatform === 'web' ? 'Web' : 'iOS Simulator'}`, 'PlanDraft platformDeclaration.statement'),
+      declaredBy: draft.platformDeclaration?.declaredBy?.trim() || undefined,
+      declaredAt: now(),
+    };
+    task.requirements.platformDeclaration = previousPlatformDeclaration
+      && previousPlatformDeclaration.platform === nextPlatformDeclaration.platform
+      && previousPlatformDeclaration.statement === nextPlatformDeclaration.statement
+      && previousPlatformDeclaration.declaredBy === nextPlatformDeclaration.declaredBy
+      ? previousPlatformDeclaration
+      : nextPlatformDeclaration;
+  } else if (previousPlatformDeclaration && previousPlatformDeclaration.platform !== task.scope.platforms[0]) {
+    delete task.requirements.platformDeclaration;
+  }
+  const platformDeclarationChanged = JSON.stringify(previousPlatformDeclaration) !== JSON.stringify(task.requirements.platformDeclaration);
 
   let planHash = testPlanHash(task);
-  if (planHash === previousPlanHash) return { changed: false, moduleId: draft.moduleId, taskId: draft.taskId, planHash, previousPlanHash, requirementsConfirmationRequired: !planReviewIsCurrent(task), requiredRequirementsConfirmation: PLAN_REQUIREMENTS_CONFIRMATION_ZH, unresolvedQuestions: task.requirements?.userQuestions ?? [], approvalRequired: !approvalIsCurrent(task), requiredConfirmation: START_TEST_CONFIRMATION_ZH, prdPath: taskPrdPath(root, draft.moduleId, draft.taskId), scenarioIds: task.scenarios.map(scenario => scenario.id), task };
+  if (planHash === previousPlanHash && !platformDeclarationChanged) return { changed: false, moduleId: draft.moduleId, taskId: draft.taskId, planHash, previousPlanHash, requirementsConfirmationRequired: !task.requirements?.platformDeclaration || !planReviewIsCurrent(task), requiredRequirementsConfirmation: PLAN_REQUIREMENTS_CONFIRMATION_ZH, platformDeclarationRequired: !task.requirements?.platformDeclaration, requiredPlatformDeclaration: PLATFORM_DECLARATION_PROMPT_ZH, platformDeclaration: task.requirements?.platformDeclaration, unresolvedQuestions: task.requirements?.userQuestions ?? [], approvalRequired: !approvalIsCurrent(task), requiredConfirmation: START_TEST_CONFIRMATION_ZH, prdPath: taskPrdPath(root, draft.moduleId, draft.taskId), scenarioIds: task.scenarios.map(scenario => scenario.id), task };
   task.requirements.updatedAt = now();
   planHash = testPlanHash(task);
 
@@ -209,5 +234,5 @@ export function applyPlanDraft(root: string, draft: PlanDraft): PlanDraftApplyRe
   markPythonRegressionsStaleForPlanHash(root, task, planHash);
   rebuildIndexes(root);
   const updatedTask = readTask(root, draft.moduleId, draft.taskId);
-  return { changed: true, moduleId: draft.moduleId, taskId: draft.taskId, planHash, previousPlanHash, requirementsConfirmationRequired: !planReviewIsCurrent(updatedTask), requiredRequirementsConfirmation: PLAN_REQUIREMENTS_CONFIRMATION_ZH, unresolvedQuestions: updatedTask.requirements?.userQuestions ?? [], approvalRequired: !approvalIsCurrent(updatedTask), requiredConfirmation: START_TEST_CONFIRMATION_ZH, prdPath: taskPrdPath(root, draft.moduleId, draft.taskId), scenarioIds: updatedTask.scenarios.map(scenario => scenario.id), task: updatedTask };
+  return { changed: true, moduleId: draft.moduleId, taskId: draft.taskId, planHash, previousPlanHash, requirementsConfirmationRequired: !updatedTask.requirements?.platformDeclaration || !planReviewIsCurrent(updatedTask), requiredRequirementsConfirmation: PLAN_REQUIREMENTS_CONFIRMATION_ZH, platformDeclarationRequired: !updatedTask.requirements?.platformDeclaration, requiredPlatformDeclaration: PLATFORM_DECLARATION_PROMPT_ZH, platformDeclaration: updatedTask.requirements?.platformDeclaration, unresolvedQuestions: updatedTask.requirements?.userQuestions ?? [], approvalRequired: !approvalIsCurrent(updatedTask), requiredConfirmation: START_TEST_CONFIRMATION_ZH, prdPath: taskPrdPath(root, draft.moduleId, draft.taskId), scenarioIds: updatedTask.scenarios.map(scenario => scenario.id), task: updatedTask };
 }

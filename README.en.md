@@ -2,9 +2,12 @@
 
 QA Agent is a project-local AI testing runtime. Developers can request real UI checks in natural language while the Runtime persists Tasks, Runs, screenshots, business observations, cleanup, and reports.
 
-Current version: **v0.3.93**
+Current version: **v0.3.95**
 
-### What's new in v0.3.93
+### What's new in v0.3.95
+
+- **Declare the platform after planning** — after the detailed TestPlan is generated, the QA must explicitly choose Web or iOS Simulator before plan review or execution.
+- **Track platform intent** — changing platforms requires reapplying the matching PlanDraft, and WorkflowState exposes the declaration gate and repair action.
 
 - **Locked built-in Runner** — npm ships the unified Runner; Web and iOS Simulator UI actions and JSON replay use it exclusively.
 - **qa-agent-doctor** — New first-run environment Skill that separates blocking capabilities from advisory tools and guides one repair step at a time.
@@ -12,7 +15,7 @@ Current version: **v0.3.93**
 - **Capability detection** — `qa-agent doctor` now auto-detects browser, simulator, device, and Python regression environment readiness.
 - **UI interaction primitives** — New `act` / `driver` modules unify how host Agent UI operations are invoked and verdicts recorded.
 - **Task lifecycle management** — Engine refactored with Source Run freeze, regression run isolation, and automatic `stale` marking when TestPlan changes.
-- **0.3.92 compatibility upgrade** — `qa-agent update` migrates the old execution contract and preserves existing project data and Runner copies.
+- **Fresh initialization** — v0.3.95 does not migrate older Runtime assets; initialize the project again and let Runner resolution use the global/npm package.
 
 v0.3.91 puts AI-led and user-led execution on one Task, Plan, Run, Step, Evidence, and Report core. The modes differ only in who controls the next action:
 
@@ -68,7 +71,7 @@ qa-agent --version
 Expected output:
 
 ```text
-0.3.93
+0.3.95
 ```
 
 ## Initialize a project
@@ -141,6 +144,8 @@ Install QA Agent
 → start the first test in the Agent conversation
 ```
 
+The project includes a verified iOS unified-Runner example at [`ios-search-bvl.steps.json`](ios-search-bvl.steps.json). It clears and fills the `com.rechic.apps` search field, searches `bvl`, taps the Bvlgari product into its detail page, scrolls, and asserts product information. See the [CLI command reference](skill/qa-agent/references/cli-command-reference.md) and [regression runner contract](skill/qa-agent/references/regression-runner.md) for the command and JSON replay interfaces.
+
 ## Recommended regression stack
 
 The built-in Runner is the only UI execution path. Doctor reports these setup requirements; it does not install third-party packages or modify system permissions.
@@ -209,11 +214,12 @@ The shared planning order is mandatory:
 2. inspect relevant source, routes, tests, configuration, and existing QA assets;
 3. generate detailed Scenarios whose steps contain an action and expected result;
 4. write and present the complete Task `prd.md`;
-5. ask the QA about every unresolved requirement, environment, account, test-data, expected-result, or safety question;
-6. persist answers in `confirmedDecisions`, clear resolved `userQuestions`, and reapply the plan;
-7. require the exact reply `确认测试方案` and persist it with `qa-agent plan review`;
-8. separately require `确认开始测试` and persist it with `qa-agent review`;
-9. only then run capability checks and create the Task's single Source Run.
+5. ask the QA to declare exactly one platform: Web or iOS Simulator; persist it in `PlanDraft.platformDeclaration` and reapply the matching plan;
+6. ask the QA about every unresolved requirement, environment, account, test-data, expected-result, or safety question;
+7. persist answers in `confirmedDecisions`, clear resolved `userQuestions`, and reapply the plan;
+8. require the exact reply `确认测试方案` and persist it with `qa-agent plan review`;
+9. separately require `确认开始测试` and persist it with `qa-agent review`;
+10. only then run capability checks and create the Task's single Source Run.
 
 Vague approval does not satisfy either gate.
 
@@ -301,7 +307,7 @@ A Task no longer keeps multiple `runs/<run-id>/` histories. Before formal regres
 
 When the TestPlan changes, the old regression steps first become `stale`, while existing approval remains valid for ordinary plan or platform adjustments. Runtime may create a replacement Source Run without repeating both confirmations; new unresolved business questions still require QA confirmation.
 
-v0.3.93 does not create duplicate `summary.md`, Quick observed-Scenario JSON, Source Run history indexes, or Session Journal files.
+v0.3.95 does not create duplicate `summary.md`, Quick observed-Scenario JSON, Source Run history indexes, or Session Journal files.
 
 ## Regression steps and the unified Runner
 
@@ -441,21 +447,22 @@ Show strict regression, release, and administration commands with:
 qa-agent help --advanced
 ```
 
-## Initialize or upgrade to v0.3.93
+## Initialize v0.3.95
 
 Install the CLI:
 
 ```bash
-npm install -g qa-agent-skill@0.3.93
+npm install -g qa-agent-skill@0.3.95
 ```
 
-Projects initialized with v0.3.92 can be upgraded in place. Run:
+For a clean v0.3.95 setup, back up the old Runtime directory if needed, then initialize again:
 
 ```bash
-qa-agent update
+mv .qa-agent .qa-agent.backup
+qa-agent init
 ```
 
-`qa-agent update` refreshes managed files, migrates the execution-contract hash, keeps existing `.qa-agent/runner` data, and resolves the global/npm Runner. Unsupported older versions must be backed up and initialized again.
+`qa-agent update` refreshes managed files only for an already initialized v0.3.95 project and resolves the global/npm Runner. Unsupported older versions must be backed up and initialized again.
 
 ## Validate a project
 
@@ -474,7 +481,7 @@ npm run pack:check
 
 ## Four Skills
 
-v0.3.93 installs:
+v0.3.95 installs:
 
 ```text
 qa-agent

@@ -211,6 +211,8 @@ function normalizedFlow(task: TestTask, run: TestRun, scenarioIds: string[], ste
       id: step.id,
       scenarioId: step.scenarioId,
       action: step.uiAction,
+      driverCommand: step.driverCommand,
+      driverParams: step.driverParams ?? {},
       locator: step.actualLocator ?? step.locator,
       inputRefs: step.inputRefs ?? {},
       expectedState: step.expectedState,
@@ -238,6 +240,7 @@ export function inspectPythonRegressionEligibility(task: TestTask, run: TestRun)
     return ['passed', 'adapted'].includes(run.scenarioResults.find(item => item.scenarioId === scenario.id)?.status ?? '');
   });
   const targetActions = new Set(['navigate', 'click', 'input', 'fill']);
+  const platform = run.context.platform;
   const allSteps: TestRun['steps'] = [];
   for (const scenario of selectedScenarios) {
     const reasons: string[] = [];
@@ -245,8 +248,11 @@ export function inspectPythonRegressionEligibility(task: TestTask, run: TestRun)
     if (!steps.length) reasons.push('No host-automated UI steps were recorded for this successful Scenario.');
     for (const step of steps) {
       if (!step.uiAction) reasons.push(`${step.id}: uiAction is required for regression step generation.`);
-      if (step.uiAction && targetActions.has(step.uiAction) && !(step.actualLocator ?? step.locator)) reasons.push(`${step.id}: ${step.uiAction} requires a stable locator.`);
-      if ((step.uiAction === 'input' || step.uiAction === 'fill') && !Object.keys(step.inputRefs ?? {}).length) reasons.push(`${step.id}: input actions require structured inputRefs.`);
+      const command = step.driverCommand ?? '';
+      const nativeFocusedAction = platform === 'ios' && ['type-text', 'key', 'clear'].includes(command);
+      if (step.uiAction && targetActions.has(step.uiAction) && !(step.actualLocator ?? step.locator) && !nativeFocusedAction) reasons.push(`${step.id}: ${step.uiAction} requires a stable locator.`);
+      const requiresInputRef = (step.uiAction === 'input' || step.uiAction === 'fill') && !['key', 'clear'].includes(command);
+      if (requiresInputRef && !Object.keys(step.inputRefs ?? {}).length) reasons.push(`${step.id}: input actions require structured inputRefs.`);
       if (!step.screenshotPath) reasons.push(`${step.id}: every source UI step requires screenshot evidence.`);
     }
     for (const assertion of scenario.visualAssertions ?? []) {

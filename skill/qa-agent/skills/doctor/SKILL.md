@@ -19,7 +19,7 @@ Use this Skill to prepare the project and Agent host before ordinary QA or forma
 5. Give one concrete next step at a time. Use the install hints and setup commands returned by Doctor, but do not install Python packages, browsers, idb, third-party tools, or system permissions automatically. Ask the user to apply the step when it changes external state.
 6. Rerun `qa-agent doctor` after each repair. Do not declare the environment ready from a single installed-tool check; verify the Runner, required capabilities, permission state, and selected platform readiness together.
 7. If a Task is configured for Web but the user needs iOS, stop the current execution path, run `qa-agent doctor --platforms ios`, reapply the iOS PlanDraft, and return to the main `qa-agent` Skill for the normal review and start confirmations. Never call iOS MCP or direct simulator tools to bridge the mismatch.
-8. When required checks pass, hand off to the main `qa-agent` Skill for Task planning. Load `qa-agent-regression-test` only when the user has approved JSON steps to replay.
+8. When required checks pass, hand off to the main `qa-agent` Skill for Task planning. After the detailed TestPlan is generated, ask the QA to declare Web or iOS Simulator in `PlanDraft.platformDeclaration`, reapply the matching PlanDraft, and only then continue to plan review. Load `qa-agent-regression-test` only when the user has approved JSON steps to replay.
 
 ## Replay boundary
 

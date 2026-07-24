@@ -36,6 +36,7 @@ function importHost(root: string, capabilities = ['browser.interact', 'browser.i
 function approve(task: TestTask): TestTask {
   task.metadata.status = 'ready';
   const confirmedAt = new Date().toISOString();
+  task.requirements!.platformDeclaration = { platform: (task.scope.platforms[0] ?? 'web') as 'web' | 'ios', statement: `本次测试平台：${task.scope.platforms[0] === 'ios' ? 'iOS Simulator' : 'Web'}`, declaredBy: 'project-owner', declaredAt: confirmedAt };
   const planHash = testPlanHash(task);
   task.metadata.planReview = { confirmedBy: 'project-owner', confirmedAt, confirmationSource: 'external-review-record', statement: '确认测试方案', planHash };
   task.metadata.approval = { confirmedBy: 'project-owner', confirmedAt, confirmationSource: 'external-review-record', statement: '确认开始测试', planHash };
@@ -45,7 +46,7 @@ function approveThroughCli(root: string, moduleId: string, taskId: string): void
   run(root, 'plan', 'review', '--module', moduleId, '--task', taskId, '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '确认测试方案');
   run(root, 'review', '--module', moduleId, '--task', taskId, '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '确认开始测试');
 }
-function applyDetailedPlan(root: string, task: TestTask, options: { userQuestions?: string[]; confirmedDecisions?: string[]; platforms?: string[] } = {}): TestTask {
+function applyDetailedPlan(root: string, task: TestTask, options: { userQuestions?: string[]; confirmedDecisions?: string[]; platforms?: string[]; declarePlatform?: boolean } = {}): TestTask {
   const approvalWasCurrent = approvalIsCurrent(task);
   const scenario = task.scenarios[0]!;
   const planPath = join(root, `plan-${task.metadata.moduleId}-${task.metadata.id}.json`);
@@ -57,6 +58,7 @@ function applyDetailedPlan(root: string, task: TestTask, options: { userQuestion
     description: task.description,
     objectives: task.objectives,
     scope: { ...task.scope, platforms: options.platforms ?? task.scope.platforms },
+    platformDeclaration: options.declarePlatform === false ? undefined : { platform: (options.platforms?.[0] ?? task.scope.platforms[0] ?? 'web'), statement: `本次测试平台：${(options.platforms?.[0] ?? task.scope.platforms[0]) === 'ios' ? 'iOS Simulator' : 'Web'}`, declaredBy: 'qa-user' },
     preconditions: task.preconditions,
     userQuestions: options.userQuestions ?? [],
     confirmedDecisions: options.confirmedDecisions ?? [],
@@ -175,10 +177,10 @@ function strictTaskWithRun(root: string, moduleId: string, taskId: string, risk:
   return { task: readTask(root, moduleId, taskId), run: completed };
 }
 
-test('initializes v0.3.93 with the bundled Runner and exposes simplified help', () => {
+test('initializes v0.3.95 with the bundled Runner and exposes simplified help', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-init-'));
   run(root, 'init', '--id', 'fixture');
-  assert.equal(run(root, '--version').trim(), '0.3.93');
+  assert.equal(run(root, '--version').trim(), '0.3.95');
   const help = run(root, 'help');
   for (const commandName of ['init', 'check', 'continue', 'finish', 'doctor', 'update']) assert.match(help, new RegExp(commandName));
   assert.doesNotMatch(help, /operation plan|operation replay/i);
@@ -199,7 +201,7 @@ test('initializes v0.3.93 with the bundled Runner and exposes simplified help', 
   assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'regression-suite.schema.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'skills', 'built-in', 'operation-replay.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'runner')), false);
-  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.93');
+  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.95');
   assert.equal(validateProject(root).valid, true);
 });
 
@@ -307,6 +309,25 @@ test('PlanDraft requires explicit detailed steps before review', () => {
   assert.match(rejected.stderr, /requires explicit detailed steps/i);
   assert.equal(readTask(root, 'catalog', 'product-state').metadata.status, 'planning');
   assert.equal(readTask(root, 'catalog', 'product-state').sourceRunRef, undefined);
+});
+
+test('requires an explicit platform declaration after the detailed plan is generated', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-platform-declaration-'));
+  run(root, 'init', '--id', 'platform-declaration');
+  run(root, 'start', '--request', '验证商品详情', '--module', 'catalog', '--task', 'product-detail');
+  let task = readTask(root, 'catalog', 'product-detail');
+  task = applyDetailedPlan(root, task, { declarePlatform: false });
+  const workflow = json(root, 'workflow', 'status', '--module', 'catalog', '--task', 'product-detail');
+  assert.equal(workflow.reasonCode, 'platform_declaration_required');
+  assert.equal(workflow.gates.find((gate: any) => gate.id === 'platform_declared')?.status, 'blocking');
+  assert.match(workflow.nextActions[0].description, /Web 或 iOS Simulator/);
+  const rejected = command(root, 'plan', 'review', '--module', 'catalog', '--task', 'product-detail', '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '确认测试方案');
+  assert.notEqual(rejected.status, 0);
+  assert.match(rejected.stderr, /平台.*Web.*iOS|platform/i);
+  task = applyDetailedPlan(root, task, { platforms: ['ios'] });
+  assert.deepEqual(task.scope.platforms, ['ios']);
+  assert.equal(task.requirements?.platformDeclaration?.platform, 'ios');
+  assert.equal(json(root, 'workflow', 'status', '--module', 'catalog', '--task', 'product-detail').reasonCode, 'test_plan_requirements_confirmation_required');
 });
 
 test('Task requires QA PRD confirmation and separate start authorization before real execution', () => {

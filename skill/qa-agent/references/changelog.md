@@ -1,5 +1,18 @@
 # 更新日志
 
+## v0.3.95
+
+- 验证 iOS 统一 Runner 在 iPhone 17 Pro Max Simulator 上完成搜索、输入、清空、键盘、滚动、语义点击和详情页断言。
+- 修复 iOS `assert-text`、locator 复合 `AXLabel` 匹配、动态尺寸滚动和失败后回归步骤停止执行。
+- 新增 [`ios-search-bvl.steps.json`](../../../ios-search-bvl.steps.json) 作为可直接回放的 `com.rechic.apps` 搜索到商品详情示例，并同步 CLI、回归 Runner 契约文档。
+
+## v0.3.94
+
+- 生成详细测试计划后，要求 QA 明确声明本次测试平台为 Web 或 iOS Simulator。
+- 平台声明写入 `PlanDraft.platformDeclaration` 和 Task Requirements；未声明时工作流、方案复审和 Quick/Guided 执行均阻塞。
+- 平台切换必须重新应用包含新平台声明的 PlanDraft，并继续执行 Doctor、方案确认和开始确认流程。
+- 不迁移旧 Runtime 资产；0.3.94 使用全新初始化，Runner 通过全局/npm 包解析。旧版本需备份后重新 `qa-agent init`。
+
 ## v0.3.93
 
 - 锁定 Web/iOS Simulator 的内置 Runner，移除 MCP 作为 UI 执行路径。

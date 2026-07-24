@@ -3,6 +3,19 @@ import { type DriverResult, initDriver, isDriverAlive, ensureDriver, sendCommand
 import { recordAgentStep } from './engine.ts';
 import { readRunById, taskSourceRunDirectory } from './project.ts';
 import type { Locator, TestRun, UiAction } from './types.ts';
+import { isSupportedPlatform } from './platform.ts';
+
+const PLATFORM_COMMANDS: Record<'web' | 'ios', Set<string>> = {
+  web: new Set(['navigate', 'click', 'fill', 'select', 'assert-text', 'assert-visible', 'wait', 'screenshot', 'scroll', 'hover', 'key']),
+  ios: new Set(['launch', 'terminate', 'install', 'tap', 'type-text', 'fill', 'clear', 'swipe', 'scroll', 'back', 'home', 'assert-visible', 'assert-text', 'assert-value', 'wait', 'screenshot', 'describe', 'key']),
+};
+
+function platformCommandError(platform: 'web' | 'ios', command: string): string | undefined {
+  if (PLATFORM_COMMANDS[platform].has(command)) return undefined;
+  const supported = [...PLATFORM_COMMANDS[platform]].join(', ');
+  const otherPlatform = platform === 'web' ? 'ios' : 'web';
+  return `Command ${command} is not available for the ${platform} Runner. Current Run platform is ${platform}; use one of: ${supported}. If the Task should run on ${otherPlatform}, stop and run qa-agent doctor --platforms ${otherPlatform}, reapply the PlanDraft with the correct platform, and start a new approved Run. Do not call MCP or any direct UI tool.`;
+}
 
 /**
  * Parse a locator string like "role=button:登录" into { strategy: "role", value: "button:登录" }.
@@ -16,7 +29,7 @@ export function parseLocator(raw: string): Locator {
   }
   const strategy = raw.slice(0, separatorIndex) as Locator['strategy'];
   const value = raw.slice(separatorIndex + 1);
-  const validStrategies = ['css', 'xpath', 'text', 'test-id', 'role', 'label', 'placeholder', 'accessibility', 'coordinate'];
+  const validStrategies = ['css', 'xpath', 'text', 'test-id', 'role', 'label', 'placeholder', 'accessibility', 'coordinate', 'type', 'value'];
   if (!validStrategies.includes(strategy)) {
     // Not a known strategy, treat entire string as css selector
     return { strategy: 'css', value: raw };
@@ -32,13 +45,15 @@ const CMD_TO_UI_ACTION: Record<string, UiAction> = {
   select: 'input',
   'assert-text': 'assert',
   'assert-visible': 'assert',
+  'assert-value': 'assert',
   tap: 'click',
   'type-text': 'input',
+  clear: 'input',
   swipe: 'swipe',
+  scroll: 'swipe',
   launch: 'launch',
   wait: 'wait',
   screenshot: 'screenshot',
-  scroll: 'swipe',
   hover: 'click',
   home: 'back',
   back: 'back',
@@ -64,7 +79,10 @@ export interface ActOptions {
   ms?: string;
   name?: string;
   bundleId?: string;
+  appPath?: string;
   keycode?: string;
+  maxChars?: string;
+  exact?: string;
   scenario?: string;
   platform?: string;
   deviceUdid?: string;
@@ -77,7 +95,12 @@ export async function executeAct(root: string, command: string, options: ActOpti
   const run = readRunById(root, options.run);
   if (run.status !== 'running') throw new Error(`Run ${run.id} is not running (status: ${run.status}). Cannot execute act commands.`);
 
-  const platform = (options.platform ?? run.context?.platform ?? 'web') as 'web' | 'ios';
+  const requestedPlatform = options.platform ?? run.context?.platform ?? 'web';
+  if (!isSupportedPlatform(requestedPlatform)) return { ok: false, blocked: true, command, runId: run.id, error: `Unsupported act platform ${requestedPlatform}. QA Agent supports only Web and iOS Simulator. Run qa-agent doctor --platforms web or ios. Do not call MCP or any direct UI tool.` };
+  if (options.platform && options.platform !== run.context.platform) return { ok: false, blocked: true, command, runId: run.id, error: `Act platform ${options.platform} does not match Run platform ${run.context.platform}. Stop and reapply the correct PlanDraft after running qa-agent doctor --platforms ${options.platform}. Do not call MCP or any direct UI tool.` };
+  const platform = requestedPlatform;
+  const commandError = platformCommandError(platform, command);
+  if (commandError) return { ok: false, blocked: true, platform, command, runId: run.id, error: commandError, next: `qa-agent doctor --platforms ${platform}` };
 
   // Build driver command
   const driverCmd = buildDriverCommand(command, options);
@@ -103,6 +126,8 @@ export async function executeAct(root: string, command: string, options: ActOpti
 
   // Build locator for step recording
   const locator = options.locator ? parseLocator(options.locator) : undefined;
+  const actualLocator = result.resolvedLocator ? parseLocator(`${result.resolvedLocator.strategy}=${result.resolvedLocator.value ?? ''}`) : undefined;
+  const actualText = formatDriverActual(result.actual);
 
   // Determine action description
   const actionDescription = buildActionDescription(command, options, result);
@@ -112,15 +137,18 @@ export async function executeAct(root: string, command: string, options: ActOpti
   const updated = recordAgentStep(root, run.id, {
     action: actionDescription,
     uiAction,
-    detail: result.actual ?? actionDescription,
+    detail: actualText || actionDescription,
     screenshotPath,
     status: 'passed',
     visualInspection: 'not-required',
     executionMode: 'host-automated',
     scenarioId: options.scenario,
     locator,
-    actualState: result.actual,
+    actualLocator,
+    actualState: actualText || undefined,
     inputRefs: options.inputRef ? { value: `env:${options.inputRef}` } : undefined,
+    driverCommand: command,
+    driverParams: recordedDriverParams(command, driverCmd),
   });
 
   return {
@@ -130,40 +158,64 @@ export async function executeAct(root: string, command: string, options: ActOpti
     stepId: result.stepId,
     screenshot: result.screenshot,
     actual: result.actual,
+    resolvedLocator: result.resolvedLocator,
     stepsRecorded: updated.steps.length,
   };
 }
 
 function buildDriverCommand(command: string, options: ActOptions): Record<string, unknown> {
-  const cmd: Record<string, unknown> = { cmd: command.replace(/-/g, '_') };
+  const params: Record<string, unknown> = {};
 
   // Map CLI command names to driver command names
   const cmdNameMap: Record<string, string> = {
     'assert-text': 'assert_text',
     'assert-visible': 'assert_visible',
     'type-text': 'type_text',
+    key: 'key',
   };
-  cmd.cmd = cmdNameMap[command] ?? command;
+  const driverName = cmdNameMap[command] ?? command;
 
-  if (options.locator) cmd.locator = parseLocator(options.locator);
-  if (options.url) cmd.url = options.url;
-  if (options.inputRef) cmd.inputRef = options.inputRef;
-  if (options.value) cmd.value = options.value;
-  if (options.expected) cmd.expected = options.expected;
-  if (options.text) cmd.text = options.text;
-  if (options.x) cmd.x = parseInt(options.x, 10);
-  if (options.y) cmd.y = parseInt(options.y, 10);
-  if (options.x1) cmd.x1 = parseInt(options.x1, 10);
-  if (options.y1) cmd.y1 = parseInt(options.y1, 10);
-  if (options.x2) cmd.x2 = parseInt(options.x2, 10);
-  if (options.y2) cmd.y2 = parseInt(options.y2, 10);
-  if (options.direction) cmd.direction = options.direction;
-  if (options.ms) cmd.ms = parseInt(options.ms, 10);
-  if (options.name) cmd.name = options.name;
-  if (options.bundleId) cmd.bundleId = options.bundleId;
-  if (options.keycode) cmd.keycode = options.keycode;
+  if (options.locator) params.locator = parseLocator(options.locator);
+  if (options.url) params.url = options.url;
+  if (options.inputRef) params.inputRef = options.inputRef;
+  if (options.value) params.value = options.value;
+  if (options.expected !== undefined) params.expected = options.expected;
+  if (options.text) params.text = options.text;
+  if (options.x) params.x = parseInt(options.x, 10);
+  if (options.y) params.y = parseInt(options.y, 10);
+  if (options.x1) params.x1 = parseInt(options.x1, 10);
+  if (options.y1) params.y1 = parseInt(options.y1, 10);
+  if (options.x2) params.x2 = parseInt(options.x2, 10);
+  if (options.y2) params.y2 = parseInt(options.y2, 10);
+  if (options.direction) params.direction = options.direction;
+  if (options.ms) params.ms = parseInt(options.ms, 10);
+  if (options.name) params.name = options.name;
+  if (options.bundleId) params.bundleId = options.bundleId;
+  if (options.appPath) params.appPath = options.appPath;
+  if (options.maxChars) params.maxChars = parseInt(options.maxChars, 10);
+  if (options.exact !== undefined) params.exact = options.exact !== 'false';
+  if (options.keycode) {
+    params.keycode = options.keycode;
+    params.key = options.keycode;
+  }
 
-  return cmd;
+  return { cmd: driverName, params };
+}
+
+function formatDriverActual(actual: unknown): string {
+  if (actual === undefined || actual === null) return '';
+  if (typeof actual === 'string') return actual;
+  try { return JSON.stringify(actual); } catch { return String(actual); }
+}
+
+function recordedDriverParams(command: string, driverCommand: Record<string, unknown>): Record<string, unknown> {
+  const params = { ...((driverCommand.params ?? {}) as Record<string, unknown>) };
+  // Never persist direct input values. Replayable input must use inputRef.
+  if ((command === 'type-text' || command === 'fill') && !params.inputRef) {
+    delete params.text;
+    delete params.value;
+  }
+  return params;
 }
 
 function buildActionDescription(command: string, options: ActOptions, result: DriverResult): string {
@@ -186,7 +238,7 @@ function buildActionDescription(command: string, options: ActOptions, result: Dr
     case 'back': return 'Navigate back';
     case 'describe': return 'Describe screen elements';
     case 'key': return `Press key ${options.keycode}`;
-    default: return `${command}: ${result.actual ?? ''}`;
+    default: return `${command}: ${formatDriverActual(result.actual)}`;
   }
 }
 

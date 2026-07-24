@@ -1,3 +1,5 @@
+import type { SupportedPlatform } from './platform.ts';
+
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
 export type TaskLifecycleState = 'draft' | 'planning' | 'awaiting_approval' | 'ready' | 'running' | 'reviewing_result' | 'completed' | 'archived' | 'blocked' | 'paused' | 'retired';
 export type RunStatus = 'pending' | 'running' | 'passed' | 'failed' | 'blocked' | 'paused' | 'inconclusive' | 'not_applicable' | 'adapted';
@@ -317,9 +319,17 @@ export interface TestRequirements {
   risks: string[];
   userQuestions: string[];
   confirmedDecisions: string[];
+  platformDeclaration?: PlatformDeclaration;
   requirementTrace?: RequirementTrace[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface PlatformDeclaration {
+  platform: SupportedPlatform;
+  statement: string;
+  declaredBy?: string;
+  declaredAt: string;
 }
 
 export interface TestPlan {
@@ -472,6 +482,11 @@ export interface PlanDraft {
     roles?: string[];
     included?: string[];
     excluded?: string[];
+  };
+  platformDeclaration?: {
+    platform: string;
+    statement?: string;
+    declaredBy?: string;
   };
   preconditions?: string[];
   testDataRefs?: string[];
@@ -691,7 +706,7 @@ export interface TestRun {
   safeMode: boolean;
   mode: 'explore';
   guidedPending?: GuidedPendingInteraction;
-  steps: Array<{ id: string; plannedStepId?: string; action: string; uiAction?: UiAction; safetyAction?: string; status: RunStatus; detail: string; at: string; scenarioId?: string; screenshotPath?: string; visualInspection?: VisualInspectionStatus; source?: 'ui' | 'internal' | 'recovery'; executionMode?: StepExecutionMode; locator?: Locator; actualLocator?: Locator; inputRefs?: Record<string, string>; expectedState?: string; actualState?: string; adaptation?: string; humanApproval?: HumanStepApproval; humanVerdict?: { status: RunStatus; confirmedBy: string; confirmationSource?: 'current-chat-explicit-approval' | 'external-review-record'; statement: string; note?: string; confirmedAt: string } }>;
+  steps: Array<{ id: string; plannedStepId?: string; action: string; uiAction?: UiAction; safetyAction?: string; status: RunStatus; detail: string; at: string; scenarioId?: string; screenshotPath?: string; visualInspection?: VisualInspectionStatus; source?: 'ui' | 'internal' | 'recovery'; executionMode?: StepExecutionMode; locator?: Locator; actualLocator?: Locator; inputRefs?: Record<string, string>; driverCommand?: string; driverParams?: Record<string, unknown>; expectedState?: string; actualState?: string; adaptation?: string; humanApproval?: HumanStepApproval; humanVerdict?: { status: RunStatus; confirmedBy: string; confirmationSource?: 'current-chat-explicit-approval' | 'external-review-record'; statement: string; note?: string; confirmedAt: string } }>;
   scenarioResults: Array<{ scenarioId: string; status: RunStatus; detail?: string }>;
   evidence: Array<{ type: string; path?: string; summary: string }>;
   conclusion?: string;

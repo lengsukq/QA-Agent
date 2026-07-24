@@ -42,6 +42,9 @@ const UI_ACTION_TO_CMD: Record<string, string> = {
  * Map a single source Run step to a regression step entry (cmd + params).
  */
 export function stepToRegressionEntry(step: TestRun['steps'][number]): RegressionStepEntry {
+  if (step.driverCommand) {
+    return { id: step.id, cmd: step.driverCommand, params: { ...(step.driverParams ?? {}) } };
+  }
   const cmd = UI_ACTION_TO_CMD[step.uiAction ?? ''] ?? step.uiAction ?? 'assert_visible';
   return { id: step.id, cmd, params: buildStepParams(step, cmd) };
 }
@@ -86,8 +89,10 @@ export function exportStepsFromRun(root: string, run: TestRun, id?: string, sour
     if (finding.status === 'passed') {
       cleanup.push({
         id: `cleanup-${i + 1}`,
-        cmd: 'click', // Default cleanup action
-        params: { detail: finding.cleanup },
+        // Cleanup findings are descriptive until a concrete UI command is
+        // recorded. Never invent a destructive click for a native app.
+        cmd: 'wait',
+        params: { ms: 0, detail: finding.cleanup },
       });
     }
   }

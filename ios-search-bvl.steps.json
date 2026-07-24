@@ -1,0 +1,197 @@
+{
+  "apiVersion": "qa-agent/regression-steps/v1",
+  "id": "ios-search-bvl-product-detail",
+  "platform": "ios",
+  "sourceRunId": "manual-validation",
+  "deviceUdid": "76BAE6E0-4937-4718-A701-A28F37D85FD2",
+  "steps": [
+    {
+      "id": "terminate-before-launch",
+      "cmd": "terminate",
+      "params": {
+        "bundleId": "com.rechic.apps"
+      }
+    },
+    {
+      "id": "launch",
+      "cmd": "launch",
+      "params": {
+        "bundleId": "com.rechic.apps",
+        "timeout": 30
+      }
+    },
+    {
+      "id": "back-to-home",
+      "cmd": "back",
+      "params": {}
+    },
+    {
+      "id": "wait-home",
+      "cmd": "wait",
+      "params": {
+        "locator": {
+          "strategy": "text",
+          "value": "Explore by Category"
+        },
+        "timeout": 30
+      }
+    },
+    {
+      "id": "focus-search",
+      "cmd": "tap",
+      "params": {
+        "locator": {
+          "strategy": "type",
+          "value": "TextField"
+        }
+      }
+    },
+    {
+      "id": "clear-search",
+      "cmd": "clear",
+      "params": {
+        "locator": {
+          "strategy": "type",
+          "value": "TextField"
+        },
+        "maxChars": 32
+      }
+    },
+    {
+      "id": "fill-bvl",
+      "cmd": "fill",
+      "params": {
+        "locator": {
+          "strategy": "type",
+          "value": "TextField"
+        },
+        "value": "bvl",
+        "maxChars": 32
+      }
+    },
+    {
+      "id": "assert-input",
+      "cmd": "assert-value",
+      "params": {
+        "locator": {
+          "strategy": "type",
+          "value": "TextField"
+        },
+        "expected": "bvl"
+      }
+    },
+    {
+      "id": "submit-search",
+      "cmd": "key",
+      "params": {
+        "key": "return"
+      }
+    },
+    {
+      "id": "wait-result",
+      "cmd": "wait",
+      "params": {
+        "locator": {
+          "strategy": "text",
+          "value": "Bvlgari"
+        },
+        "timeout": 30
+      }
+    },
+    {
+      "id": "assert-result",
+      "cmd": "assert-text",
+      "params": {
+        "locator": {
+          "strategy": "text",
+          "value": "Bvlgari"
+        },
+        "expected": "Bvlgari"
+      }
+    },
+    {
+      "id": "open-product-detail",
+      "cmd": "tap",
+      "params": {
+        "locator": {
+          "strategy": "text",
+          "value": "Bvlgari"
+        }
+      }
+    },
+    {
+      "id": "wait-product-detail",
+      "cmd": "wait",
+      "params": {
+        "locator": {
+          "strategy": "text",
+          "value": "ITEM DETAILS"
+        },
+        "timeout": 30
+      }
+    },
+    {
+      "id": "describe-product-detail",
+      "cmd": "describe",
+      "params": {}
+    },
+    {
+      "id": "assert-detail-brand",
+      "cmd": "assert-text",
+      "params": {
+        "locator": {
+          "strategy": "text",
+          "value": "Bvlgari"
+        },
+        "expected": "Bvlgari"
+      }
+    },
+    {
+      "id": "assert-detail-name",
+      "cmd": "assert-text",
+      "params": {
+        "locator": {
+          "strategy": "text",
+          "value": "Aviator Sunglasses"
+        },
+        "expected": "Aviator Sunglasses"
+      }
+    },
+    {
+      "id": "scroll-detail",
+      "cmd": "scroll",
+      "params": {
+        "direction": "up"
+      }
+    },
+    {
+      "id": "wait-detail-after-scroll",
+      "cmd": "wait",
+      "params": {
+        "locator": {
+          "strategy": "text",
+          "value": "ITEM DETAILS"
+        },
+        "timeout": 30
+      }
+    },
+    {
+      "id": "assert-detail-price",
+      "cmd": "assert-text",
+      "params": {
+        "locator": {
+          "strategy": "text",
+          "value": "4,000"
+        },
+        "expected": "4,000"
+      }
+    }
+  ],
+  "cleanup": [
+    {
+      "id": "return-home",
+      "cmd": "back",
+      "params": {}
+    }
+  ]
+}

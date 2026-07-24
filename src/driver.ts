@@ -9,11 +9,13 @@ import type { TestRun } from './types.ts';
 export interface DriverResult {
   ok: boolean;
   screenshot?: string;
-  actual?: string;
+  actual?: unknown;
   error?: string;
   stepId?: string;
   ready?: boolean;
   platform?: string;
+  udid?: string;
+  resolvedLocator?: { strategy: string; value?: string };
 }
 
 interface DriverHandle {

@@ -157,6 +157,7 @@ function beginAgentGuidedRunUnlocked(root: string, task: TestTask, context: RunC
   if (current) resetSourceRunSlot(root, task, current);
   const taskState = resolveTaskState(task.metadata.status);
   if (['archived', 'retired'].includes(taskState)) throw new Error(`Task ${task.metadata.id} is ${taskState} and cannot start a new Run.`);
+  if (!task.requirements?.platformDeclaration) throw new Error('The TestPlan has no explicit platform declaration. Ask the QA to choose Web or iOS Simulator, reapply the PlanDraft with platformDeclaration, then repeat the normal confirmations. Run qa-agent doctor --platforms <web|ios> if the selected environment is uncertain.');
   if (!['ready', 'reviewing_result', 'completed', 'blocked', 'paused'].includes(taskState)) throw new Error(`Task status is ${task.metadata.status}; present the Task PRD, obtain “确认测试方案”, and then obtain the separate “确认开始测试” authorization before creating a Run.`);
   if (!executionContractIsCurrent(task)) throw new Error('The Task plan is unapproved or changed after approval. Present the current Task PRD, obtain the exact QA reply “确认测试方案”, and then obtain the separate “确认开始测试” authorization before creating a Run.');
   const run = newRun(root, task, context);
@@ -237,7 +238,7 @@ export function recordGuidedVerdict(root: string, runId: string, input: { stepId
   return run;
 }
 
-export function recordAgentStep(root: string, runId: string, input: { action: string; plannedStepId?: string; uiAction?: UiAction; safetyAction?: string; detail: string; status?: RunStatus; screenshotPath?: string; visualInspection?: VisualInspectionStatus; source?: TestRun['steps'][number]['source']; executionMode?: StepExecutionMode; scenarioId?: string; locator?: Locator; actualLocator?: Locator; inputRefs?: Record<string, string>; expectedState?: string; actualState?: string; adaptation?: string }): TestRun {
+export function recordAgentStep(root: string, runId: string, input: { action: string; plannedStepId?: string; uiAction?: UiAction; safetyAction?: string; detail: string; status?: RunStatus; screenshotPath?: string; visualInspection?: VisualInspectionStatus; source?: TestRun['steps'][number]['source']; executionMode?: StepExecutionMode; scenarioId?: string; locator?: Locator; actualLocator?: Locator; inputRefs?: Record<string, string>; driverCommand?: string; driverParams?: Record<string, unknown>; expectedState?: string; actualState?: string; adaptation?: string }): TestRun {
   const run = readRunById(root, runId);
   if (run.status !== 'running') throw new Error(`Run ${runId} is not running.`);
   const task = readTask(root, run.moduleId, run.taskId);
@@ -277,6 +278,8 @@ export function recordAgentStep(root: string, runId: string, input: { action: st
     locator: input.locator,
     actualLocator: input.actualLocator,
     inputRefs: input.inputRefs,
+    driverCommand: input.driverCommand,
+    driverParams: input.driverParams,
     expectedState: input.expectedState ?? guidedApproval?.expected,
     actualState: input.actualState,
     adaptation: input.adaptation,

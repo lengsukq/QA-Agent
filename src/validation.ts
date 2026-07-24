@@ -11,6 +11,7 @@ import { taskState as resolveTaskState } from './workflow-model.ts';
 import { inspectPythonRegressionEligibility } from './python-regression.ts';
 import { inspectManagedRuntimeAssets } from './managed-assets.ts';
 import { planningPrdIsCurrent } from './task-prd.ts';
+import { isSupportedPlatform } from './platform.ts';
 
 export interface ValidationResult { valid: boolean; errors: string[]; checked: number }
 function textHash(value: string): string { return createHash('sha256').update(value).digest('hex'); }
@@ -43,6 +44,7 @@ function validateDomainObject(path: string): string[] {
   }
   if (path.endsWith('/module-snapshot.json') && (value.apiVersion !== 'qa-agent/v2' || value.kind !== 'ModuleSnapshot' || !isSafeId(value.moduleId) || typeof value.snapshotHash !== 'string')) errors.push(`${path}: invalid module snapshot.`);
   if (path.endsWith('/requirements.json') && (value.apiVersion !== 'qa-agent/v2' || value.kind !== 'TestRequirements' || !isSafeId(value.taskId) || !isSafeId(value.moduleId))) errors.push(`${path}: invalid requirements.`);
+  if (path.endsWith('/requirements.json') && value.platformDeclaration && (!isSupportedPlatform(value.platformDeclaration.platform) || typeof value.platformDeclaration.statement !== 'string' || !value.platformDeclaration.statement.trim() || typeof value.platformDeclaration.declaredAt !== 'string')) errors.push(`${path}: invalid platformDeclaration; choose Web or iOS Simulator and record a non-empty statement.`);
   if (/\/memory\/[^/]+\.json$/.test(path) || /\/shared-memory\/entries\/[^/]+\.json$/.test(path)) { if (!isSafeId(value.id) || !['candidate', 'active', 'superseded', 'deprecated'].includes(value.status)) errors.push(`${path}: invalid memory.`); if (hasSecrets({ content: value.content, structuredRule: value.structuredRule })) errors.push(`${path}: contains a potential secret.`); }
   if (/\/tasks\/[^/]+\/source-run\/run\.json$/.test(path)) {
     if (!['pending', 'running', 'passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable', 'adapted'].includes(value.status)) errors.push(`${path}: invalid Source Run status.`);
@@ -206,7 +208,7 @@ export function validateSkill(skillRoot: string): ValidationResult {
   const workflowPath = join(skillRoot, 'references', 'workflow.md'); const runnerPath = join(skillRoot, 'references', 'regression-runner.md'); const recommendedStackPath = join(skillRoot, 'references', 'recommended-regression-stack.md');
   for (const file of [workflowPath, runnerPath, recommendedStackPath]) if (!existsSync(file)) errors.push(`${file}: not found`);
   for (const phase of ['doctor', 'guided', 'regression-test']) { const phasePath = join(skillRoot, 'skills', phase, 'SKILL.md'); if (!existsSync(phasePath)) { errors.push(`${phasePath}: not found`); continue; } const phaseText = readFileSync(phasePath, 'utf8'); if (!new RegExp(`^---\\nname: qa-agent-${phase}\\ndescription: .+\\n---\\n`, 's').test(phaseText)) errors.push(`${phasePath}: invalid frontmatter.`); if (!text.includes(`qa-agent-${phase}`)) errors.push(`SKILL.md: route qa-agent-${phase} is missing.`); if (phase === 'doctor' && (!phaseText.includes('qa-agent doctor') || !phaseText.includes('unified Runner') || !phaseText.includes('do not install'))) errors.push(`${phasePath}: Doctor must guide readiness without automatic dependency installation.`); if (phase === 'regression-test' && (!phaseText.includes('qa-agent regression run') || !phaseText.includes('qa_agent_runner replay') || /qa-agent regression (?:draft|publish)/.test(phaseText))) errors.push(`${phasePath}: regression-test must only run formal regression scripts.`); }
-  if (!/Only Web and iOS Simulator are supported/.test(text) || !/Never use MCP as a bridge/.test(text)) errors.push('SKILL.md: built-in Web/iOS Runner and platform-mismatch boundary is missing.');
+  if (!(/Only Web and iOS Simulator are supported|Web\/iOS only/.test(text)) || !/Never use MCP as a bridge/.test(text)) errors.push('SKILL.md: built-in Web/iOS Runner and platform-mismatch boundary is missing.');
   const doctorText = existsSync(join(skillRoot, 'skills', 'doctor', 'SKILL.md')) ? readFileSync(join(skillRoot, 'skills', 'doctor', 'SKILL.md'), 'utf8') : '';
   if (doctorText && (!doctorText.includes('qa-agent doctor --platforms') || !doctorText.includes('reapply') || !/do not install/i.test(doctorText) || !/Never call iOS MCP|Do not use MCP/i.test(doctorText))) errors.push(`${join(skillRoot, 'skills', 'doctor', 'SKILL.md')}: Doctor platform recovery contract is incomplete.`);
   const recommendedStackText = existsSync(recommendedStackPath) ? readFileSync(recommendedStackPath, 'utf8') : '';

@@ -17,9 +17,10 @@ Guided UI execution is limited to Web and iOS Simulator through `qa-agent act` a
 2. Inspect relevant source, routes, configuration, tests, existing QA assets, and available tools.
 3. Generate a complete PlanDraft and apply it with `qa-agent plan apply`.
 4. Present the complete Runtime-written Task PRD and include its clickable `userFacingArtifacts[].markdownLink` in the same reply. Do not show only a plain path.
-5. If the PRD contains `userQuestions`, ask the QA one concrete question at a time. Add answers to `confirmedDecisions`, clear resolved questions, and apply the updated PlanDraft again.
-6. Ask whether the PRD matches the requested behavior. Only the exact reply `确认测试方案` may be persisted through `qa-agent plan review`.
-7. Separately wait for the exact reply `确认开始测试`, persist it through `qa-agent review`, and only then call `qa-agent test`.
+5. Ask the QA to declare exactly one platform after the plan is generated: Web or iOS Simulator. Persist `web` or `ios` in `PlanDraft.platformDeclaration.platform`, keep the matching single `scope.platforms` entry, and apply the updated PlanDraft again.
+6. If the PRD contains `userQuestions`, ask the QA one concrete question at a time. Add answers to `confirmedDecisions`, clear resolved questions, and apply the updated PlanDraft again.
+7. Ask whether the PRD matches the requested behavior. Only the exact reply `确认测试方案` may be persisted through `qa-agent plan review`.
+8. Separately wait for the exact reply `确认开始测试`, persist it through `qa-agent review`, and only then call `qa-agent test`.
 
 Plan confirmation and start authorization are separate decisions. Never infer either from “可以”, “继续”, “是的”, or similar text unless it is the direct answer to the single Guided action/result question currently being asked and is persisted through the corresponding Guided command.
 

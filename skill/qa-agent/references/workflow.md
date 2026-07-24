@@ -16,11 +16,12 @@ Both Quick and Guided modes use the same planning contract:
 2. Inspect relevant source, routes, configuration, tests, existing QA assets, and tools.
 3. Build and apply a structured PlanDraft. Every Scenario must have ordered `steps`; every step needs an operation and expected result.
 4. Present the complete Runtime-written Task PRD and include its Runtime-provided clickable `userFacingArtifacts[].markdownLink` in the same reply.
-5. Resolve every `userQuestions` entry with the QA. Ask one concrete question at a time, store the answer under `confirmedDecisions`, remove the resolved question, and apply the updated PlanDraft again.
-6. If the Agent has any material uncertainty not yet listed—requirements, environment, role, account, test data, expected behavior, or safety—it must add the question and stop.
-7. Wait for the exact reply `确认测试方案`, then persist it with `qa-agent plan review`. This confirms that the PRD matches the QA requirement; it does not authorize UI execution.
-8. Separately wait for the exact reply `确认开始测试`, then persist it with `qa-agent review`.
-9. Only after both gates may `qa-agent test` create the Task's single Source Run or any UI tool be used.
+5. After the plan is generated, ask the QA to declare exactly one platform: Web or iOS Simulator. Put `web` or `ios` in `PlanDraft.platformDeclaration.platform`, make `scope.platforms` contain the same single platform, and apply the updated PlanDraft again. Never infer this declaration from the project default.
+6. Resolve every `userQuestions` entry with the QA. Ask one concrete question at a time, store the answer under `confirmedDecisions`, remove the resolved question, and apply the updated PlanDraft again.
+7. If the Agent has any material uncertainty not yet listed—requirements, environment, role, account, test data, expected behavior, or safety—it must add the question and stop.
+8. Wait for the exact reply `确认测试方案`, then persist it with `qa-agent plan review`. This confirms that the PRD matches the QA requirement; it does not authorize UI execution.
+9. Separately wait for the exact reply `确认开始测试`, then persist it with `qa-agent review`.
+10. Only after the platform declaration and both gates may `qa-agent test` create the Task's single Source Run or any UI tool be used.
 
 Vague replies such as “可以”, “继续”, or “没问题” do not satisfy either planning gate.
 

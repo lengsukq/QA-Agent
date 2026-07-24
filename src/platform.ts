@@ -1,5 +1,7 @@
 export const SUPPORTED_PLATFORMS = ['web', 'ios'] as const;
 export type SupportedPlatform = typeof SUPPORTED_PLATFORMS[number];
+export const PLATFORM_DECLARATION_PROMPT_ZH = '请明确声明本次测试平台：Web 或 iOS Simulator';
+export const PLATFORM_DECLARATION_PROMPT_EN = 'Explicitly declare the test platform: Web or iOS Simulator.';
 
 export function isSupportedPlatform(platform: string | undefined): platform is SupportedPlatform {
   return Boolean(platform && SUPPORTED_PLATFORMS.includes(platform as SupportedPlatform));
@@ -24,4 +26,8 @@ export function platformMismatchAdvice(configured: string | undefined, requested
   const configuredLabel = configured ?? 'the current Task';
   const requestedLabel = requested ?? 'the requested platform';
   return `Platform mismatch: ${configuredLabel} is configured, but ${requestedLabel} was requested. Stop UI execution, run qa-agent doctor --platforms ${requestedLabel}, reapply the PlanDraft with the correct platform, then run qa-agent test --platform ${requestedLabel}. Do not call MCP, Playwright, xcrun, idb, or any other UI tool directly.`;
+}
+
+export function platformDeclarationAdvice(): string {
+  return `${PLATFORM_DECLARATION_PROMPT_ZH}。将平台声明写入 PlanDraft.platformDeclaration.platform，并让 scope.platforms 只包含同一个平台；未声明前不能确认或执行测试。`;
 }

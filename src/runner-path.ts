@@ -46,7 +46,7 @@ export function resolveRunner(root: string): RunnerResolution {
  * Resolve the runner used by an initialized project.
  *
  * The npm package is authoritative. Existing project copies are retained only
- * as a compatibility fallback for older initialized projects.
+ * as a fallback for local development and explicitly managed project layouts.
  */
 export function projectRunnerDir(root: string): string {
   const resolution = resolveRunner(root);

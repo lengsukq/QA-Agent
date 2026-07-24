@@ -1,6 +1,6 @@
 {
   "name": "qa-agent-skill",
-  "version": "0.3.93",
+  "version": "0.3.95",
   "type": "module",
   "description": "CLI-first local QA Agent with Codex, Cursor, and other host Skill integrations",
   "bin": {

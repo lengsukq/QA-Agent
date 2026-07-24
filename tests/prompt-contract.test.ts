@@ -61,7 +61,7 @@ test('guides first-time users to run Doctor after initialization', () => {
 test('keeps one compact ordinary QA Skill with act commands and regression ownership', () => {
   const main = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
   assert.ok(words(main) < 600, `main Skill is too large: ${words(main)} words`);
-  for (const phrase of ['qa-agent check', 'qa-agent continue', 'qa-agent finish', 'qa-agent-guided', 'qa-agent-regression-test', 'userQuestions', 'confirmedDecisions', 'Task PRD', '确认测试方案', '确认开始测试', 'qa-agent act', 'qa-agent regression publish']) assert.match(main, new RegExp(phrase, 'i'));
+  for (const phrase of ['qa-agent check', 'qa-agent continue', 'qa-agent finish', 'qa-agent-guided', 'qa-agent-regression-test', 'userQuestions', 'confirmedDecisions', 'Task PRD', '确认测试方案', '确认开始测试', 'qa-agent act', 'qa-agent regression publish', 'platformDeclaration']) assert.match(main, new RegExp(phrase, 'i'));
   assert.doesNotMatch(main, /qa-agent-(quick|start|review|test|result|finish|operation|recovery|archive)/);
 });
 
@@ -137,6 +137,7 @@ test('requires Task PRD review and exact start confirmation before UI execution'
   assert.match(cliReference, /fails without creating a Run/i);
   assert.match(readFileSync(join(repository, 'src', 'engine.ts'), 'utf8'), /before creating a Run/);
   assert.match(readFileSync(join(repository, 'src', 'task-prd.ts'), 'utf8'), /\| 步骤 \| 操作 \| 预期结果 \|/);
+  assert.match(main, /declare exactly one platform|platformDeclaration/i);
 });
 
 test('requires separate export and publication approval with Run-level flow traceability', () => {
@@ -184,9 +185,9 @@ test('requires clickable artifacts, Markdown-embedded screenshots, and an explic
   assert.match(readFileSync(join(repository, 'src', 'cli.ts'), 'utf8'), /mustAskUserQuestion/);
 });
 
-test('publishes v0.3.93 with the Runner but without source and lockfile implementation payloads', () => {
+test('publishes v0.3.95 with the Runner but without source and lockfile implementation payloads', () => {
   const pkg = JSON.parse(readFileSync(join(repository, 'package.json'), 'utf8')) as { version: string; files: string[] };
-  assert.equal(pkg.version, '0.3.93');
+  assert.equal(pkg.version, '0.3.95');
   assert.equal(pkg.files.includes('src/'), false);
   assert.equal(pkg.files.includes('package-lock.json'), false);
   assert.equal(pkg.files.includes('runner/qa_agent_runner/*.py'), true);

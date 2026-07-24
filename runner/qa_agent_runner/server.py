@@ -87,6 +87,9 @@ def run_server() -> None:
 
         try:
             params = command.get("params", {})
+            if not params:
+                # Support flat commands where CLI places params at root level
+                params = {k: v for k, v in command.items() if k not in ("cmd", "stepId")}
             result = driver.execute(cmd, params, step_id)
             _respond(result)
         except Exception as exc:

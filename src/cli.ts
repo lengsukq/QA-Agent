@@ -14,6 +14,7 @@ import { createMemoryCandidate, reviewMemory } from './memory.ts';
 import { configuredHostRecords, installHostIntegration, recordHostInstall, supportedHosts, updateHostIntegrations } from './host-adapters.ts';
 import { detectConfiguredHosts, hostsFromFlags, HOST_PLATFORMS } from './host-configurators/registry.ts';
 import { approvalIsCurrent, assertHumanApprover, isExplicitPlanRequirementsConfirmation, isExplicitStartConfirmation, PLAN_REQUIREMENTS_CONFIRMATION_ZH, planReviewIsCurrent, START_TEST_CONFIRMATION_ZH, testPlanHash } from './approval.ts';
+import { PLATFORM_DECLARATION_PROMPT_ZH } from './platform.ts';
 import { hostCapabilityDiagnosis } from './capabilities.ts';
 import { buildModuleRegressionSelection, buildReleaseRegressionSelection, buildTaskRegressionSelection, runRegressionSelection } from './regression.ts';
 import { analyzeProjectImpact } from './impact-analysis.ts';
@@ -296,6 +297,7 @@ function archiveTask(projectRoot: string, moduleId: string, taskId: string): voi
 
 function reviewPlanRequirements(projectRoot: string, moduleId: string, taskId: string): TestTask {
   const task = readTask(projectRoot, moduleId, taskId);
+  if (!task.requirements?.platformDeclaration) throw new Error(`${PLATFORM_DECLARATION_PROMPT_ZH}。请在 PlanDraft.platformDeclaration 中写入 web 或 ios，并让 scope.platforms 只包含该平台，然后重新执行 qa-agent plan apply。`);
   if (!args.includes('--approve')) throw new Error('Plan review requires --approve after the QA has reviewed the complete Task PRD.');
   const confirmedBy = requiredFlag('--confirmed-by'); assertHumanApprover(confirmedBy);
   const confirmationText = requiredFlag('--confirmation-text');
@@ -439,6 +441,8 @@ async function main(): Promise<void> {
       userFacingArtifacts,
       requiredUserFacingLinks: artifactLinksSentence(userFacingArtifacts),
       planningRequired: true,
+      platformDeclarationRequired: !prepared.task.requirements?.platformDeclaration,
+      requiredPlatformDeclaration: PLATFORM_DECLARATION_PROMPT_ZH,
       requiredRequirementsConfirmationAfterPlanning: PLAN_REQUIREMENTS_CONFIRMATION_ZH,
       requiredConfirmationAfterPlanning: START_TEST_CONFIRMATION_ZH,
       uiExecutionAllowed: false,
@@ -777,7 +781,7 @@ ${advancedUsage}`);
   if (group === 'act') {
     const projectRoot = root();
     const command = action;
-    if (!command) throw new Error('act requires a command: navigate, click, fill, select, assert-text, assert-visible, tap, type-text, swipe, launch, describe, wait, screenshot, scroll, hover, home, back, key');
+    if (!command) throw new Error('act requires a command: navigate, click, fill, select, assert-text, assert-visible, assert-value, tap, type-text, clear, swipe, launch, terminate, install, describe, wait, screenshot, scroll, hover, home, back, key');
     const runId = requiredFlag('--run');
     const result = await executeAct(projectRoot, command, {
       run: runId,
@@ -797,7 +801,10 @@ ${advancedUsage}`);
       ms: flag('--ms'),
       name: flag('--name'),
       bundleId: flag('--bundle-id'),
+      appPath: flag('--app-path'),
       keycode: flag('--keycode'),
+      maxChars: flag('--max-chars'),
+      exact: flag('--exact'),
       scenario: flag('--scenario'),
       platform: flag('--platform'),
       deviceUdid: flag('--device-udid'),
