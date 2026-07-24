@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -13,7 +13,7 @@ import { buildModuleRegressionSelection, buildReleaseRegressionSelection, buildT
 import { createReleaseCheck, finalizeReleaseCheck } from '../src/release.ts';
 import { createPythonRegressionDraft, publishPythonRegression, readPythonRegression, runPythonRegression } from '../src/python-regression.ts';
 import { validateProject } from '../src/validation.ts';
-import { testPlanHash } from '../src/approval.ts';
+import { approvalIsCurrent, confirmationMode, MERGED_TEST_CONFIRMATION_ZH, testPlanHash } from '../src/approval.ts';
 import type { PythonRegressionManifest, TestRun, TestTask } from '../src/types.ts';
 
 const repository = process.cwd();
@@ -28,14 +28,15 @@ function run(cwd: string, ...arguments_: string[]): string {
   return result.stdout;
 }
 function json<T = any>(cwd: string, ...arguments_: string[]): T { return JSON.parse(run(cwd, ...arguments_)) as T; }
-function importHost(root: string): void {
+function importHost(root: string, capabilities = ['browser.interact', 'browser.inspect']): void {
   const path = join(root, 'host.json');
-  writeFileSync(path, JSON.stringify({ host: 'test-host', collectedAt: new Date().toISOString(), connections: [{ id: 'browser', capabilities: ['browser.interact', 'browser.inspect'], permissionStatus: 'verified' }] }));
+  writeFileSync(path, JSON.stringify({ host: 'test-host', collectedAt: new Date().toISOString(), connections: [{ id: 'test-host', capabilities, permissionStatus: 'verified' }] }));
   run(root, 'host', 'import', '--file', path);
 }
 function approve(task: TestTask): TestTask {
   task.metadata.status = 'ready';
   const confirmedAt = new Date().toISOString();
+  task.requirements!.platformDeclaration = { platform: (task.scope.platforms[0] ?? 'web') as 'web' | 'ios', statement: `本次测试平台：${task.scope.platforms[0] === 'ios' ? 'iOS Simulator' : 'Web'}`, declaredBy: 'project-owner', declaredAt: confirmedAt };
   const planHash = testPlanHash(task);
   task.metadata.planReview = { confirmedBy: 'project-owner', confirmedAt, confirmationSource: 'external-review-record', statement: '确认测试方案', planHash };
   task.metadata.approval = { confirmedBy: 'project-owner', confirmedAt, confirmationSource: 'external-review-record', statement: '确认开始测试', planHash };
@@ -45,7 +46,9 @@ function approveThroughCli(root: string, moduleId: string, taskId: string): void
   run(root, 'plan', 'review', '--module', moduleId, '--task', taskId, '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '确认测试方案');
   run(root, 'review', '--module', moduleId, '--task', taskId, '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '确认开始测试');
 }
-function applyDetailedPlan(root: string, task: TestTask, options: { userQuestions?: string[]; confirmedDecisions?: string[] } = {}): TestTask {
+function applyDetailedPlan(root: string, task: TestTask, options: { userQuestions?: string[]; confirmedDecisions?: string[]; platforms?: string[]; declarePlatform?: boolean; executionIntent?: 'read-only' | 'state-changing'; extraPrecondition?: string } = {}): TestTask {
+  const approvalWasCurrent = approvalIsCurrent(task);
+  const platformChanged = Boolean(options.platforms?.[0] && options.platforms[0] !== task.scope.platforms[0]);
   const scenario = task.scenarios[0]!;
   const planPath = join(root, `plan-${task.metadata.moduleId}-${task.metadata.id}.json`);
   writeFileSync(planPath, JSON.stringify({
@@ -55,8 +58,10 @@ function applyDetailedPlan(root: string, task: TestTask, options: { userQuestion
     taskName: task.metadata.name,
     description: task.description,
     objectives: task.objectives,
-    scope: task.scope,
-    preconditions: task.preconditions,
+    executionIntent: options.executionIntent,
+    scope: { ...task.scope, platforms: options.platforms ?? task.scope.platforms },
+    platformDeclaration: options.declarePlatform === false ? undefined : { platform: (options.platforms?.[0] ?? task.scope.platforms[0] ?? 'web'), statement: `本次测试平台：${(options.platforms?.[0] ?? task.scope.platforms[0]) === 'ios' ? 'iOS Simulator' : 'Web'}`, declaredBy: 'qa-user' },
+    preconditions: options.extraPrecondition ? [...task.preconditions, options.extraPrecondition] : task.preconditions,
     userQuestions: options.userQuestions ?? [],
     confirmedDecisions: options.confirmedDecisions ?? [],
     scenarios: [{
@@ -84,11 +89,11 @@ function applyDetailedPlan(root: string, task: TestTask, options: { userQuestion
     }],
   }, null, 2));
   const applied = json(root, 'plan', 'apply', '--file', planPath);
-  assert.equal(applied.requirementsConfirmationRequired, true);
-  assert.equal(applied.requiredRequirementsConfirmation, '确认测试方案');
+  assert.equal(applied.requirementsConfirmationRequired, !approvalWasCurrent || platformChanged || Boolean(options.userQuestions?.length));
+  assert.equal(applied.requiredRequirementsConfirmation, applied.confirmationMode === 'merged' ? MERGED_TEST_CONFIRMATION_ZH : '确认测试方案');
   assert.deepEqual(applied.unresolvedQuestions, options.userQuestions ?? []);
-  assert.equal(applied.approvalRequired, true);
-  assert.equal(applied.requiredConfirmation, '确认开始测试');
+  assert.equal(applied.approvalRequired, !approvalWasCurrent || platformChanged || Boolean(options.userQuestions?.length));
+  assert.equal(applied.requiredConfirmation, applied.confirmationMode === 'merged' ? MERGED_TEST_CONFIRMATION_ZH : '确认开始测试');
   return readTask(root, task.metadata.moduleId, task.metadata.id);
 }
 function prepareQuickTask(root: string, request: string): { prepared: any; task: TestTask } {
@@ -174,10 +179,10 @@ function strictTaskWithRun(root: string, moduleId: string, taskId: string, risk:
   return { task: readTask(root, moduleId, taskId), run: completed };
 }
 
-test('initializes v0.3.7 without replay directories and exposes simplified help', () => {
+test('initializes v0.3.96 with the bundled Runner and exposes simplified help', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-init-'));
   run(root, 'init', '--id', 'fixture');
-  assert.equal(run(root, '--version').trim(), '0.3.7');
+  assert.equal(run(root, '--version').trim(), '0.3.96');
   const help = run(root, 'help');
   for (const commandName of ['init', 'check', 'continue', 'finish', 'doctor', 'update']) assert.match(help, new RegExp(commandName));
   assert.doesNotMatch(help, /operation plan|operation replay/i);
@@ -197,8 +202,24 @@ test('initializes v0.3.7 without replay directories and exposes simplified help'
   assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'operation.schema.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'regression-suite.schema.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'skills', 'built-in', 'operation-replay.json')), false);
-  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.7');
+  assert.equal(existsSync(join(root, '.qa-agent', 'runner')), false);
+  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.96');
   assert.equal(validateProject(root).valid, true);
+});
+
+test('reports a missing managed Runner during project validation', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-runner-validation-'));
+  initializeProject(root, { id: 'runner-validation' });
+  const previous = process.env.QA_AGENT_RUNNER_DIR;
+  process.env.QA_AGENT_RUNNER_DIR = join(root, 'missing-runner');
+  try {
+    const result = validateProject(root);
+    assert.equal(result.valid, false);
+    assert.match(result.errors.join('\n'), /Unified Runner is missing|does not contain qa_agent_runner/i);
+  } finally {
+    if (previous === undefined) delete process.env.QA_AGENT_RUNNER_DIR;
+    else process.env.QA_AGENT_RUNNER_DIR = previous;
+  }
 });
 
 test('Quick Check completes with report, PRD, and direct Python eligibility', () => {
@@ -292,6 +313,63 @@ test('PlanDraft requires explicit detailed steps before review', () => {
   assert.equal(readTask(root, 'catalog', 'product-state').sourceRunRef, undefined);
 });
 
+test('lets the Agent resolve the platform declaration after the detailed plan is generated', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-platform-declaration-'));
+  run(root, 'init', '--id', 'platform-declaration');
+  run(root, 'start', '--request', '验证商品详情', '--module', 'catalog', '--task', 'product-detail');
+  let task = readTask(root, 'catalog', 'product-detail');
+  task = applyDetailedPlan(root, task, { declarePlatform: false });
+  const workflow = json(root, 'workflow', 'status', '--module', 'catalog', '--task', 'product-detail');
+  assert.equal(workflow.reasonCode, 'agent_platform_inference_required');
+  assert.equal(workflow.gates.find((gate: any) => gate.id === 'platform_declared')?.status, 'blocking');
+  assert.equal(workflow.gates.find((gate: any) => gate.id === 'platform_declared')?.requiredActor, 'agent');
+  assert.match(workflow.nextActions[0].description, /Web 或 iOS Simulator/);
+  const rejected = command(root, 'plan', 'review', '--module', 'catalog', '--task', 'product-detail', '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '确认测试方案');
+  assert.notEqual(rejected.status, 0);
+  assert.match(rejected.stderr, /平台.*Web.*iOS|platform/i);
+  task = applyDetailedPlan(root, task, { platforms: ['ios'] });
+  assert.deepEqual(task.scope.platforms, ['ios']);
+  assert.equal(task.requirements?.platformDeclaration?.platform, 'ios');
+  assert.equal(task.requirements?.platformDeclaration?.declaredBy, 'qa-user');
+  assert.equal(json(root, 'workflow', 'status', '--module', 'catalog', '--task', 'product-detail').reasonCode, 'test_plan_requirements_confirmation_required');
+});
+
+test('uses one merged confirmation for eligible read-only Tasks and strict confirmation otherwise', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-confirmation-mode-'));
+  run(root, 'init', '--id', 'confirmation-mode'); importHost(root);
+  run(root, 'start', '--request', '只读查看商品详情', '--module', 'catalog', '--task', 'read-only-detail');
+  let task = applyDetailedPlan(root, readTask(root, 'catalog', 'read-only-detail'), { executionIntent: 'read-only' });
+  assert.equal(task.metadata.executionIntent, 'read-only');
+  assert.equal(confirmationMode(task), 'merged');
+  assert.notEqual(testPlanHash(task), testPlanHash({ ...task, metadata: { ...task.metadata, executionIntent: 'state-changing' as const } }));
+  const prepared = json(root, 'workflow', 'status', '--module', 'catalog', '--task', 'read-only-detail');
+  assert.equal(prepared.confirmationMode, 'merged');
+  assert.match(readFileSync(join(taskDirectory(root, 'catalog', 'read-only-detail'), 'prd.md'), 'utf8'), new RegExp(MERGED_TEST_CONFIRMATION_ZH));
+  const oldPhrase = command(root, 'plan', 'review', '--module', 'catalog', '--task', 'read-only-detail', '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '确认测试方案');
+  assert.notEqual(oldPhrase.status, 0);
+  assert.match(oldPhrase.stderr, /合并|确认测试并开始执行|merged/i);
+  run(root, 'plan', 'review', '--module', 'catalog', '--task', 'read-only-detail', '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', MERGED_TEST_CONFIRMATION_ZH);
+  task = readTask(root, 'catalog', 'read-only-detail');
+  assert.equal(task.metadata.status, 'ready');
+  assert.deepEqual(task.metadata.planReview, task.metadata.approval);
+  assert.equal(task.metadata.planReview?.statement, MERGED_TEST_CONFIRMATION_ZH);
+  const started = json(root, 'test', '--module', 'catalog', '--task', 'read-only-detail');
+  assert.equal(started.status, 'running');
+
+  const strict = { ...task, metadata: { ...task.metadata, executionIntent: 'state-changing' as const } };
+  assert.equal(confirmationMode(strict), 'strict');
+  const guided = { ...task, metadata: { ...task.metadata, mode: 'guided' as const, executionIntent: 'read-only' as const } };
+  assert.equal(confirmationMode(guided), 'strict');
+  const risky = { ...task, metadata: { ...task.metadata, executionIntent: 'read-only' as const }, scenarios: task.scenarios.map(scenario => ({ ...scenario, risk: 'high' as const })) };
+  assert.equal(confirmationMode(risky), 'strict');
+  const releaseGate = { ...task, metadata: { ...task.metadata, executionIntent: 'read-only' as const, releaseGate: true } };
+  assert.equal(confirmationMode(releaseGate), 'strict');
+  const withData = { ...task, metadata: { ...task.metadata, executionIntent: 'read-only' as const }, requirements: { ...task.requirements!, testDataRefs: ['fixture:account'] } };
+  assert.equal(confirmationMode(withData), 'strict');
+  const legacy = { ...task, metadata: { ...task.metadata, executionIntent: undefined } };
+  assert.equal(confirmationMode(legacy), 'strict');
+});
+
 test('Task requires QA PRD confirmation and separate start authorization before real execution', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-approval-'));
   run(root, 'init', '--id', 'approval'); importHost(root);
@@ -309,6 +387,9 @@ test('Task requires QA PRD confirmation and separate start authorization before 
   const earlyStart = command(root, 'review', '--module', 'auth', '--task', 'login-flow', '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '确认开始测试');
   assert.notEqual(earlyStart.status, 0);
   assert.match(earlyStart.stderr, /确认测试方案/);
+  const mergedOnStrict = command(root, 'plan', 'review', '--module', 'auth', '--task', 'login-flow', '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', MERGED_TEST_CONFIRMATION_ZH);
+  assert.notEqual(mergedOnStrict.status, 0);
+  assert.match(mergedOnStrict.stderr, /strict|确认测试方案/);
   const wrongPlanPhrase = command(root, 'plan', 'review', '--module', 'auth', '--task', 'login-flow', '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '没问题');
   assert.notEqual(wrongPlanPhrase.status, 0);
   run(root, 'plan', 'review', '--module', 'auth', '--task', 'login-flow', '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '确认测试方案');
@@ -385,7 +466,7 @@ test('User-led QA keeps one pending interaction and generates one regression scr
     actualLocator: { strategy: 'role', value: 'button:Open' }, expectedState: plannedStep.expected, actualState: plannedStep.expected,
   });
   const step = afterStep.steps.at(-1)!;
-  assert.equal(step.status, 'needs_confirmation');
+  assert.equal(step.status, 'blocked');
   assert.equal(afterStep.guidedPending?.type, 'result_verdict');
   assert.throws(() => approveGuidedAction(root, guidedRunId, {
     scenarioId: scenario.id, plannedStepId: scenario.plannedSteps[1]!.id,
@@ -412,12 +493,11 @@ test('User-led QA keeps one pending interaction and generates one regression scr
   const scenarioDraft = completed.scenarioRegressionDrafts![0]!;
   const scenarioScriptPath = join(taskSourceRunDirectory(root, task.metadata.moduleId, task.metadata.id), scenarioDraft.scriptRef);
   assert.ok(existsSync(scenarioScriptPath));
-  const scenarioScript = readFileSync(scenarioScriptPath, 'utf8');
-  const syntax = spawnSync('python3', ['-m', 'py_compile', scenarioScriptPath], { encoding: 'utf8' });
-  assert.equal(syntax.status, 0, syntax.stderr || syntax.stdout);
-  assert.match(scenarioScript, /QA_AGENT_BRIDGE/);
-  assert.match(scenarioScript, /QA_AGENT_RESULT_PATH/);
-  assert.match(scenarioScript, new RegExp(step.id));
+  assert.ok(scenarioDraft.scriptRef.endsWith('steps.json'));
+  const scenarioSteps = JSON.parse(readFileSync(scenarioScriptPath, 'utf8'));
+  assert.equal(scenarioSteps.apiVersion, 'qa-agent/regression-steps/v1');
+  assert.ok(Array.isArray(scenarioSteps.steps) && scenarioSteps.steps.length > 0);
+  assert.ok(scenarioSteps.steps.some((entry: { id: string }) => entry.id === step.id));
   const report = readFileSync(taskSourceRunReportPath(root, task.metadata.moduleId, task.metadata.id), 'utf8');
   assert.match(report, /User-led QA Decisions/);
   assert.match(report, /Scenario Regression Drafts/);
@@ -427,13 +507,20 @@ test('User-led QA keeps one pending interaction and generates one regression scr
 
 test('missing host capability blocks execution without fabricating results', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-capability-'));
-  run(root, 'init', '--id', 'capability');
-  const { task } = prepareQuickTask(root, '测试首页');
-  approveThroughCli(root, task.metadata.moduleId, task.metadata.id);
-  const started = json(root, 'test', '--module', task.metadata.moduleId, '--task', task.metadata.id);
-  assert.equal(started.status, 'blocked');
-  assert.equal(started.uiExecutionAllowed, false);
-  assert.match(started.conclusion, /capability|precondition/i);
+  const previousRunner = process.env.QA_AGENT_RUNNER_DIR;
+  process.env.QA_AGENT_RUNNER_DIR = join(root, 'missing-runner');
+  try {
+    run(root, 'init', '--id', 'capability');
+    const { task } = prepareQuickTask(root, '测试首页');
+    approveThroughCli(root, task.metadata.moduleId, task.metadata.id);
+    const started = json(root, 'test', '--module', task.metadata.moduleId, '--task', task.metadata.id);
+    assert.equal(started.status, 'blocked');
+    assert.equal(started.uiExecutionAllowed, false);
+    assert.match(started.conclusion, /capability|precondition/i);
+  } finally {
+    if (previousRunner === undefined) delete process.env.QA_AGENT_RUNNER_DIR;
+    else process.env.QA_AGENT_RUNNER_DIR = previousRunner;
+  }
 });
 
 test('safety policy blocks prohibited UI actions', () => {
@@ -502,17 +589,46 @@ test('Archive requires validated Python coverage and succeeds after script valid
   assert.equal(readTask(root, 'account', 'profile').metadata.status, 'archived');
 });
 
-test('changing a Task plan marks Python stale and allows a replacement Source Run after reapproval', () => {
+test('changing a Task plan marks Python stale while preserving approval for a replacement Source Run', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-stale-'));
   initializeProject(root, { id: 'stale' }); importHost(root);
   const source = strictTaskWithRun(root, 'settings', 'preferences'); createFormalScript(root, source.task, source.run, 'preferences-script');
-  run(root, 'task', 'update', 'preferences', '--module', 'settings', '--name', 'Changed preferences flow');
+  applyDetailedPlan(root, readTask(root, 'settings', 'preferences'), { extraPrecondition: '用户已确认新的偏好设置范围。' });
   assert.equal(readPythonRegression(root, 'settings', 'preferences', 'preferences-script').status, 'stale');
-  approveThroughCli(root, 'settings', 'preferences');
   const replacement = json(root, 'test', '--module', 'settings', '--task', 'preferences');
   assert.equal(replacement.status, 'running');
   assert.notEqual(replacement.runId, source.run.id);
   assert.equal(JSON.parse(readFileSync(taskSourceRunPath(root, 'settings', 'preferences'), 'utf8')).id, replacement.runId);
+});
+
+test('switching a reviewed Task from Web to iOS invalidates approval and refreshes platform capabilities', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-platform-switch-'));
+  initializeProject(root, { id: 'platform-switch', platforms: ['web'] });
+  const module = createModule(root, { id: 'checkout', name: 'Checkout', description: 'Checkout flow', platforms: ['web'] });
+  const initial = createTaskSkeleton(module, 'payment-method');
+  saveTask(root, initial);
+  applyDetailedPlan(root, readTask(root, 'checkout', 'payment-method'), { platforms: ['web'] });
+  approveThroughCli(root, 'checkout', 'payment-method');
+  const approved = readTask(root, 'checkout', 'payment-method');
+
+  const switched = applyDetailedPlan(root, readTask(root, 'checkout', 'payment-method'), { platforms: ['ios'] });
+  assert.deepEqual(switched.scope.platforms, ['ios']);
+  assert.equal(switched.capabilities.required.includes('browser.interact'), false);
+  assert.equal(switched.capabilities.required.includes('ios.simulator.interact'), true);
+  assert.equal(approvalIsCurrent(switched), false);
+  assert.equal(switched.metadata.status, 'awaiting_approval');
+  assert.equal(switched.metadata.approval, undefined);
+  assert.equal(approved.metadata.approval?.confirmedBy, 'project-owner');
+
+  importHost(root, ['ios.simulator.interact', 'ios.screenshot']);
+  const blocked = command(root, 'test', '--module', 'checkout', '--task', 'payment-method', '--platform', 'ios');
+  assert.notEqual(blocked.status, 0);
+  assert.match(blocked.stderr, /confirmation|确认测试方案/i);
+  approveThroughCli(root, 'checkout', 'payment-method');
+  const started = json(root, 'test', '--module', 'checkout', '--task', 'payment-method', '--platform', 'ios');
+  assert.equal(started.context.platform, 'ios');
+  assert.ok(['running', 'blocked'].includes(started.status));
+  if (started.status === 'blocked') assert.match(started.conclusion, /capability|precondition|Doctor/i);
 });
 
 test('rejects projects created by another Runtime version instead of migrating them', () => {

@@ -1,13 +1,15 @@
 ---
 name: qa-agent
-description: Run project-aware QA checks, preserve real evidence, and turn reviewed successful flows into command-line Python regression scripts.
+description: Run project-aware QA checks, preserve real evidence, and turn reviewed successful flows into replayable regression steps.
 ---
 
 # QA Agent
 
-Use this Skill for AI-led QA work. The user describes what to test; the Agent analyzes the project, produces a reviewable PRD, executes the approved flow, and preserves Runtime-owned evidence and reports.
+Use this Skill for AI-led QA. Analyze the project, produce a reviewable PRD, execute the approved flow, and preserve Runtime-owned evidence.
 
-Read `references/workflow.md` before acting. Runtime owns Task state, Run state, evidence, reports, safety decisions, approvals, Python publication, and regression results.
+Before checks, or when uncertain, load `qa-agent-doctor` to verify the project and Runner.
+
+Read `references/workflow.md` first. Runtime owns Task/Run state, evidence, safety, approvals, and results.
 
 ## Route the request
 
@@ -16,33 +18,33 @@ Read `references/workflow.md` before acting. Runtime owns Task state, Run state,
 - User-led, step-by-step execution: load `qa-agent-guided` and use `qa-agent check --mode guided`; Runtime generates one draft per Scenario on completion.
 - Interruption or “continue”: `qa-agent continue`.
 - Explicit session end: `qa-agent finish`.
-- Run an already approved Python script: load `qa-agent-regression-test`.
-- Fixed release scope, test matrix, GO/NO-GO, and impact planning remain in this main Skill and Runtime release commands.
+- Run already approved JSON regression steps: load `qa-agent-regression-test`.
 
 ## Required planning gates
 
 1. Create or resume the Task with `qa-agent check --request "<request>"`. This creates planning assets only; it must not start a Run.
-2. Inspect relevant source, routes, tests, configuration, existing QA assets, and tools.
+2. Inspect relevant source, routes, configuration, QA assets, and tools.
 3. Produce and apply a PlanDraft. Every Scenario requires ordered `steps`, each with `action` and `expected`.
-4. Present the complete Runtime Task PRD with its clickable `userFacingArtifacts[].markdownLink`; never substitute a plain path.
-5. If `userQuestions` exist—or the Agent has any material uncertainty about requirements, environment, account, test data, expected behavior, or safety—ask the QA one concrete question at a time. Persist answers in `confirmedDecisions`, clear resolved questions, and reapply the PlanDraft.
-6. Ask whether the PRD matches the requested requirements. Persist only the exact reply `确认测试方案` through `qa-agent plan review`.
-7. Then require a separate exact reply `确认开始测试`, persisted through `qa-agent review`.
-8. Only after both gates may `qa-agent test` create the Task's single Source Run or any UI tool be used.
+4. Present the complete Runtime Task PRD with clickable `userFacingArtifacts[].markdownLink`.
+5. Inspect source/configuration, entry points, installed targets, and capabilities to determine one platform: `web` or `ios`. Persist it in `PlanDraft.platformDeclaration`, set `declaredBy` to `qa-agent`, align `scope.platforms`, and reapply. Ask the QA only when evidence is ambiguous.
+6. Resolve `userQuestions` and any material uncertainty one question at a time. Persist answers in `confirmedDecisions`, clear resolved questions, and reapply the PlanDraft.
+7. Set `PlanDraft.executionIntent` explicitly to `read-only` or `state-changing`. Runtime computes `confirmationMode`: eligible ordinary read-only Tasks use `merged`; all other Tasks use `strict`.
+8. For `merged`, ask only for the exact reply `确认测试并开始执行` and persist it through `qa-agent plan review`. For `strict`, persist `确认测试方案` through `qa-agent plan review`, then require `确认开始测试` through `qa-agent review`.
+9. Only after the computed confirmation mode is satisfied and platform capabilities pass may `qa-agent test` create the Task's single Source Run or any UI tool be used.
 
-Do not treat “可以”, “继续”, or “没问题” as either PRD confirmation or start authorization.
+Do not treat “可以”, “继续”, or “没问题” as PRD confirmation or start authorization. Do not manually edit `task.json` approval metadata; use Runtime/CLI commands.
 
 ## Execution and result
 
-1. Use UI tools only when `uiExecutionAllowed=true`, `mustStop=false`, and a `runId` exists.
-2. Persist every real UI action, screenshot, observation, evidence item, recovery attempt, and Cleanup through Runtime.
-3. Record every declared business/visual assertion before `qa-agent run complete`.
-4. Follow `nextAction`; ask at most one user-owned question per turn.
-5. Use only the Runtime report. Formal reports must embed real screenshots with Markdown image syntax. Include clickable report and finalized PRD links.
-6. In AI-led mode, if `pythonRegressionEligibility.eligible=true` and no script exists, end the completion reply with `requiredUserQuestion`. In user-led mode, present the automatically generated Scenario scripts instead and do not ask that generic question.
-7. Generation consent authorizes a draft only. Read `references/python-regression.md` and `references/recommended-regression-stack.md`. The generated script must capture a real checkpoint screenshot for every source UI step, reference it in `result.json`, save with `qa-agent regression draft`, and show the full script or diff.
-8. Publish with `qa-agent regression publish` only after separate explicit approval. Publication freezes the Source Run.
-9. Reruns use `qa-agent-regression-test` and `regression-runs/`. Formal regression reports embed every checkpoint screenshot; path-only references are invalid. Link the report or diagnostic.
+1. Web/iOS only. `qa-agent act` uses the built-in Runner server. Web: `navigate/click/fill/select/assert/scroll/hover/wait/screenshot`; iOS: `launch/tap/type-text/swipe/describe/assert/wait/screenshot`. Never call MCP or direct UI tools.
+2. On mismatch, stop; run `qa-agent doctor --platforms <web|ios>`, reapply the correct Agent-inferred PlanDraft, repeat the computed confirmation, then run `qa-agent test --platform <web|ios>`. Ask only if the source remains ambiguous. Never use MCP as a bridge.
+3. Each `act` command auto-screenshots and auto-records. No manual step reporting needed.
+4. Record every declared business/visual assertion via `qa-agent act assert-text` or `act assert-visible`.
+5. Once all assertions and Cleanup are recorded, call `qa-agent run complete` in the same turn. NEVER end a turn while a Run remains `running`.
+6. Follow `nextAction`; ask at most one user-owned question per turn.
+7. Use only the Runtime report; embed real screenshots with Markdown image syntax, never paths alone, and link report/PRD.
+8. After completion, if eligible, Runtime exports only `.steps.json` regression steps. Publish with `qa-agent regression publish` only after separate explicit approval.
+9. Reruns use `qa-agent-regression-test`; replay through `qa-agent regression run` and the unified Python Runner.
 10. Call `qa-agent finish` only on explicit closure. Session finish is not Task archive.
 
 ## Safety

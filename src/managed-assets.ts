@@ -3,11 +3,13 @@ import { basename, join } from 'node:path';
 import { builtInSkills } from './built-in-skills.ts';
 import { schemas } from './schemas.ts';
 import { listFiles, now, readJson, writeJsonAtomic } from './store.ts';
+import { resolveRunner, type RunnerResolution } from './runner-path.ts';
 import { QA_AGENT_VERSION } from './version.ts';
 
 export interface ManagedAssetSyncResult {
   synchronizedSchemas: number;
   synchronizedBuiltInSkills: number;
+  runner: RunnerResolution;
   updatedProjectVersion: number;
 }
 
@@ -40,6 +42,7 @@ export function syncManagedRuntimeAssets(qaRoot: string): ManagedAssetSyncResult
   const result: ManagedAssetSyncResult = {
     synchronizedSchemas: 0,
     synchronizedBuiltInSkills: 0,
+    runner: resolveRunner(join(qaRoot, '..')),
     updatedProjectVersion: existing?.version === QA_AGENT_VERSION ? 0 : 1,
   };
 
@@ -65,6 +68,7 @@ export function syncManagedRuntimeAssets(qaRoot: string): ManagedAssetSyncResult
     initializedAt: existing?.initializedAt ?? now(),
     updatedAt: now(),
   });
+
   return result;
 }
 
@@ -112,6 +116,9 @@ export function inspectManagedRuntimeAssets(qaRoot: string): string[] {
   for (const path of listFiles(skillDirectory, item => item.endsWith('.json'))) {
     if (!expectedSkills.has(basename(path))) errors.push(`${path}: unsupported managed built-in Skill is present; create a fresh .qa-agent project.`);
   }
+
+  const runner = resolveRunner(join(qaRoot, '..'));
+  if (!runner.available) errors.push(`${runner.error ?? 'Unified Runner is missing.'} Run qa-agent update or configure QA_AGENT_RUNNER_DIR.`);
 
   const indexPath = join(qaRoot, 'index', 'skills.json');
   if (!existsSync(indexPath)) errors.push(`${indexPath}: managed Skill index is missing.`);

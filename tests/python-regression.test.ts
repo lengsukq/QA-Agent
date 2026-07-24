@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
-import { completeAgentGuidedRun, recordAgentStep, recordVisualFinding } from '../src/engine.ts';
+import { recordAgentStep, recordVisualFinding } from '../src/engine.ts';
 import { readTask, taskDirectory } from '../src/project.ts';
 import { readPythonRegression } from '../src/python-regression.ts';
 
@@ -27,7 +27,37 @@ function importHostSnapshot(root: string): void {
   run(root, 'host', 'import', '--file', snapshot);
 }
 
-test('creates a reviewed Python regression draft, publishes it into the Task, and runs it from the command line', () => {
+function installStubRunner(root: string): void {
+  const runnerDir = join(root, '.qa-agent', 'runner', 'qa_agent_runner');
+  mkdirSync(runnerDir, { recursive: true });
+  writeFileSync(join(runnerDir, '__init__.py'), '', 'utf8');
+  writeFileSync(join(runnerDir, '__main__.py'), `import json, os, sys
+from pathlib import Path
+
+args = sys.argv[1:]
+assert args and args[0] == "replay", args
+steps_file = args[1]
+screenshot_dir = Path(os.environ["QA_AGENT_SCREENSHOT_DIR"])
+result_path = Path(os.environ["QA_AGENT_RESULT_PATH"])
+run_dir = os.environ.get("QA_AGENT_REGRESSION_RUN_DIR")
+screenshot_dir.mkdir(parents=True, exist_ok=True)
+doc = json.load(open(steps_file))
+results = []
+for step in doc.get("steps", []):
+    sid = step["id"]
+    fname = f"{sid}.png"
+    (screenshot_dir / fname).write_bytes(b"screenshot")
+    rel = os.path.relpath(str(screenshot_dir / fname), run_dir) if run_dir else f"screenshots/{fname}"
+    results.append({"id": sid, "name": f"Step {sid}", "status": "passed", "expected": "", "actual": "", "screenshot": rel})
+result = {"apiVersion": "qa-agent/python-regression-result/v1", "status": "passed", "contractStatus": "completed", "conclusion": "Stub replay passed.", "steps": results, "cleanup": []}
+result_path.parent.mkdir(parents=True, exist_ok=True)
+result_path.write_text(json.dumps(result))
+sys.exit(0)
+`, 'utf8');
+  process.env.QA_AGENT_RUNNER_DIR = join(root, '.qa-agent', 'runner');
+}
+
+test('exports a reviewed regression steps draft, publishes it into the Task, and replays it from the command line', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-python-regression-'));
   run(root, 'init', '--id', 'python-regression-fixture');
   importHostSnapshot(root);
@@ -48,6 +78,8 @@ test('creates a reviewed Python regression draft, publishes it into the Task, an
     taskId: initialTask.metadata.id,
     description: initialTask.description,
     objectives: initialTask.objectives,
+    scope: { platforms: ['web'], environments: ['local'], roles: ['default'] },
+    platformDeclaration: { platform: 'web', statement: '本次测试平台：Web', declaredBy: 'project-owner' },
     scenarios: [{
       id: scenario.id,
       title: scenario.title,
@@ -105,45 +137,25 @@ test('creates a reviewed Python regression draft, publishes it into the Task, an
   assert.ok(completed.pythonRegressionEligibility?.flowHash);
   assert.deepEqual(completed.pythonRegressionEligibility?.sourceStepIds, [sourceStepId]);
   assert.equal(completed.mustAskUserQuestion, true);
-  assert.match(completed.requiredUserQuestion, /是否基于本次已验证流程生成 Python 回归脚本草稿/);
-  assert.equal(completed.nextUserDecision.id, 'offer_python_regression');
-  assert.deepEqual(completed.nextUserDecision.choices, ['生成回归脚本', '暂不生成']);
+  assert.match(completed.requiredUserQuestion, /是否基于本次已验证流程导出可一键重放的回归步骤脚本/);
+  assert.equal(completed.nextUserDecision.id, 'offer_regression_steps');
+  assert.deepEqual(completed.nextUserDecision.choices, ['导出回归步骤', '暂不导出']);
   assert.deepEqual(completed.userFacingArtifacts.map((item: { kind: string }) => item.kind), ['task-prd', 'source-run-report']);
   assert.match(completed.requiredUserFacingLinks, /\[查看测试方案 PRD\]\(.+prd\.md\).*\[查看测试报告\]\(.+report\.md\)/);
 
-  const missingScreenshotScriptId = 'missing-screenshot-contract';
-  const missingScreenshotScript = join(root, 'missing-screenshot-contract.py');
-  const missingScreenshotMetadata = JSON.stringify({ scriptId: missingScreenshotScriptId, sourceRunId: completed.id, sourceStepIds: [sourceStepId], sourceFlowHash: completed.pythonRegressionEligibility!.flowHash });
-  writeFileSync(missingScreenshotScript, `# QA_AGENT_REGRESSION: ${missingScreenshotMetadata}\nimport json\nimport os\nfrom pathlib import Path\n\nSOURCE_STEP_IDS = [${JSON.stringify(sourceStepId)}]\nresult = {"apiVersion": "qa-agent/python-regression-result/v1", "status": "passed", "contractStatus": "completed", "conclusion": "No screenshot contract.", "steps": []}\nPath(os.environ["QA_AGENT_RESULT_PATH"]).write_text(json.dumps(result), encoding="utf-8")\n`, 'utf8');
-  const missingScreenshotDraft = spawnSync(process.execPath, ['--experimental-strip-types', cli, 'regression', 'draft', '--module', task.metadata.moduleId, '--task', task.metadata.id, '--run', completed.id, '--file', missingScreenshotScript, '--id', missingScreenshotScriptId], { cwd: root, encoding: 'utf8' });
-  assert.notEqual(missingScreenshotDraft.status, 0);
-  assert.match(missingScreenshotDraft.stderr, /QA_AGENT_SCREENSHOT_DIR/);
+  installStubRunner(root);
 
-  const invalidRuntimeScriptId = 'invalid-runtime-screenshot';
-  const invalidRuntimeScript = join(root, 'invalid-runtime-screenshot.py');
-  const invalidRuntimeMetadata = JSON.stringify({ scriptId: invalidRuntimeScriptId, sourceRunId: completed.id, sourceStepIds: [sourceStepId], sourceFlowHash: completed.pythonRegressionEligibility!.flowHash });
-  writeFileSync(invalidRuntimeScript, `# QA_AGENT_REGRESSION: ${invalidRuntimeMetadata}\nimport json\nimport os\nfrom pathlib import Path\n\nSOURCE_STEP_IDS = [${JSON.stringify(sourceStepId)}]\nSCREENSHOT_FIELD = "screenshot"\n\ndef main():\n    Path(os.environ["QA_AGENT_SCREENSHOT_DIR"]).mkdir(parents=True, exist_ok=True)\n    result = {"apiVersion": "qa-agent/python-regression-result/v1", "status": "passed", "contractStatus": "completed", "conclusion": "Missing runtime screenshot.", "steps": [{"id": ${JSON.stringify(sourceStepId)}, "name": "Click login button", "status": "passed"}], "cleanup": []}\n    Path(os.environ["QA_AGENT_RESULT_PATH"]).write_text(json.dumps(result), encoding="utf-8")\n\nif __name__ == "__main__":\n    main()\n`, 'utf8');
-  run(root, 'regression', 'draft', '--module', task.metadata.moduleId, '--task', task.metadata.id, '--run', completed.id, '--file', invalidRuntimeScript, '--id', invalidRuntimeScriptId);
-  run(root, 'regression', 'publish', '--module', task.metadata.moduleId, '--task', task.metadata.id, '--draft', invalidRuntimeScriptId, '--confirmed-by', 'project-owner');
-  const invalidRuntimeExecution = JSON.parse(run(root, 'regression', 'run', invalidRuntimeScriptId, '--module', task.metadata.moduleId, '--task', task.metadata.id));
-  assert.equal(invalidRuntimeExecution.contractStatus, 'invalid_result');
-  assert.equal(invalidRuntimeExecution.status, 'inconclusive');
-  assert.match(readFileSync(invalidRuntimeExecution.reportPath, 'utf8'), /QA-AGENT:PYTHON-REGRESSION-DIAGNOSTIC/);
-  assert.equal(readPythonRegression(root, task.metadata.moduleId, task.metadata.id, invalidRuntimeScriptId).status, 'approved_unverified');
-
-  const scriptId = 'login-python-regression';
-  const scriptFile = join(root, 'login-regression.py');
-  const metadata = JSON.stringify({ scriptId, sourceRunId: completed.id, sourceStepIds: [sourceStepId], sourceFlowHash: completed.pythonRegressionEligibility!.flowHash });
-  writeFileSync(scriptFile, `# QA_AGENT_REGRESSION: ${metadata}\nimport json\nimport os\nfrom pathlib import Path\n\nSOURCE_STEP_IDS = [${JSON.stringify(sourceStepId)}]\n\ndef main():\n    run_dir = Path(os.environ["QA_AGENT_REGRESSION_RUN_DIR"])\n    screenshot = Path(os.environ["QA_AGENT_SCREENSHOT_DIR"]) / "login-success.png"\n    screenshot.write_bytes(b"screenshot")\n    result = {\n        "apiVersion": "qa-agent/python-regression-result/v1",\n        "status": "passed",\n        "contractStatus": "completed",\n        "conclusion": "Login regression completed successfully.",\n        "steps": [{\n            "id": ${JSON.stringify(sourceStepId)},\n            "name": "Click login button",\n            "status": "passed",\n            "expected": "Authenticated home is visible.",\n            "actual": "Authenticated home is visible.",\n            "screenshot": "screenshots/login-success.png"\n        }],\n        "cleanup": []\n    }\n    Path(os.environ["QA_AGENT_RESULT_PATH"]).write_text(json.dumps(result), encoding="utf-8")\n\nif __name__ == "__main__":\n    main()\n`, 'utf8');
-
-  const draft = JSON.parse(run(root, 'regression', 'draft', '--module', task.metadata.moduleId, '--task', task.metadata.id, '--run', completed.id, '--file', scriptFile, '--id', scriptId));
+  const scriptId = 'login-regression-steps';
+  const taskRoot = taskDirectory(root, task.metadata.moduleId, task.metadata.id);
+  const draft = JSON.parse(run(root, 'regression', 'export', '--module', task.metadata.moduleId, '--task', task.metadata.id, '--run', completed.id, '--id', scriptId));
   assert.equal(draft.draft.apiVersion, 'qa-agent/python-regression-draft/v2');
   assert.equal(draft.draft.status, 'draft');
   assert.equal(draft.draft.sourceFlowHash, completed.pythonRegressionEligibility!.flowHash);
   assert.deepEqual(draft.draft.scenarioIds, ['exploration']);
+  assert.ok(draft.draft.scriptRef.endsWith('.steps.json'));
+  assert.deepEqual(draft.stepsFile.steps.map((step: { id: string }) => step.id), [sourceStepId]);
   assert.equal(draft.approvalRequired, true);
-  const taskRoot = taskDirectory(root, task.metadata.moduleId, task.metadata.id);
-  assert.equal(existsSync(join(taskRoot, 'regression', `${scriptId}.py`)), false);
+  assert.equal(existsSync(join(taskRoot, 'regression', `${scriptId}.steps.json`)), false);
 
   const rejected = spawnSync(process.execPath, ['--experimental-strip-types', cli, 'regression', 'publish', '--module', task.metadata.moduleId, '--task', task.metadata.id, '--draft', scriptId, '--confirmed-by', 'qa-agent'], { cwd: root, encoding: 'utf8' });
   assert.notEqual(rejected.status, 0);
@@ -153,9 +165,10 @@ test('creates a reviewed Python regression draft, publishes it into the Task, an
   assert.equal(published.manifest.apiVersion, 'qa-agent/python-regression/v2');
   assert.equal(published.manifest.status, 'approved_unverified');
   assert.equal(published.manifest.sourceFlowHash, completed.pythonRegressionEligibility!.flowHash);
-  assert.ok(existsSync(join(taskRoot, 'regression', `${scriptId}.py`)));
+  assert.ok(existsSync(join(taskRoot, 'regression', `${scriptId}.steps.json`)));
   assert.ok(existsSync(join(taskRoot, 'regression', `${scriptId}.json`)));
-  assert.match(readFileSync(join(taskRoot, 'regression', `${scriptId}.py`), 'utf8'), /QA_AGENT_REGRESSION/);
+  const publishedSteps = JSON.parse(readFileSync(join(taskRoot, 'regression', `${scriptId}.steps.json`), 'utf8'));
+  assert.deepEqual(publishedSteps.steps.map((step: { id: string }) => step.id), [sourceStepId]);
   assert.equal(existsSync(join(taskRoot, 'operation-plans')), false);
   assert.equal(existsSync(join(taskRoot, 'regression-suite.json')), false);
 
@@ -168,7 +181,8 @@ test('creates a reviewed Python regression draft, publishes it into the Task, an
   const report = readFileSync(executed.reportPath, 'utf8');
   assert.match(report, /QA-AGENT:PYTHON-REGRESSION-REPORT/);
   assert.match(report, /## Screenshot-backed Checkpoints/);
-  assert.match(report, /!\[login-success\.png\]\(screenshots\/login-success\.png\)/);
+  assert.ok(report.includes(`screenshots/${sourceStepId}.png`));
   assert.equal(readPythonRegression(root, task.metadata.moduleId, task.metadata.id, scriptId).status, 'validated');
   assert.equal(JSON.parse(run(root, 'validate')).valid, true);
+  delete process.env.QA_AGENT_RUNNER_DIR;
 });

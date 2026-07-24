@@ -41,7 +41,7 @@ test('diagnoses the recommended Web stack without making it mandatory', () => {
   assert.deepEqual(web.outputContract, diagnosis.unifiedOutput);
 });
 
-test('diagnoses iOS recommendations and keeps optional exploration non-blocking', () => {
+test('diagnoses iOS Runner prerequisites without MCP exploration tools', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-stack-ios-'));
   initializeProject(root, { id: 'stack-ios', platforms: ['ios'] });
   const probe = probeFrom({
@@ -62,14 +62,13 @@ test('diagnoses iOS recommendations and keeps optional exploration non-blocking'
   assert.equal(ios.tools.find(item => item.id === 'xcrun-simctl')?.status, 'available');
   assert.equal(ios.tools.find(item => item.id === 'fb-idb')?.status, 'available');
   assert.equal(ios.tools.find(item => item.id === 'idb-companion')?.status, 'available');
-  assert.equal(ios.tools.find(item => item.id === 'ios-simulator-mcp')?.status, 'missing');
-  assert.equal(ios.tools.find(item => item.id === 'ios-simulator-mcp')?.level, 'optional');
+  assert.equal(ios.tools.some(item => item.id === 'ios-simulator-mcp'), false);
   assert.equal(ios.tools.some(item => item.id === 'allure-pytest'), false);
   assert.deepEqual(ios.outputContract, diagnosis.unifiedOutput);
   assert.equal(ios.recommendedReady, true);
 });
 
-test('reports an incompatible Python baseline and missing adapters as advisory', () => {
+test('reports an incompatible Python baseline and missing adapters', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-stack-old-python-'));
   initializeProject(root, { id: 'stack-old-python', platforms: ['web', 'ios'] });
   const probe = probeFrom({
@@ -84,13 +83,10 @@ test('reports an incompatible Python baseline and missing adapters as advisory',
     assert.equal(platform.recommendedReady, false);
     assert.equal(platform.tools.find(item => item.id === 'python-3-12')?.status, 'incompatible');
   }
-  assert.match(diagnosis.message, /do not block QA Agent/i);
+  assert.match(diagnosis.message, /prerequisites|Doctor/i);
 });
 
-test('does not recommend the Web stack for an Android-only project', () => {
+test('rejects unsupported Android projects at initialization', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-stack-android-'));
-  initializeProject(root, { id: 'stack-android', platforms: ['android'] });
-  const diagnosis = recommendedRegressionStackDiagnosis(root, undefined, probeFrom({}));
-  assert.equal(diagnosis.platforms.length, 0);
-  assert.match(diagnosis.message, /No Web or iOS platform/i);
+  assert.throws(() => initializeProject(root, { id: 'stack-android', platforms: ['android'] }), /supports only Web and iOS Simulator/i);
 });

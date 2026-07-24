@@ -9,15 +9,18 @@ Use this Skill when a human QA wants to direct the test one step at a time, expl
 
 Read `references/workflow.md` from the main `qa-agent` Skill before acting. Runtime owns the shared Task/Run/Step core, evidence, safety, reports, and Scenario regression drafts. User-led control keeps only one pending interaction; completed approvals and verdicts live on their Step.
 
+Guided UI execution is limited to Web and iOS Simulator through `qa-agent act` and the built-in Runner. Never call MCP, Playwright, xcrun, idb, ADB, or another UI tool directly. If the selected platform is wrong, stop and run `qa-agent doctor --platforms <web|ios>` before reapplying the PlanDraft.
+
 ## Prepare the Case
 
 1. Create or resume it with `qa-agent check --mode guided --request "<request>"`.
 2. Inspect relevant source, routes, configuration, tests, existing QA assets, and available tools.
 3. Generate a complete PlanDraft and apply it with `qa-agent plan apply`.
 4. Present the complete Runtime-written Task PRD and include its clickable `userFacingArtifacts[].markdownLink` in the same reply. Do not show only a plain path.
-5. If the PRD contains `userQuestions`, ask the QA one concrete question at a time. Add answers to `confirmedDecisions`, clear resolved questions, and apply the updated PlanDraft again.
-6. Ask whether the PRD matches the requested behavior. Only the exact reply `确认测试方案` may be persisted through `qa-agent plan review`.
-7. Separately wait for the exact reply `确认开始测试`, persist it through `qa-agent review`, and only then call `qa-agent test`.
+5. Inspect source, configuration, entry points, installed targets, and capabilities to determine exactly one platform after the plan is generated. Persist `web` or `ios` in `PlanDraft.platformDeclaration.platform` with `declaredBy: "qa-agent"`, keep the matching single `scope.platforms` entry, and apply the updated PlanDraft again. Ask the QA only when the platform is ambiguous.
+6. If the PRD contains `userQuestions`, ask the QA one concrete question at a time. Add answers to `confirmedDecisions`, clear resolved questions, and apply the updated PlanDraft again.
+7. Set `PlanDraft.executionIntent` to `state-changing` for Guided Tasks. Ask whether the PRD matches the requested behavior. Only the exact reply `确认测试方案` may be persisted through `qa-agent plan review`.
+8. Separately wait for the exact reply `确认开始测试`, persist it through `qa-agent review`, and only then call `qa-agent test`.
 
 Plan confirmation and start authorization are separate decisions. Never infer either from “可以”, “继续”, “是的”, or similar text unless it is the direct answer to the single Guided action/result question currently being asked and is persisted through the corresponding Guided command.
 
@@ -41,8 +44,8 @@ When the QA asks to save the Case:
 
 - ensure every UI step has both a human approval and a human verdict;
 - record all declared assertions and Cleanup;
-- complete through `qa-agent run complete`;
-- Runtime automatically generates one independent regression draft for every selected Scenario under `source-run/scenario-regressions/<scenario-id>/`;
-- present the Runtime report, saved PRD, and every Scenario script through their clickable `userFacingArtifacts[].markdownLink`; the formal report must embed its real screenshots with Markdown image syntax rather than listing screenshot paths only;
-- do not ask the generic post-test regression-generation question in user-led mode, because the Scenario drafts already exist;
-- treat generated Scenario scripts as drafts. Formal publication or execution still requires separate review and approval.
+- complete through `qa-agent run complete` in the same turn—never defer it to a later conversation;
+- Runtime automatically generates one independent regression-steps draft (steps.json) for every selected Scenario under `source-run/scenario-regressions/<scenario-id>/`;
+- present the Runtime report, saved PRD, and every Scenario steps file through their clickable `userFacingArtifacts[].markdownLink`; the formal report must embed its real screenshots with Markdown image syntax rather than listing screenshot paths only;
+- do not ask the generic post-test regression-generation question in user-led mode, because the Scenario steps drafts already exist;
+- treat generated Scenario steps as drafts. Formal publication or execution still requires separate review and approval.

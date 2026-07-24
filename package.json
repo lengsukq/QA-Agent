@@ -1,6 +1,6 @@
 {
   "name": "qa-agent-skill",
-  "version": "0.3.7",
+  "version": "0.3.96",
   "type": "module",
   "description": "CLI-first local QA Agent with Codex, Cursor, and other host Skill integrations",
   "bin": {
@@ -9,6 +9,8 @@
   "files": [
     "bin/",
     "dist/",
+    "runner/pyproject.toml",
+    "runner/qa_agent_runner/*.py",
     "skill/",
     "README.md",
     "README.en.md",

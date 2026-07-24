@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { capabilityAdvice, capabilitySnapshot, checkCapabilities, platformCapabilities } from './capabilities.ts';
+import { assertSupportedPlatform, platformMismatchAdvice } from './platform.ts';
 import { checkpointRun, gitMetadata, qaPath, readRunById, readTask, saveRun, saveTask, taskSourceEvidenceDirectory, taskSourceRunDirectory, taskSourceRunPath } from './project.ts';
 import { rebuildIndexes } from './indexer.ts';
 import { appendTaskEvent } from './events.ts';
@@ -12,7 +13,7 @@ import { clearTaskResultSection, finalizeTask } from './task-finalizer.ts';
 import { curateFailedRun, curateObservedBusinessRules } from './memory.ts';
 import { inspectPythonRegressionEligibility, listPythonRegressions } from './python-regression.ts';
 import type { ExecutionSnapshot, Locator, UiAction, RunStatus, StepExecutionMode, TestRun, TestTask, VisualInspectionStatus } from './types.ts';
-import { assertHumanApprover, executionContractIsCurrent, requiresTestPlanApproval, testPlanHash } from './approval.ts';
+import { assertHumanApprover, confirmationMode, executionContractIsCurrent, MERGED_TEST_CONFIRMATION_ZH, PLAN_REQUIREMENTS_CONFIRMATION_ZH, requiresTestPlanApproval, START_TEST_CONFIRMATION_ZH, testPlanHash } from './approval.ts';
 import { assertRecoveryAction, assertSafeAction } from './safety.ts';
 import { generateGuidedScenarioRegressions } from './scenario-regression.ts';
 
@@ -20,6 +21,7 @@ type RunContextInput = Partial<ExecutionSnapshot> & { scenarioId?: string };
 
 export function buildExecutionSnapshot(root: string, task: TestTask, input: RunContextInput = {}): ExecutionSnapshot {
   const platform = input.platform ?? task.scope.platforms[0] ?? 'web';
+  assertSupportedPlatform(platform);
   const snapshot = capabilitySnapshot(root, platform);
   return {
     environment: input.environment ?? task.scope.environments[0] ?? 'local', platform, role: input.role ?? task.scope.roles[0] ?? 'default',
@@ -37,7 +39,9 @@ function newRun(root: string, task: TestTask, input: RunContextInput = {}): Test
     id: `run-${startedAt.replace(/[-:.TZ]/g, '').slice(0, 14)}-${randomUUID().slice(0, 8)}`,
     taskId: task.metadata.id,
     moduleId: task.metadata.moduleId,
-    planHash: task.metadata.approval?.planHash ?? testPlanHash(task),
+    // Keep the full current contract hash on the Run. Approval metadata is a
+    // human decision record and is intentionally not used as the Run hash.
+    planHash: testPlanHash(task),
     context: buildExecutionSnapshot(root, task, input),
     git: gitMetadata(root),
     status: 'pending',
@@ -60,11 +64,11 @@ function finish(root: string, task: TestTask, run: TestRun): TestRun {
     }
   }
   run.pythonRegressionEligibility = inspectPythonRegressionEligibility(task, run);
-  if (task.metadata.mode === 'guided' && !['blocked', 'paused', 'needs_confirmation', 'inconclusive'].includes(run.status)) generateGuidedScenarioRegressions(root, task, run);
+  if (task.metadata.mode === 'guided' && !['blocked', 'paused', 'inconclusive'].includes(run.status)) generateGuidedScenarioRegressions(root, task, run);
   const taskStateBeforeFinish = resolveTaskState(task.metadata.status);
   const targetTaskState = run.status === 'paused'
     ? 'paused'
-    : ['blocked', 'needs_confirmation', 'inconclusive'].includes(run.status) || run.steps.some(step => step.id === 'preflight')
+    : ['blocked', 'inconclusive'].includes(run.status) || run.steps.some(step => step.id === 'preflight')
       ? 'blocked'
       : 'reviewing_result';
   if (taskStateBeforeFinish === targetTaskState) {
@@ -86,16 +90,17 @@ function finish(root: string, task: TestTask, run: TestRun): TestRun {
   return run;
 }
 
-function preflightStatus(detail: string): RunStatus {
-  return /plan hash|approval|scenario|business|confirmation|flow/i.test(detail) ? 'needs_confirmation' : 'blocked';
+function preflightBlockActor(detail: string): 'human' | 'host' | 'agent' {
+  return /plan hash|approval|scenario|business|confirmation|flow/i.test(detail) ? 'human' : 'host';
 }
 
-function block(root: string, task: TestTask, run: TestRun, detail: string, status: RunStatus = preflightStatus(detail)): TestRun {
-  run.status = status;
-  run.steps.push({ id: 'preflight', action: 'Execution preflight', status, detail, at: now(), source: 'internal' });
+function block(root: string, task: TestTask, run: TestRun, detail: string, blockActor: 'human' | 'host' | 'agent' = preflightBlockActor(detail)): TestRun {
+  run.status = 'blocked';
+  run.blockActor = blockActor;
+  run.steps.push({ id: 'preflight', action: 'Execution preflight', status: 'blocked', detail, at: now(), source: 'internal' });
   run.evidence.push({ type: 'preflight', summary: detail });
-  run.scenarioResults = task.scenarios.map(scenario => ({ scenarioId: scenario.id, status, detail }));
-  run.conclusion = status === 'needs_confirmation'
+  run.scenarioResults = task.scenarios.map(scenario => ({ scenarioId: scenario.id, status: 'blocked' as const, detail }));
+  run.conclusion = blockActor === 'human'
     ? 'Execution paused because the reviewed business contract needs user confirmation.'
     : 'Execution did not start because a capability, permission, device, environment, or safety precondition was unavailable.';
   return finish(root, task, run);
@@ -111,7 +116,7 @@ function resetSourceRunSlot(root: string, task: TestTask, previous: TestRun): vo
   const activeScripts = listPythonRegressions(root, task.metadata.moduleId, task.metadata.id)
     .filter(script => ['approved_unverified', 'validated'].includes(script.status));
   if (activeScripts.length) {
-    throw new Error(`Source Run ${previous.id} is frozen by formal Python regression script(s): ${activeScripts.map(script => script.id).join(', ')}. Run those scripts through regression-runs, or change the reviewed plan so Runtime marks them stale before creating a new Source Run.`);
+    throw new Error(`Source Run ${previous.id} is frozen by formal regression script(s): ${activeScripts.map(script => script.id).join(', ')}. Run those scripts through regression-runs, or change the reviewed plan so Runtime marks them stale before creating a new Source Run.`);
   }
   rmSync(taskSourceRunDirectory(root, task.metadata.moduleId, task.metadata.id), { recursive: true, force: true });
   clearTaskResultSection(root, task);
@@ -135,9 +140,15 @@ function resetSourceRunSlot(root: string, task: TestTask, previous: TestRun): vo
 }
 
 function beginAgentGuidedRunUnlocked(root: string, task: TestTask, context: RunContextInput = {}): TestRun {
+  const requestedPlatform = context.platform ?? task.scope.platforms[0] ?? 'web';
+  assertSupportedPlatform(requestedPlatform);
+  if (!task.scope.platforms.includes(requestedPlatform)) {
+    const run = newRun(root, task, context);
+    return block(root, task, run, platformMismatchAdvice(task.scope.platforms[0], requestedPlatform), 'agent');
+  }
   const current = currentSourceRun(root, task);
   if (current?.status === 'running') {
-    if (!executionContractIsCurrent(task, current.planHash)) return block(root, task, current, `Task plan changed after active Source Run ${current.id} started. Stop execution and obtain a new TestPlan approval before resuming.`, 'needs_confirmation');
+    if (!executionContractIsCurrent(task, current.planHash)) return block(root, task, current, `Task plan changed after active Source Run ${current.id} started. Stop execution and obtain a new TestPlan approval before resuming.`, 'human');
     if (context.scenarioId && current.scenarioId && current.scenarioId !== context.scenarioId) throw new Error(`Task ${task.metadata.id} already has active Source Run ${current.id} for Scenario ${current.scenarioId}.`);
     const contextKeys = ['environment', 'platform', 'role', 'device', 'deviceModel', 'osVersion', 'appVersion', 'webBuild', 'testDataFingerprint'] as const;
     for (const key of contextKeys) if (context[key] !== undefined && context[key] !== current.context[key]) throw new Error(`Task ${task.metadata.id} already has active Source Run ${current.id} with ${key}=${current.context[key] ?? 'unknown'}, not ${context[key]}.`);
@@ -145,14 +156,15 @@ function beginAgentGuidedRunUnlocked(root: string, task: TestTask, context: RunC
   }
   if (current) resetSourceRunSlot(root, task, current);
   const taskState = resolveTaskState(task.metadata.status);
-  if (['archived', 'deprecated', 'superseded'].includes(taskState)) throw new Error(`Task ${task.metadata.id} is ${taskState} and cannot start a new Run.`);
-  if (!['ready', 'reviewing_result', 'completed', 'blocked', 'paused'].includes(taskState)) throw new Error(`Task status is ${task.metadata.status}; present the Task PRD, obtain “确认测试方案”, and then obtain the separate “确认开始测试” authorization before creating a Run.`);
-  if (!executionContractIsCurrent(task)) throw new Error('The Task plan is unapproved or changed after approval. Present the current Task PRD, obtain the exact QA reply “确认测试方案”, and then obtain the separate “确认开始测试” authorization before creating a Run.');
+  if (['archived', 'retired'].includes(taskState)) throw new Error(`Task ${task.metadata.id} is ${taskState} and cannot start a new Run.`);
+  if (!task.requirements?.platformDeclaration) throw new Error('The TestPlan has no platform declaration. The Agent must determine Web or iOS from source/configuration, write PlanDraft.platformDeclaration, and reapply the PlanDraft before starting. Run qa-agent doctor --platforms <web|ios> to verify the selected environment.');
+  if (!['ready', 'reviewing_result', 'completed', 'blocked', 'paused'].includes(taskState)) throw new Error(`Task status is ${task.metadata.status}; present the Task PRD and obtain the required ${confirmationMode(task) === 'merged' ? `“${MERGED_TEST_CONFIRMATION_ZH}”` : `“${PLAN_REQUIREMENTS_CONFIRMATION_ZH}” followed by “${START_TEST_CONFIRMATION_ZH}”`} before creating a Run.`);
+  if (!executionContractIsCurrent(task)) throw new Error(`The Task plan is unapproved or changed after approval. Present the current Task PRD and obtain the required ${confirmationMode(task) === 'merged' ? `“${MERGED_TEST_CONFIRMATION_ZH}”` : `“${PLAN_REQUIREMENTS_CONFIRMATION_ZH}” followed by “${START_TEST_CONFIRMATION_ZH}”`}.`);
   const run = newRun(root, task, context);
   const required = [...new Set([...task.capabilities.required, ...platformCapabilities(run.context.platform)])];
   const capabilities = checkCapabilities(root, required, task.capabilities.optional);
-  if (capabilities.missing.length) return block(root, task, run, `Missing required capabilities: ${capabilities.missing.join(', ')}. ${capabilityAdvice(capabilities.missing).join(' ')}`, 'blocked');
-  if (run.context.platform !== 'web' && run.context.permissionSnapshot.status !== 'verified') return block(root, task, run, 'macOS/MCP permissions are not verified. Run host doctor --platform android|ios, grant Screen Recording and Accessibility, then retry.', 'blocked');
+  if (capabilities.missing.length) return block(root, task, run, `Missing required capabilities: ${capabilities.missing.join(', ')}. ${capabilityAdvice(capabilities.missing).join(' ')}`, 'host');
+  if (run.context.platform === 'ios' && run.context.permissionSnapshot.status !== 'verified') return block(root, task, run, 'iOS Simulator capability or permission is not verified. Run qa-agent doctor --platforms ios, fix the reported local Runner prerequisite, then retry qa-agent test. Do not call MCP or direct UI tools.', 'host');
   run.status = 'running';
   run.steps.push({ id: 'agent-guided-preflight', action: 'Agent-guided test preflight', status: 'passed', detail: 'Required capabilities are available. Persist every real UI action, screenshot, assertion, and cleanup.', at: now(), source: 'internal' });
   task.sourceRunRef = 'source-run/run.json';
@@ -226,7 +238,7 @@ export function recordGuidedVerdict(root: string, runId: string, input: { stepId
   return run;
 }
 
-export function recordAgentStep(root: string, runId: string, input: { action: string; plannedStepId?: string; uiAction?: UiAction; safetyAction?: string; detail: string; status?: RunStatus; screenshotPath?: string; visualInspection?: VisualInspectionStatus; source?: TestRun['steps'][number]['source']; executionMode?: StepExecutionMode; scenarioId?: string; locator?: Locator; actualLocator?: Locator; inputRefs?: Record<string, string>; expectedState?: string; actualState?: string; adaptation?: string }): TestRun {
+export function recordAgentStep(root: string, runId: string, input: { action: string; plannedStepId?: string; uiAction?: UiAction; safetyAction?: string; detail: string; status?: RunStatus; screenshotPath?: string; visualInspection?: VisualInspectionStatus; source?: TestRun['steps'][number]['source']; executionMode?: StepExecutionMode; scenarioId?: string; locator?: Locator; actualLocator?: Locator; inputRefs?: Record<string, string>; driverCommand?: string; driverParams?: Record<string, unknown>; expectedState?: string; actualState?: string; adaptation?: string }): TestRun {
   const run = readRunById(root, runId);
   if (run.status !== 'running') throw new Error(`Run ${runId} is not running.`);
   const task = readTask(root, run.moduleId, run.taskId);
@@ -255,7 +267,7 @@ export function recordAgentStep(root: string, runId: string, input: { action: st
     action: input.action,
     uiAction: input.uiAction,
     safetyAction: input.safetyAction,
-    status: guidedApproval ? 'needs_confirmation' : input.status ?? 'passed',
+    status: guidedApproval ? 'blocked' : input.status ?? 'passed',
     detail: input.detail,
     at: now(),
     scenarioId,
@@ -266,6 +278,8 @@ export function recordAgentStep(root: string, runId: string, input: { action: st
     locator: input.locator,
     actualLocator: input.actualLocator,
     inputRefs: input.inputRefs,
+    driverCommand: input.driverCommand,
+    driverParams: input.driverParams,
     expectedState: input.expectedState ?? guidedApproval?.expected,
     actualState: input.actualState,
     adaptation: input.adaptation,
@@ -313,7 +327,7 @@ export function recordRecoveryAttempt(root: string, runId: string, input: { reas
   assertRecoveryAction(input.action);
   const task = readTask(root, run.moduleId, run.taskId);
   const max = task.recoveryPolicy.maxRecoveryAttempts;
-  if (run.recoveryAttempts.length >= max) return block(root, task, run, `Recovery attempt limit ${max} was reached.`, 'blocked');
+  if (run.recoveryAttempts.length >= max) return block(root, task, run, `Recovery attempt limit ${max} was reached.`, 'host');
   if (input.action === 'reset-sandbox-data' && !task.recoveryPolicy.allowSandboxDataReset) throw new Error('Task recovery policy does not allow sandbox data reset.');
   const attempt = { id: `recovery-${run.recoveryAttempts.length + 1}`, reason: input.reason, action: input.action, outcome: input.outcome, detail: input.detail, failedStepId: input.failedStepId, at: now() };
   run.recoveryAttempts.push(attempt);
@@ -328,7 +342,7 @@ export function recordRecoveryAttempt(root: string, runId: string, input: { reas
 export function recordVisualFinding(root: string, runId: string, input: { scenarioId: string; assertionId: string; expected: string; actual: string; status: RunStatus; screenshotPath?: string; inspectionProvider?: string }): TestRun {
   const run = readRunById(root, runId);
   if (run.status !== 'running') throw new Error(`Run ${runId} is not running.`);
-  if (!['passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable', 'needs_confirmation', 'adapted'].includes(input.status)) throw new Error('A visual observation must use a terminal QA conclusion status.');
+  if (!['passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable', 'adapted'].includes(input.status)) throw new Error('A visual observation must use a terminal QA conclusion status.');
   const task = readTask(root, run.moduleId, run.taskId);
   if (!executionContractIsCurrent(task, run.planHash)) throw new Error(requiresTestPlanApproval(task) ? `Task ${task.metadata.id} plan changed after Run ${run.id} started; stop assertion recording and obtain a new TestPlan approval.` : `Quick Task ${task.metadata.id} execution contract changed after Run ${run.id} started; stop assertion recording and refresh the Task.`);
   const scenario = task.scenarios.find(item => item.id === input.scenarioId);
@@ -352,7 +366,7 @@ export function recordCleanupFinding(root: string, runId: string, input: { scena
   if (!scenario) throw new Error(`Scenario ${input.scenarioId} does not belong to task ${run.taskId}.`);
   if (run.scenarioId && run.scenarioId !== input.scenarioId) throw new Error(`Run is scoped to scenario ${run.scenarioId}; received cleanup for ${input.scenarioId}.`);
   if (!scenario.cleanup.includes(input.cleanup)) throw new Error(`Cleanup ${input.cleanup} is not declared for scenario ${input.scenarioId}.`);
-  if (!['passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable', 'needs_confirmation'].includes(input.status)) throw new Error('Cleanup must use a terminal status.');
+  if (!['passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable'].includes(input.status)) throw new Error('Cleanup must use a terminal status.');
   const screenshotPath = input.screenshotPath ? captureScreenshot(root, run, `cleanup-${run.cleanupFindings.length + 1}`, input.screenshotPath, 'performed', `Cleanup: ${input.cleanup}`) : undefined;
   const finding = { scenarioId: input.scenarioId, cleanup: input.cleanup, actual: input.actual, status: input.status, screenshotPath, at: now() };
   run.cleanupFindings.push(finding);
@@ -365,7 +379,7 @@ export function completeAgentGuidedRun(root: string, task: TestTask, runId: stri
   const run = readRunById(root, runId);
   if (run.status !== 'running') throw new Error(`Run ${runId} is not running.`);
   const currentTask = readTask(root, run.moduleId, run.taskId);
-  if (!executionContractIsCurrent(currentTask, run.planHash)) return block(root, currentTask, run, requiresTestPlanApproval(currentTask) ? 'Task plan changed after this Run started. Stop execution and obtain a new TestPlan approval before retrying.' : 'Quick Task execution contract changed after this Run started. Stop execution and refresh the Task before retrying.', 'needs_confirmation');
+  if (!executionContractIsCurrent(currentTask, run.planHash)) return block(root, currentTask, run, requiresTestPlanApproval(currentTask) ? 'Task plan changed after this Run started. Stop execution and obtain a new TestPlan approval before retrying.' : 'Quick Task execution contract changed after this Run started. Stop execution and refresh the Task before retrying.', 'human');
   task = currentTask;
   if (task.metadata.mode === 'guided') {
     if (run.guidedPending?.type === 'execute_action') throw new Error(`User-led Run ${run.id} has an approved action that has not been executed.`);
@@ -411,7 +425,6 @@ export function completeAgentGuidedRun(root: string, task: TestTask, runId: stri
 function finalStatus(statuses: RunStatus[]): RunStatus {
   if (!statuses.length || statuses.includes('pending') || statuses.includes('running')) return 'blocked';
   if (statuses.includes('failed')) return 'failed';
-  if (statuses.includes('needs_confirmation')) return 'needs_confirmation';
   if (statuses.includes('inconclusive')) return 'inconclusive';
   if (statuses.includes('paused')) return 'paused';
   if (statuses.includes('blocked')) return 'blocked';

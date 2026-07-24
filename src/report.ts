@@ -51,7 +51,7 @@ export function writeReport(root: string, task: TestTask, run: TestRun): string 
     `- Git Commit: ${run.git.commit ?? 'unknown'}`,
     `- Safe Mode: ${run.safeMode}`,
     `- Plan hash: ${run.planHash ?? 'unknown'}`,
-    `- MCP snapshot: ${run.context.mcpSnapshot.map(item => `${item.id}:${item.status}/${item.permissionStatus}`).join(', ') || 'none'}`,
+    `- Legacy host snapshot (not used for UI execution): ${run.context.mcpSnapshot.map(item => `${item.id}:${item.status}/${item.permissionStatus}`).join(', ') || 'none'}`,
     `- Permission snapshot: ${run.context.permissionSnapshot.status}`, '',
     '## Business Scope', '',
     `- Description: ${task.description}`,

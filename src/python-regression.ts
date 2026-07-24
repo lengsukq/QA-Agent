@@ -13,6 +13,8 @@ import {
   taskSourceRunReportPath,
 } from './project.ts';
 import { hasRuntimeReportMarker } from './report-contract.ts';
+import { exportStepsFromRun, validateStepsFile, type RegressionStepsFile } from './regression-steps.ts';
+import { projectRunnerDir } from './runner-path.ts';
 import { resolveSessionIdentity } from './session.ts';
 import {
   assertSafeId,
@@ -58,6 +60,14 @@ export interface CreatePythonRegressionDraftInput {
   pythonCommand?: string;
 }
 
+export interface CreateStepsRegressionDraftInput {
+  moduleId: string;
+  taskId: string;
+  runId: string;
+  scriptId?: string;
+  sessionKey?: string;
+}
+
 export interface PublishPythonRegressionInput {
   moduleId: string;
   taskId: string;
@@ -74,7 +84,6 @@ export interface RunPythonRegressionInput {
   taskId: string;
   scriptId: string;
   pythonCommand?: string;
-  bridge?: string;
   timeoutMs?: number;
 }
 
@@ -108,6 +117,10 @@ function draftManifestPath(root: string, sessionKey: string | undefined, draftId
 
 function draftScriptPath(root: string, sessionKey: string | undefined, draftId: string): string {
   return join(draftDirectory(root, sessionKey, draftId), `${draftId}.py`);
+}
+
+function draftStepsPath(root: string, sessionKey: string | undefined, draftId: string): string {
+  return join(draftDirectory(root, sessionKey, draftId), `${draftId}.steps.json`);
 }
 
 function regressionDirectory(root: string, moduleId: string, taskId: string): string {
@@ -198,6 +211,8 @@ function normalizedFlow(task: TestTask, run: TestRun, scenarioIds: string[], ste
       id: step.id,
       scenarioId: step.scenarioId,
       action: step.uiAction,
+      driverCommand: step.driverCommand,
+      driverParams: step.driverParams ?? {},
       locator: step.actualLocator ?? step.locator,
       inputRefs: step.inputRefs ?? {},
       expectedState: step.expectedState,
@@ -225,15 +240,19 @@ export function inspectPythonRegressionEligibility(task: TestTask, run: TestRun)
     return ['passed', 'adapted'].includes(run.scenarioResults.find(item => item.scenarioId === scenario.id)?.status ?? '');
   });
   const targetActions = new Set(['navigate', 'click', 'input', 'fill']);
+  const platform = run.context.platform;
   const allSteps: TestRun['steps'] = [];
   for (const scenario of selectedScenarios) {
     const reasons: string[] = [];
     const steps = sourceAutomationSteps(run).filter(step => step.scenarioId === scenario.id);
     if (!steps.length) reasons.push('No host-automated UI steps were recorded for this successful Scenario.');
     for (const step of steps) {
-      if (!step.uiAction) reasons.push(`${step.id}: uiAction is required for Python generation.`);
-      if (step.uiAction && targetActions.has(step.uiAction) && !(step.actualLocator ?? step.locator)) reasons.push(`${step.id}: ${step.uiAction} requires a stable locator.`);
-      if ((step.uiAction === 'input' || step.uiAction === 'fill') && !Object.keys(step.inputRefs ?? {}).length) reasons.push(`${step.id}: input actions require structured inputRefs.`);
+      if (!step.uiAction) reasons.push(`${step.id}: uiAction is required for regression step generation.`);
+      const command = step.driverCommand ?? '';
+      const nativeFocusedAction = platform === 'ios' && ['type-text', 'key', 'clear'].includes(command);
+      if (step.uiAction && targetActions.has(step.uiAction) && !(step.actualLocator ?? step.locator) && !nativeFocusedAction) reasons.push(`${step.id}: ${step.uiAction} requires a stable locator.`);
+      const requiresInputRef = (step.uiAction === 'input' || step.uiAction === 'fill') && !['key', 'clear'].includes(command);
+      if (requiresInputRef && !Object.keys(step.inputRefs ?? {}).length) reasons.push(`${step.id}: input actions require structured inputRefs.`);
       if (!step.screenshotPath) reasons.push(`${step.id}: every source UI step requires screenshot evidence.`);
     }
     for (const assertion of scenario.visualAssertions ?? []) {
@@ -358,13 +377,74 @@ export function createPythonRegressionDraft(root: string, input: CreatePythonReg
   });
 }
 
+export function createStepsRegressionDraft(root: string, input: CreateStepsRegressionDraftInput): { draft: PythonRegressionDraft; stepsFile: RegressionStepsFile; scriptPath: string } {
+  assertSafeId(input.moduleId, 'module id');
+  assertSafeId(input.taskId, 'task id');
+  const task = readTask(root, input.moduleId, input.taskId);
+  const scriptId = input.scriptId ?? scriptIdFromTask(task);
+  assertSafeId(scriptId, 'regression id');
+  const source = validateSourceRun(root, task, input.runId);
+  const stepsFile = exportStepsFromRun(root, source.run, scriptId, source.stepIds);
+  if (!stepsFile.steps.length) throw new Error('Source Run produced no exportable regression steps.');
+  const exportedIds = [...stepsFile.steps.map(step => step.id)].sort();
+  const expectedIds = [...source.stepIds].sort();
+  if (JSON.stringify(exportedIds) !== JSON.stringify(expectedIds)) {
+    throw new Error(`Regression step export does not cover the validated source flow. Expected: ${expectedIds.join(', ')}.`);
+  }
+  const identity = resolveSessionIdentity(input.sessionKey);
+  const path = draftStepsPath(root, input.sessionKey, scriptId);
+  const manifestPath = draftManifestPath(root, input.sessionKey, scriptId);
+  const serialized = `${JSON.stringify(stepsFile, null, 2)}\n`;
+  return withFileLock(qaPath(root, '.locks', `python-draft-${identity.storageKey}-${scriptId}.lock`), () => {
+    const existing = existsSync(manifestPath) ? readJson<PythonRegressionDraft>(manifestPath) : undefined;
+    if (existing && (existing.moduleId !== input.moduleId || existing.taskId !== input.taskId || existing.sourceRunId !== input.runId)) {
+      throw new Error(`Draft ${scriptId} already belongs to another Task or source Run.`);
+    }
+    const timestamp = now();
+    const draft: PythonRegressionDraft = {
+      apiVersion: DRAFT_API_VERSION,
+      kind: 'PythonRegressionDraft',
+      id: scriptId,
+      moduleId: input.moduleId,
+      taskId: input.taskId,
+      sessionKey: identity.sessionKey,
+      sourceRunId: input.runId,
+      sourceReportRef: source.reportRef,
+      sourcePlanHash: source.run.planHash ?? testPlanHash(task),
+      sourceStepIds: source.stepIds,
+      scenarioIds: source.scenarioIds,
+      sourceFlowHash: source.flowHash,
+      scriptRef: relative(qaPath(root), path),
+      scriptHash: hashText(serialized),
+      status: 'draft',
+      createdBy: 'agent',
+      createdAt: existing?.createdAt ?? timestamp,
+      updatedAt: timestamp,
+    };
+    writeTextAtomic(path, serialized);
+    writeJsonAtomic(manifestPath, draft);
+    appendTaskEvent(root, {
+      type: 'python_regression_draft_saved',
+      actor: { type: 'agent', id: 'qa-agent' },
+      moduleId: input.moduleId,
+      taskId: input.taskId,
+      reasonCode: 'user_requested_regression_steps_draft',
+      artifactHash: draft.scriptHash,
+      idempotencyKey: `regression-steps-draft:${identity.storageKey}:${scriptId}:${draft.scriptHash}`,
+      metadata: { sourceRunId: input.runId, sourceStepIds: source.stepIds, draftRef: draft.scriptRef },
+    });
+    return { draft, stepsFile, scriptPath: path };
+  });
+}
+
 export function readPythonRegressionDraft(root: string, draftId: string, sessionKey?: string): { draft: PythonRegressionDraft; script: string; scriptPath: string } {
   assertSafeId(draftId, 'Python regression draft id');
   const manifestPath = draftManifestPath(root, sessionKey, draftId);
-  const scriptPath = draftScriptPath(root, sessionKey, draftId);
-  if (!existsSync(manifestPath) || !existsSync(scriptPath)) throw new Error(`Python regression draft ${draftId} was not found for this Session.`);
+  if (!existsSync(manifestPath)) throw new Error(`Python regression draft ${draftId} was not found for this Session.`);
   const draft = readJson<PythonRegressionDraft>(manifestPath);
   if (draft.apiVersion !== DRAFT_API_VERSION || draft.kind !== 'PythonRegressionDraft') throw new Error(`Python regression draft ${draftId} has an unsupported format.`);
+  const scriptPath = resolve(qaPath(root), draft.scriptRef);
+  if (!existsSync(scriptPath)) throw new Error(`Python regression draft ${draftId} was not found for this Session.`);
   const script = readFileSync(scriptPath, 'utf8');
   if (hashText(script) !== draft.scriptHash && hashText(script.trimEnd()) !== draft.scriptHash) throw new Error(`Python regression draft ${draftId} script hash changed outside Runtime.`);
   return { draft, script, scriptPath };
@@ -382,16 +462,28 @@ export function listPythonRegressionDrafts(root: string, sessionKey?: string): P
 export function publishPythonRegression(root: string, input: PublishPythonRegressionInput): { manifest: PythonRegressionManifest; scriptPath: string } {
   assertHumanApprover(input.confirmedBy);
   const approvalSource = input.approvalSource ?? 'current-chat-explicit-approval';
-  const { draft, script } = readPythonRegressionDraft(root, input.draftId, input.sessionKey);
+  const { draft, script, scriptPath: draftScriptFile } = readPythonRegressionDraft(root, input.draftId, input.sessionKey);
   if (draft.moduleId !== input.moduleId || draft.taskId !== input.taskId) throw new Error('Draft does not belong to the requested Task.');
   const task = readTask(root, input.moduleId, input.taskId);
   const source = validateSourceRun(root, task, draft.sourceRunId);
   if (draft.sourcePlanHash !== testPlanHash(task)) throw new Error('Task plan changed after the draft was generated. Regenerate the script from a current successful Run.');
-  validatePythonSyntax(script, input.pythonCommand);
   if (draft.sourceFlowHash !== source.flowHash) throw new Error('Source Run flow changed after the draft was generated. Regenerate the script.');
-  validateScriptAgainstSource(script, draft.id, draft.sourceRunId, source.stepIds, source.flowHash);
+  const isSteps = draft.scriptRef.endsWith('.steps.json');
+  if (isSteps) {
+    const validation = validateStepsFile(draftScriptFile);
+    if (!validation.valid) throw new Error(`Regression steps draft is invalid: ${validation.errors.join(' ')}`);
+    const doc = readJson<RegressionStepsFile>(draftScriptFile);
+    const exportedIds = [...doc.steps.map(step => step.id)].sort();
+    const expectedIds = [...source.stepIds].sort();
+    if (JSON.stringify(exportedIds) !== JSON.stringify(expectedIds)) throw new Error('Regression steps draft no longer covers the validated source flow. Regenerate the steps.');
+  } else {
+    validatePythonSyntax(script, input.pythonCommand);
+    validateScriptAgainstSource(script, draft.id, draft.sourceRunId, source.stepIds, source.flowHash);
+  }
   const manifestPath = regressionManifestPath(root, input.moduleId, input.taskId, draft.id);
-  const scriptPath = regressionScriptPath(root, input.moduleId, input.taskId, draft.id);
+  const scriptPath = isSteps
+    ? join(regressionDirectory(root, input.moduleId, input.taskId), `${draft.id}.steps.json`)
+    : regressionScriptPath(root, input.moduleId, input.taskId, draft.id);
   return withFileLock(qaPath(root, '.locks', `python-regression-${input.moduleId}-${input.taskId}-${draft.id}.lock`), () => {
     const existing = existsSync(manifestPath) ? readJson<PythonRegressionManifest>(manifestPath) : undefined;
     if (existing && !input.replace) throw new Error(`Python regression ${draft.id} already exists. Use --replace only after the user approves the revised draft.`);
@@ -581,12 +673,15 @@ export function runPythonRegression(root: string, input: RunPythonRegressionInpu
     writeJsonAtomic(regressionManifestPath(root, input.moduleId, input.taskId, input.scriptId), manifest);
     throw new Error(`Python regression ${manifest.id} is stale because its source flow changed.`);
   }
-  const scriptPath = regressionScriptPath(root, input.moduleId, input.taskId, input.scriptId);
+  const scriptPath = resolve(taskDirectory(root, input.moduleId, input.taskId), manifest.scriptRef);
   if (!existsSync(scriptPath)) throw new Error(`Python regression script is missing: ${manifest.scriptRef}.`);
+  const isStepsJson = scriptPath.endsWith('.steps.json');
   const script = readFileSync(scriptPath, 'utf8');
   if (hashText(script) !== manifest.scriptHash && hashText(script.trimEnd()) !== manifest.scriptHash) throw new Error(`Python regression ${manifest.id} script hash changed outside Runtime.`);
-  validatePythonSyntax(script, input.pythonCommand);
-  validatePythonSafety(script);
+  if (!isStepsJson) {
+    validatePythonSyntax(script, input.pythonCommand);
+    validatePythonSafety(script);
+  }
 
   const runId = `pyreg-${now().replace(/[-:.TZ]/g, '').slice(0, 14)}-${randomUUID().slice(0, 8)}`;
   const runDirectory = regressionRunDirectory(root, input.moduleId, input.taskId, runId);
@@ -596,10 +691,18 @@ export function runPythonRegression(root: string, input: RunPythonRegressionInpu
   const stdoutPath = join(runDirectory, 'stdout.log');
   const stderrPath = join(runDirectory, 'stderr.log');
   const startedAt = now();
-  const execution = spawnSync(input.pythonCommand ?? 'python3', [scriptPath], {
-    cwd: taskDirectory(root, input.moduleId, input.taskId),
+  const pythonCmd = input.pythonCommand ?? 'python3';
+  const spawnArgs = isStepsJson
+    ? ['-m', 'qa_agent_runner', 'replay', scriptPath]
+    : [scriptPath];
+  const spawnCwd = isStepsJson
+    ? projectRunnerDir(root)
+    : taskDirectory(root, input.moduleId, input.taskId);
+  const execution = spawnSync(pythonCmd, spawnArgs, {
+    cwd: spawnCwd,
     env: {
       ...process.env,
+      ...(isStepsJson ? { PYTHONPATH: spawnCwd } : {}),
       QA_AGENT_PROJECT_ROOT: root,
       QA_AGENT_TASK_DIR: taskDirectory(root, input.moduleId, input.taskId),
       QA_AGENT_REGRESSION_RUN_DIR: runDirectory,
@@ -608,7 +711,6 @@ export function runPythonRegression(root: string, input: RunPythonRegressionInpu
       QA_AGENT_EVIDENCE_DIR: join(runDirectory, 'evidence'),
       QA_AGENT_SOURCE_RUN_ID: manifest.sourceRunId,
       QA_AGENT_REGRESSION_ID: manifest.id,
-      ...(input.bridge ? { QA_AGENT_HOST_BRIDGE: input.bridge } : {}),
     },
     encoding: 'utf8',
     timeout: input.timeoutMs ?? 15 * 60_000,

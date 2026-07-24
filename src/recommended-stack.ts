@@ -1,7 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { qaPath, readProject } from './project.ts';
-import { readJson } from './store.ts';
-import type { PermissionStatus } from './types.ts';
+import { readProject } from './project.ts';
 
 export type RecommendationLevel = 'recommended' | 'optional';
 export type RecommendationStatus = 'available' | 'missing' | 'incompatible' | 'unknown';
@@ -43,15 +41,6 @@ export interface RecommendedRegressionStackDiagnosis {
   unifiedOutput: string[];
   reference: string;
 }
-
-type HostConnection = {
-  id: string;
-  status: 'available' | 'unavailable';
-  capabilities: string[];
-  version?: string;
-  host?: string;
-  permissionStatus?: PermissionStatus;
-};
 
 const defaultProbe: CommandProbe = (command, args) => {
   const result = spawnSync(command, args, { encoding: 'utf8', timeout: 8000 });
@@ -173,21 +162,6 @@ function playwrightBrowsersCheck(python: string | undefined, probe: CommandProbe
   };
 }
 
-function iosMcpCheck(root: string): RecommendedToolCheck {
-  const connections = readJson<{ connections?: HostConnection[] }>(qaPath(root, 'mcp.json')).connections ?? [];
-  const connection = connections.find(item => item.status === 'available' && /ios[-_. ]?simulator/i.test(`${item.id} ${item.host ?? ''}`));
-  return {
-    id: 'ios-simulator-mcp',
-    name: 'ios-simulator-mcp',
-    level: 'optional',
-    status: connection ? 'available' : 'missing',
-    version: connection?.version,
-    purpose: 'Agent-assisted first-run exploration and screenshots; not the formal regression runner.',
-    installHint: 'Configure ios-simulator-mcp in the Agent host and import its capability snapshot.',
-    detail: connection ? `Detected host connection ${connection.id}.` : undefined,
-  };
-}
-
 function webStack(python: ReturnType<typeof pythonCheck>, probe: CommandProbe): RecommendedPlatformStack {
   const tools = [
     python.tool,
@@ -206,14 +180,13 @@ function webStack(python: ReturnType<typeof pythonCheck>, probe: CommandProbe): 
   };
 }
 
-function iosStack(root: string, python: ReturnType<typeof pythonCheck>, probe: CommandProbe): RecommendedPlatformStack {
+function iosStack(python: ReturnType<typeof pythonCheck>, probe: CommandProbe): RecommendedPlatformStack {
   const tools = [
     python.tool,
     pythonModuleCheck({ python: python.command, module: 'pytest', id: 'pytest', name: 'pytest', purpose: 'Test collection, fixtures, assertions, parameterization, and cleanup.', installHint: 'python3.12 -m pip install pytest', probe }),
     commandCheck({ id: 'xcrun-simctl', name: 'xcrun simctl', command: 'xcrun', args: ['simctl', 'help'], purpose: 'Simulator lifecycle, app install/launch, permissions, and screenshots.', installHint: 'Install the full Xcode application and select its developer directory.', probe }),
     commandCheck({ id: 'fb-idb', name: 'fb-idb CLI', command: 'idb', args: ['-h'], purpose: 'Python-accessible iOS simulator UI and app automation client.', installHint: 'python3.12 -m pip install fb-idb', probe }),
     commandCheck({ id: 'idb-companion', name: 'idb_companion', command: 'idb_companion', purpose: 'Native companion process used by fb-idb to communicate with the simulator.', installHint: 'brew tap facebook/fb && brew install idb-companion', probe, existenceOnly: true }),
-    iosMcpCheck(root),
   ];
   return {
     platform: 'ios',
@@ -232,8 +205,8 @@ export function recommendedRegressionStackDiagnosis(root: string, requestedPlatf
   const python = pythonCheck(probe);
   return {
     policy: 'recommended-not-required',
-    message: platforms.length ? 'These tools are the recommended regression stack. Missing recommended or optional tools do not block QA Agent when another approved Host Bridge and the result contract are available.' : 'No Web or iOS platform is configured, so no platform-specific regression stack is recommended. Existing approved adapters may continue to use the result contract.',
-    platforms: platforms.map(platform => platform === 'ios' ? iosStack(root, python, probe) : webStack(python, probe)),
+    message: platforms.length ? 'These are the built-in Runner prerequisites for the configured Web and iOS platforms. Missing prerequisites block the corresponding platform and Doctor reports the exact repair step.' : 'No Web or iOS platform is configured. QA Agent supports only Web and iOS Simulator.',
+    platforms: platforms.map(platform => platform === 'ios' ? iosStack(python, probe) : webStack(python, probe)),
     unifiedOutput: ['result.json', 'report.md', 'screenshots/', 'stdout.log', 'stderr.log', 'evidence/ (optional)'],
     reference: 'references/recommended-regression-stack.md',
   };

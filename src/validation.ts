@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { qaPath, readTask, taskPrdPath, taskSourceRunPath, taskSourceRunReportPath } from './project.ts';
 import { hasSecrets, isSafeId, listFiles, readJson } from './store.ts';
-import { isExplicitPlanRequirementsConfirmation, isExplicitStartConfirmation, isHumanApprover, testPlanHash } from './approval.ts';
+import { approvalIsCurrent, confirmationMode, isExplicitMergedConfirmation, isExplicitPlanRequirementsConfirmation, isExplicitStartConfirmation, isHumanApprover, planReviewIsCurrent, testPlanHash } from './approval.ts';
 import { hasRuntimeReportMarker, RUNTIME_REPORT_GENERATOR } from './report-contract.ts';
 import type { RegressionRun, TaskLifecycleState, TestRun } from './types.ts';
 import { readTaskEvents } from './events.ts';
@@ -11,6 +11,7 @@ import { taskState as resolveTaskState } from './workflow-model.ts';
 import { inspectPythonRegressionEligibility } from './python-regression.ts';
 import { inspectManagedRuntimeAssets } from './managed-assets.ts';
 import { planningPrdIsCurrent } from './task-prd.ts';
+import { isSupportedPlatform } from './platform.ts';
 
 export interface ValidationResult { valid: boolean; errors: string[]; checked: number }
 function textHash(value: string): string { return createHash('sha256').update(value).digest('hex'); }
@@ -22,12 +23,20 @@ function validateDomainObject(path: string): string[] {
   if (path.endsWith('module.json') && (!isSafeId(value.id) || !['active', 'deprecated', 'archived'].includes(value.status) || typeof value.revision !== 'number')) errors.push(`${path}: invalid module id, revision, or status.`);
   if (/\/tasks\/[^/]+\/task\.json$/.test(path)) {
     if (value.apiVersion !== 'qa-agent/v2' || !value.metadata || !isSafeId(value.metadata.id) || !isSafeId(value.metadata.moduleId)) errors.push(`${path}: invalid Task contract.`);
-    const statuses = ['draft', 'planning', 'awaiting_approval', 'ready', 'running', 'reviewing_result', 'completed', 'archived', 'needs_input', 'blocked', 'paused', 'deprecated', 'superseded'];
+    const statuses = ['draft', 'planning', 'awaiting_approval', 'ready', 'running', 'reviewing_result', 'completed', 'archived', 'blocked', 'paused', 'retired'];
     if (!statuses.includes(value.metadata?.status)) errors.push(`${path}: invalid Task lifecycle state ${value.metadata?.status}.`);
     if (value.metadata?.mode && !['quick', 'guided', 'regression'].includes(value.metadata.mode)) errors.push(`${path}: invalid QA mode ${value.metadata.mode}.`);
-    if (value.metadata?.approvalPolicy !== 'test-plan-and-side-effects') errors.push(`${path}: every Task must require reviewed TestPlan and explicit start confirmation.`);
-    if (['ready', 'running', 'reviewing_result', 'completed', 'archived'].includes(value.metadata?.status) && (!isHumanApprover(value.metadata.planReview?.confirmedBy) || !value.metadata.planReview?.confirmedAt || !value.metadata.planReview?.confirmationSource || !value.metadata.planReview?.planHash || !isExplicitPlanRequirementsConfirmation(value.metadata.planReview?.statement))) errors.push(`${path}: executable or completed Task requires QA confirmation that the PRD matches requirements.`);
-    if (['ready', 'running', 'reviewing_result', 'completed', 'archived'].includes(value.metadata?.status) && (!isHumanApprover(value.metadata.approval?.confirmedBy) || !value.metadata.approval?.confirmedAt || !value.metadata.approval?.confirmationSource || !value.metadata.approval?.planHash || !isExplicitStartConfirmation(value.metadata.approval?.statement))) errors.push(`${path}: executable or completed Task requires the exact human start confirmation.`);
+    if (value.metadata?.executionIntent !== undefined && !['read-only', 'state-changing'].includes(value.metadata.executionIntent)) errors.push(`${path}: invalid executionIntent.`);
+    if (value.metadata?.approvalPolicy !== 'test-plan-and-side-effects') errors.push(`${path}: every Task must require a reviewed TestPlan and the Runtime-computed confirmation mode.`);
+    const executable = ['ready', 'running', 'reviewing_result', 'completed', 'archived'].includes(value.metadata?.status);
+    if (executable) {
+      const statementIsMerged = isExplicitMergedConfirmation(value.metadata.planReview?.statement) && isExplicitMergedConfirmation(value.metadata.approval?.statement);
+      const planReviewValid = isHumanApprover(value.metadata.planReview?.confirmedBy) && value.metadata.planReview?.confirmedAt && value.metadata.planReview?.confirmationSource && value.metadata.planReview?.planHash && (isExplicitPlanRequirementsConfirmation(value.metadata.planReview?.statement) || statementIsMerged);
+      const approvalValid = isHumanApprover(value.metadata.approval?.confirmedBy) && value.metadata.approval?.confirmedAt && value.metadata.approval?.confirmationSource && value.metadata.approval?.planHash && (isExplicitStartConfirmation(value.metadata.approval?.statement) || statementIsMerged);
+      if (!planReviewValid || !planReviewIsCurrent(readJson<any>(path))) errors.push(`${path}: executable or completed Task requires a current human plan confirmation.`);
+      if (!approvalValid || !approvalIsCurrent(readJson<any>(path))) errors.push(`${path}: executable or completed Task requires a current human start confirmation.`);
+      if (statementIsMerged && confirmationMode(readJson<any>(path)) !== 'merged') errors.push(`${path}: merged confirmation is not allowed for this Task's execution policy.`);
+    }
     if (!Array.isArray(value.scenarioRefs) || !value.scenarioRefs.length || value.scenarioRefs.some((ref: unknown) => typeof ref !== 'string' || !/^scenarios\/[a-z0-9][a-z0-9-]{0,62}\.json$/.test(ref))) errors.push(`${path}: invalid scenarioRefs.`);
     if (value.pythonRegressionRefs !== undefined && (!Array.isArray(value.pythonRegressionRefs) || value.pythonRegressionRefs.some((ref: unknown) => typeof ref !== 'string' || !/^regression\/[a-z0-9][a-z0-9-]{0,62}\.json$/.test(ref)))) errors.push(`${path}: invalid pythonRegressionRefs.`);
     if (value.sourceRunRef !== undefined && value.sourceRunRef !== 'source-run/run.json') errors.push(`${path}: sourceRunRef must be source-run/run.json.`);
@@ -43,9 +52,10 @@ function validateDomainObject(path: string): string[] {
   }
   if (path.endsWith('/module-snapshot.json') && (value.apiVersion !== 'qa-agent/v2' || value.kind !== 'ModuleSnapshot' || !isSafeId(value.moduleId) || typeof value.snapshotHash !== 'string')) errors.push(`${path}: invalid module snapshot.`);
   if (path.endsWith('/requirements.json') && (value.apiVersion !== 'qa-agent/v2' || value.kind !== 'TestRequirements' || !isSafeId(value.taskId) || !isSafeId(value.moduleId))) errors.push(`${path}: invalid requirements.`);
+  if (path.endsWith('/requirements.json') && value.platformDeclaration && (!isSupportedPlatform(value.platformDeclaration.platform) || typeof value.platformDeclaration.statement !== 'string' || !value.platformDeclaration.statement.trim() || typeof value.platformDeclaration.declaredAt !== 'string')) errors.push(`${path}: invalid platformDeclaration; choose Web or iOS Simulator and record a non-empty statement.`);
   if (/\/memory\/[^/]+\.json$/.test(path) || /\/shared-memory\/entries\/[^/]+\.json$/.test(path)) { if (!isSafeId(value.id) || !['candidate', 'active', 'superseded', 'deprecated'].includes(value.status)) errors.push(`${path}: invalid memory.`); if (hasSecrets({ content: value.content, structuredRule: value.structuredRule })) errors.push(`${path}: contains a potential secret.`); }
   if (/\/tasks\/[^/]+\/source-run\/run\.json$/.test(path)) {
-    if (!['pending', 'running', 'passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable', 'needs_confirmation', 'adapted'].includes(value.status)) errors.push(`${path}: invalid Source Run status.`);
+    if (!['pending', 'running', 'passed', 'failed', 'blocked', 'paused', 'inconclusive', 'not_applicable', 'adapted'].includes(value.status)) errors.push(`${path}: invalid Source Run status.`);
     if (value.guidedPending) {
       if (!['execute_action', 'result_verdict'].includes(value.guidedPending.type)) errors.push(`${path}: invalid user-led pending interaction.`);
       if (value.guidedPending.type === 'execute_action' && (!isSafeId(value.guidedPending.scenarioId) || typeof value.guidedPending.action !== 'string' || typeof value.guidedPending.expected !== 'string' || !isHumanApprover(value.guidedPending.approval?.confirmedBy))) errors.push(`${path}: user-led approved action is incomplete.`);
@@ -83,23 +93,24 @@ function validateDomainObject(path: string): string[] {
   if (/\/tasks\/[^/]+\/source-run\/scenario-regressions\/[^/]+\/manifest\.json$/.test(path)) {
     if (value.apiVersion !== 'qa-agent/scenario-regression-draft/v1' || value.kind !== 'ScenarioRegressionDraft' || !isSafeId(value.scenarioId) || !isSafeId(value.scriptId)) errors.push(`${path}: invalid Scenario regression draft manifest.`);
     if (!value.runId || !value.sourceFlowHash || !value.scriptHash || !Array.isArray(value.sourceStepIds) || !value.sourceStepIds.length) errors.push(`${path}: Scenario regression draft traceability is incomplete.`);
-    const scriptPath = join(dirname(path), 'script.py');
+    const scriptPath = join(dirname(path), 'steps.json');
     if (!existsSync(scriptPath)) errors.push(`${path}: Scenario regression draft script is missing.`);
     else {
       const script = readFileSync(scriptPath, 'utf8');
       if (![textHash(script), textHash(script.trimEnd())].includes(value.scriptHash)) errors.push(`${scriptPath}: Scenario regression draft hash mismatch.`);
-      if (pythonContainsRawSecret(script)) errors.push(`${scriptPath}: potential raw secret.`);
-      if (!script.includes('QA_AGENT_RESULT_PATH') || !script.includes('QA_AGENT_SCREENSHOT_DIR') || !script.includes('qa-agent/python-regression-result/v1')) errors.push(`${scriptPath}: Scenario regression result contract missing.`);
+      let stepsDoc: Record<string, unknown> | undefined; try { stepsDoc = JSON.parse(script); } catch { stepsDoc = undefined; }
+      if (!stepsDoc || stepsDoc.apiVersion !== 'qa-agent/regression-steps/v1' || !Array.isArray(stepsDoc.steps) || stepsDoc.steps.length === 0) errors.push(`${scriptPath}: Scenario regression steps file is invalid.`);
     }
   }
-  if (/\/tasks\/[^/]+\/regression\/[^/]+\.json$/.test(path)) {
+  if (/\/tasks\/[^/]+\/regression\/[^/]+\.json$/.test(path) && !path.endsWith('.steps.json')) {
     if (value.apiVersion !== 'qa-agent/python-regression/v2' || value.kind !== 'PythonRegression' || !isSafeId(value.id) || !['approved_unverified', 'validated', 'stale', 'deprecated'].includes(value.status)) errors.push(`${path}: invalid Python regression manifest.`);
     if (!isHumanApprover(value.approvedBy) || !value.approvedAt || !['current-chat-explicit-approval', 'external-review-record'].includes(value.approvalSource)) errors.push(`${path}: Python regression requires human approval.`);
-    if (!/^regression\/[a-z0-9][a-z0-9-]{0,62}\.py$/.test(value.scriptRef ?? '')) errors.push(`${path}: invalid scriptRef.`);
+    if (!/^regression\/[a-z0-9][a-z0-9-]{0,62}(?:\.steps\.json|\.py)$/.test(value.scriptRef ?? '')) errors.push(`${path}: invalid scriptRef.`);
     if (!value.sourceRunId || !value.sourceReportRef || !value.sourcePlanHash || !value.sourceFlowHash || !value.scriptHash || !Array.isArray(value.sourceStepIds) || !value.sourceStepIds.length || !Array.isArray(value.scenarioIds) || !value.scenarioIds.length) errors.push(`${path}: missing Run and flow traceability.`);
     if (value.status === 'validated' && (!value.validatedByRunId || !value.validatedAt)) errors.push(`${path}: validated script requires a completed validation Run.`);
-    const scriptPath = join(dirname(path), `${value.id}.py`);
-    if (!existsSync(scriptPath)) errors.push(`${path}: script is missing.`); else { const script = readFileSync(scriptPath, 'utf8'); if (![textHash(script), textHash(script.trimEnd())].includes(value.scriptHash)) errors.push(`${scriptPath}: script hash mismatch.`); if (pythonContainsRawSecret(script)) errors.push(`${scriptPath}: potential raw secret.`); if (!script.includes(`"sourceFlowHash":"${value.sourceFlowHash}"`) && !script.includes(`"sourceFlowHash": "${value.sourceFlowHash}"`)) errors.push(`${scriptPath}: sourceFlowHash metadata mismatch.`); if (!script.includes('QA_AGENT_RESULT_PATH') || !script.includes('qa-agent/python-regression-result/v1')) errors.push(`${scriptPath}: result contract missing.`); if (!script.includes('QA_AGENT_SCREENSHOT_DIR') || !/[\"\']screenshot[\"\']/.test(script)) errors.push(`${scriptPath}: screenshot checkpoint contract missing.`); }
+    const isStepsManifest = typeof value.scriptRef === 'string' && value.scriptRef.endsWith('.steps.json');
+    const scriptPath = join(dirname(path), isStepsManifest ? `${value.id}.steps.json` : `${value.id}.py`);
+    if (!existsSync(scriptPath)) errors.push(`${path}: script is missing.`); else { const script = readFileSync(scriptPath, 'utf8'); if (![textHash(script), textHash(script.trimEnd())].includes(value.scriptHash)) errors.push(`${scriptPath}: script hash mismatch.`); if (isStepsManifest) { let stepsDoc: Record<string, unknown> | undefined; try { stepsDoc = JSON.parse(script); } catch { stepsDoc = undefined; } if (!stepsDoc || stepsDoc.apiVersion !== 'qa-agent/regression-steps/v1' || !Array.isArray(stepsDoc.steps) || stepsDoc.steps.length === 0) errors.push(`${scriptPath}: invalid regression steps file.`); } else { if (pythonContainsRawSecret(script)) errors.push(`${scriptPath}: potential raw secret.`); if (!script.includes(`"sourceFlowHash":"${value.sourceFlowHash}"`) && !script.includes(`"sourceFlowHash": "${value.sourceFlowHash}"`)) errors.push(`${scriptPath}: sourceFlowHash metadata mismatch.`); if (!script.includes('QA_AGENT_RESULT_PATH') || !script.includes('qa-agent/python-regression-result/v1')) errors.push(`${scriptPath}: result contract missing.`); if (!script.includes('QA_AGENT_SCREENSHOT_DIR') || !/[\"\']screenshot[\"\']/.test(script)) errors.push(`${scriptPath}: screenshot checkpoint contract missing.`); } }
   }
   if (/\/tasks\/[^/]+\/regression-runs\/[^/]+\/run\.json$/.test(path)) {
     if (value.apiVersion !== 'qa-agent/python-regression-run/v1' || value.kind !== 'PythonRegressionRun' || !isSafeId(value.id) || !isSafeId(value.regressionId)) errors.push(`${path}: invalid Python regression Run.`);
@@ -119,9 +130,10 @@ function validateDomainObject(path: string): string[] {
     }
   }
   if (/\/\.runtime\/drafts\/[^/]+\/[^/]+\/draft\.json$/.test(path)) {
-    if (value.apiVersion !== 'qa-agent/python-regression-draft/v2' || value.kind !== 'PythonRegressionDraft' || value.status !== 'draft' || !isSafeId(value.id)) errors.push(`${path}: invalid Python draft.`);
+    if (value.apiVersion !== 'qa-agent/python-regression-draft/v2' || value.kind !== 'PythonRegressionDraft' || value.status !== 'draft' || !isSafeId(value.id)) errors.push(`${path}: invalid regression draft.`);
     if (!value.sourceRunId || !value.sourcePlanHash || !value.sourceFlowHash || !Array.isArray(value.sourceStepIds) || !value.sourceStepIds.length || !Array.isArray(value.scenarioIds) || !value.scenarioIds.length || !value.scriptHash) errors.push(`${path}: draft traceability is incomplete.`);
-    const scriptPath = join(dirname(path), `${value.id}.py`); if (!existsSync(scriptPath)) errors.push(`${path}: draft script is missing.`); else { const script = readFileSync(scriptPath, 'utf8'); if (![textHash(script), textHash(script.trimEnd())].includes(value.scriptHash)) errors.push(`${scriptPath}: draft hash mismatch.`); if (pythonContainsRawSecret(script)) errors.push(`${scriptPath}: potential raw secret.`); }
+    const isStepsDraft = typeof value.scriptRef === 'string' && value.scriptRef.endsWith('.steps.json');
+    const scriptPath = join(dirname(path), isStepsDraft ? `${value.id}.steps.json` : `${value.id}.py`); if (!existsSync(scriptPath)) errors.push(`${path}: draft script is missing.`); else { const script = readFileSync(scriptPath, 'utf8'); if (![textHash(script), textHash(script.trimEnd())].includes(value.scriptHash)) errors.push(`${scriptPath}: draft hash mismatch.`); if (!isStepsDraft && pythonContainsRawSecret(script)) errors.push(`${scriptPath}: potential raw secret.`); }
   }
   if (/\/regression-runs\/[^/]+\.json$/.test(path) && !/\/tasks\//.test(path)) {
     if (value.apiVersion !== 'qa-agent/python-regression-batch-run/v1' || value.kind !== 'PythonRegressionBatchRun' || !isSafeId(value.id) || !['task', 'module', 'release'].includes(value.selectionScope) || !Array.isArray(value.childRuns)) errors.push(`${path}: invalid Python regression batch Run.`);
@@ -143,7 +155,7 @@ export function validateProject(root: string): ValidationResult {
   add(listFiles(qaPath(root, 'modules'), path => path.endsWith('/test-plan.json')), ['apiVersion', 'kind', 'taskId', 'moduleId', 'planHash', 'scenarioRefs']);
   add(listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/scenarios\/[^/]+\.json$/.test(path)), ['id', 'title', 'intent', 'expected', 'evidence', 'cleanup', 'visualAssertions']);
   add(listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/source-run\/run\.json$/.test(path)), ['id', 'taskId', 'moduleId', 'context', 'status', 'steps', 'startedAt']);
-  add(listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/regression\/[^/]+\.json$/.test(path)), ['apiVersion', 'kind', 'id', 'moduleId', 'taskId', 'scriptRef', 'sourceRunId', 'sourcePlanHash', 'sourceStepIds', 'scenarioIds', 'sourceFlowHash', 'scriptHash', 'status', 'approvedBy']);
+  add(listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/regression\/[^/]+\.json$/.test(path) && !path.endsWith('.steps.json')), ['apiVersion', 'kind', 'id', 'moduleId', 'taskId', 'scriptRef', 'sourceRunId', 'sourcePlanHash', 'sourceStepIds', 'scenarioIds', 'sourceFlowHash', 'scriptHash', 'status', 'approvedBy']);
   add(listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/regression-runs\/[^/]+\/run\.json$/.test(path)), ['apiVersion', 'kind', 'id', 'regressionId', 'status', 'contractStatus', 'reportRef', 'stdoutRef', 'stderrRef']);
   add(listFiles(qaPath(root, 'regression-runs'), path => path.endsWith('.json')), ['apiVersion', 'kind', 'id', 'selectionId', 'selectionScope', 'selectionHash', 'status', 'childRuns']);
   add(listFiles(qaPath(root, 'impact-analysis'), path => path.endsWith('.json')), ['apiVersion', 'kind', 'id', 'changedFiles', 'impactedModules']);
@@ -158,7 +170,7 @@ export function validateProject(root: string): ValidationResult {
   for (const [path, fields] of files) if (existsSync(path)) { errors.push(...validateObject(path, fields)); try { errors.push(...validateDomainObject(path)); } catch (error) { errors.push(`${path}: ${(error as Error).message}`); } }
   errors.push(...inspectManagedRuntimeAssets(qaPath(root)));
 
-  const validStates = new Set<TaskLifecycleState>(['draft', 'planning', 'awaiting_approval', 'ready', 'running', 'reviewing_result', 'completed', 'archived', 'needs_input', 'blocked', 'paused', 'deprecated', 'superseded']);
+  const validStates = new Set<TaskLifecycleState>(['draft', 'planning', 'awaiting_approval', 'ready', 'running', 'reviewing_result', 'completed', 'archived', 'blocked', 'paused', 'retired']);
   for (const manifestPath of listFiles(qaPath(root, 'modules'), path => /\/tasks\/[^/]+\/task\.json$/.test(path))) {
     const manifest = readJson<Record<string, any>>(manifestPath); const moduleId = manifest.metadata?.moduleId; const taskId = manifest.metadata?.id; if (!moduleId || !taskId) continue;
     const taskDir = dirname(manifestPath); const task = readTask(root, moduleId, taskId);
@@ -175,7 +187,7 @@ export function validateProject(root: string): ValidationResult {
       if (!existsSync(sourceReport) || !hasRuntimeReportMarker(readFileSync(sourceReport, 'utf8'), sourceRun.id)) errors.push(`${manifestPath}: completed Source Run report is missing or invalid.`);
       for (const screenshot of sourceRun.screenshots ?? []) if (!existsSync(join(taskDir, 'source-run', screenshot.path))) errors.push(`${manifestPath}: Source Run screenshot is missing: ${screenshot.path}.`);
     } else if (manifest.sourceReportRef !== undefined) errors.push(`${manifestPath}: sourceReportRef exists before the Source Run is completed.`);
-    const planHash = testPlanHash(task); const regressions = listFiles(join(taskDir, 'regression'), path => path.endsWith('.json')).map(path => readJson<Record<string, any>>(path)); const regressionRuns = listFiles(join(taskDir, 'regression-runs'), path => path.endsWith('/run.json')).map(path => readJson<Record<string, any>>(path)); const declared = new Set<string>(manifest.pythonRegressionRefs ?? []);
+    const planHash = testPlanHash(task); const regressions = listFiles(join(taskDir, 'regression'), path => path.endsWith('.json') && !path.endsWith('.steps.json')).map(path => readJson<Record<string, any>>(path)); const regressionRuns = listFiles(join(taskDir, 'regression-runs'), path => path.endsWith('/run.json')).map(path => readJson<Record<string, any>>(path)); const declared = new Set<string>(manifest.pythonRegressionRefs ?? []);
     for (const regression of regressions) {
       if (!declared.has(`regression/${regression.id}.json`)) errors.push(`${manifestPath}: script ${regression.id} is missing from pythonRegressionRefs.`);
       if (!sourceRun || sourceRun.id !== regression.sourceRunId) { if (regression.status !== 'stale') errors.push(`${manifestPath}: script ${regression.id} Source Run is missing or no longer current.`); continue; }
@@ -199,13 +211,16 @@ export function validateProject(root: string): ValidationResult {
 export function validateSkill(skillRoot: string): ValidationResult {
   const path = join(skillRoot, 'SKILL.md'); if (!existsSync(path)) return { valid: false, errors: [`${path}: not found`], checked: 0 };
   const text = readFileSync(path, 'utf8'); const errors: string[] = [];
-  if (!/^---\nname: [a-z0-9-]+\ndescription: .+\n---\n/s.test(text)) errors.push('SKILL.md: invalid frontmatter.');
+  if (!new RegExp('^---\\nname: [a-z0-9-]+\\ndescription: .+\\n---\\n', 's').test(text)) errors.push('SKILL.md: invalid frontmatter.');
   if (text.includes('[TODO:')) errors.push('SKILL.md: contains TODO text.');
-  const workflowPath = join(skillRoot, 'references', 'workflow.md'); const pythonPath = join(skillRoot, 'references', 'python-regression.md'); const recommendedStackPath = join(skillRoot, 'references', 'recommended-regression-stack.md');
-  for (const file of [workflowPath, pythonPath, recommendedStackPath]) if (!existsSync(file)) errors.push(`${file}: not found`);
-  for (const phase of ['guided', 'regression-test']) { const phasePath = join(skillRoot, 'skills', phase, 'SKILL.md'); if (!existsSync(phasePath)) { errors.push(`${phasePath}: not found`); continue; } const phaseText = readFileSync(phasePath, 'utf8'); if (!new RegExp(`^---\\nname: qa-agent-${phase}\\ndescription: .+\\n---\\n`, 's').test(phaseText)) errors.push(`${phasePath}: invalid frontmatter.`); if (!text.includes(`qa-agent-${phase}`)) errors.push(`SKILL.md: route qa-agent-${phase} is missing.`); if (phase === 'regression-test' && (!phaseText.includes('qa-agent regression run') || /qa-agent regression (?:draft|publish)/.test(phaseText))) errors.push(`${phasePath}: regression-test must only run formal Python scripts.`); }
+  const workflowPath = join(skillRoot, 'references', 'workflow.md'); const runnerPath = join(skillRoot, 'references', 'regression-runner.md'); const recommendedStackPath = join(skillRoot, 'references', 'recommended-regression-stack.md');
+  for (const file of [workflowPath, runnerPath, recommendedStackPath]) if (!existsSync(file)) errors.push(`${file}: not found`);
+  for (const phase of ['doctor', 'guided', 'regression-test']) { const phasePath = join(skillRoot, 'skills', phase, 'SKILL.md'); if (!existsSync(phasePath)) { errors.push(`${phasePath}: not found`); continue; } const phaseText = readFileSync(phasePath, 'utf8'); if (!new RegExp(`^---\\nname: qa-agent-${phase}\\ndescription: .+\\n---\\n`, 's').test(phaseText)) errors.push(`${phasePath}: invalid frontmatter.`); if (!text.includes(`qa-agent-${phase}`)) errors.push(`SKILL.md: route qa-agent-${phase} is missing.`); if (phase === 'doctor' && (!phaseText.includes('qa-agent doctor') || !phaseText.includes('unified Runner') || !phaseText.includes('do not install'))) errors.push(`${phasePath}: Doctor must guide readiness without automatic dependency installation.`); if (phase === 'regression-test' && (!phaseText.includes('qa-agent regression run') || !phaseText.includes('qa_agent_runner replay') || /qa-agent regression (?:draft|publish)/.test(phaseText))) errors.push(`${phasePath}: regression-test must only run formal regression scripts.`); }
+  if (!(/Only Web and iOS Simulator are supported|Web\/iOS only/.test(text)) || !/Never use MCP as a bridge/.test(text)) errors.push('SKILL.md: built-in Web/iOS Runner and platform-mismatch boundary is missing.');
+  const doctorText = existsSync(join(skillRoot, 'skills', 'doctor', 'SKILL.md')) ? readFileSync(join(skillRoot, 'skills', 'doctor', 'SKILL.md'), 'utf8') : '';
+  if (doctorText && (!doctorText.includes('qa-agent doctor --platforms') || !doctorText.includes('reapply') || !/do not install/i.test(doctorText) || !/Never call iOS MCP|Do not use MCP/i.test(doctorText))) errors.push(`${join(skillRoot, 'skills', 'doctor', 'SKILL.md')}: Doctor platform recovery contract is incomplete.`);
   const recommendedStackText = existsSync(recommendedStackPath) ? readFileSync(recommendedStackPath, 'utf8') : '';
-  if (recommendedStackText && (!/Python 3\.12/.test(recommendedStackText) || !/pytest-playwright/.test(recommendedStackText) || !/xcrun simctl/.test(recommendedStackText) || !/fb-idb/.test(recommendedStackText) || !/idb_companion/.test(recommendedStackText) || !/ios-simulator-mcp/.test(recommendedStackText) || !/result\.json/.test(recommendedStackText) || !/report\.md/.test(recommendedStackText) || !/screenshots\//.test(recommendedStackText) || !/stdout\.log/.test(recommendedStackText) || !/stderr\.log/.test(recommendedStackText) || !/evidence\//.test(recommendedStackText))) errors.push(`${recommendedStackPath}: recommended stack contract is incomplete.`);
+  if (recommendedStackText && (!/Python 3\.12/.test(recommendedStackText) || !/pytest-playwright/.test(recommendedStackText) || !/xcrun simctl/.test(recommendedStackText) || !/fb-idb/.test(recommendedStackText) || !/idb_companion/.test(recommendedStackText) || !/qa-agent regression run/.test(recommendedStackText) || !/result\.json/.test(recommendedStackText) || !/report\.md/.test(recommendedStackText) || !/screenshots\//.test(recommendedStackText) || !/stdout\.log/.test(recommendedStackText) || !/stderr\.log/.test(recommendedStackText) || !/evidence\//.test(recommendedStackText))) errors.push(`${recommendedStackPath}: recommended stack contract is incomplete.`);
   if (recommendedStackText && /junit|allure|ui-tree|playwright trace|videos?\//i.test(recommendedStackText)) errors.push(`${recommendedStackPath}: removed extended artifact requirements must not be documented.`);
-  return { valid: errors.length === 0, errors, checked: 6 };
+  return { valid: errors.length === 0, errors, checked: 7 };
 }

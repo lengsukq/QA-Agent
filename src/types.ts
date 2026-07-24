@@ -1,6 +1,8 @@
+import type { SupportedPlatform } from './platform.ts';
+
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
-export type TaskLifecycleState = 'draft' | 'planning' | 'awaiting_approval' | 'ready' | 'running' | 'reviewing_result' | 'completed' | 'archived' | 'needs_input' | 'blocked' | 'paused' | 'deprecated' | 'superseded';
-export type RunStatus = 'pending' | 'running' | 'passed' | 'failed' | 'blocked' | 'paused' | 'inconclusive' | 'not_applicable' | 'needs_confirmation' | 'adapted';
+export type TaskLifecycleState = 'draft' | 'planning' | 'awaiting_approval' | 'ready' | 'running' | 'reviewing_result' | 'completed' | 'archived' | 'blocked' | 'paused' | 'retired';
+export type RunStatus = 'pending' | 'running' | 'passed' | 'failed' | 'blocked' | 'paused' | 'inconclusive' | 'not_applicable' | 'adapted';
 export type RunMode = 'explore';
 export type VisualInspectionStatus = 'performed' | 'not-required' | 'not-applicable' | 'skipped';
 export type KnowledgeLevel = 'confirmed' | 'observed' | 'inferred' | 'suspected' | 'deprecated';
@@ -15,6 +17,8 @@ export type RegressionFrequency = 'every-change' | 'every-release' | 'scheduled'
 export type RegressionProfile = 'fast' | 'normal' | 'full';
 export type QaMode = 'quick' | 'guided' | 'regression';
 export type ApprovalPolicy = 'test-plan-and-side-effects';
+export type ExecutionIntent = 'read-only' | 'state-changing';
+export type ConfirmationMode = 'merged' | 'strict';
 export type RegressionSelectionScope = 'task' | 'module' | 'release';
 export type RegressionSelectionPolicy = 'all-validated-python-regressions' | 'priority-filtered' | 'release-gate-plus-impact';
 export type PythonRegressionStatus = 'approved_unverified' | 'validated' | 'stale' | 'deprecated';
@@ -241,6 +245,7 @@ export interface QaWorkflowState {
   workflowStatus: WorkflowStatus;
   taskState: TaskLifecycleState;
   workflowPhase: WorkflowPhase;
+  confirmationMode: ConfirmationMode;
   reasonCode: string;
   gates: WorkflowGate[];
   uiExecutionAllowed: boolean;
@@ -317,9 +322,17 @@ export interface TestRequirements {
   risks: string[];
   userQuestions: string[];
   confirmedDecisions: string[];
+  platformDeclaration?: PlatformDeclaration;
   requirementTrace?: RequirementTrace[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface PlatformDeclaration {
+  platform: SupportedPlatform;
+  statement: string;
+  declaredBy?: string;
+  declaredAt: string;
 }
 
 export interface TestPlan {
@@ -466,12 +479,18 @@ export interface PlanDraft {
   taskName?: string;
   description: string;
   objectives: string[];
+  executionIntent?: ExecutionIntent;
   scope?: {
     platforms?: string[];
     environments?: string[];
     roles?: string[];
     included?: string[];
     excluded?: string[];
+  };
+  platformDeclaration?: {
+    platform: string;
+    statement?: string;
+    declaredBy?: string;
   };
   preconditions?: string[];
   testDataRefs?: string[];
@@ -491,6 +510,7 @@ export interface TestTask {
     priority: TestPriority; tags: string[];
     mode?: QaMode;
     approvalPolicy?: ApprovalPolicy;
+    executionIntent?: ExecutionIntent;
     frequency?: RegressionFrequency; releaseGate?: boolean; estimatedDurationMinutes?: number;
     planReview?: { confirmedBy: string; confirmedAt: string; confirmationSource: 'current-chat-explicit-approval' | 'external-review-record'; statement: string; planHash: string };
     approval?: { confirmedBy: string; confirmedAt: string; confirmationSource: 'current-chat-explicit-approval' | 'external-review-record'; statement: string; planHash: string };
@@ -624,7 +644,7 @@ export interface ReleaseCheck {
   impactAnalysis: ImpactAnalysis;
   selection: PythonRegressionSelection;
   regressionRunId?: string;
-  status: 'planned' | 'running' | 'passed' | 'failed' | 'blocked' | 'needs_confirmation' | 'review';
+  status: 'planned' | 'running' | 'passed' | 'failed' | 'blocked' | 'review';
   releaseDecision: 'pending' | 'go' | 'no-go' | 'review';
   blockers: Array<{ moduleId: string; taskId: string; regressionId: string; scenarioIds: string[]; status: PythonRegressionBusinessStatus; detail?: string }>;
   requiredAssetGaps: Array<{ moduleId: string; taskId: string; priority: TestPriority; releaseGate: boolean; goldenPath: boolean; reason: string }>;
@@ -687,10 +707,11 @@ export interface TestRun {
   context: ExecutionSnapshot;
   git: { branch?: string; commit?: string; dirtyWorkspace: boolean; changedFiles: string[] };
   status: RunStatus;
+  blockActor?: 'human' | 'host' | 'agent';
   safeMode: boolean;
   mode: 'explore';
   guidedPending?: GuidedPendingInteraction;
-  steps: Array<{ id: string; plannedStepId?: string; action: string; uiAction?: UiAction; safetyAction?: string; status: RunStatus; detail: string; at: string; scenarioId?: string; screenshotPath?: string; visualInspection?: VisualInspectionStatus; source?: 'ui' | 'internal' | 'recovery'; executionMode?: StepExecutionMode; locator?: Locator; actualLocator?: Locator; inputRefs?: Record<string, string>; expectedState?: string; actualState?: string; adaptation?: string; humanApproval?: HumanStepApproval; humanVerdict?: { status: RunStatus; confirmedBy: string; confirmationSource?: 'current-chat-explicit-approval' | 'external-review-record'; statement: string; note?: string; confirmedAt: string } }>;
+  steps: Array<{ id: string; plannedStepId?: string; action: string; uiAction?: UiAction; safetyAction?: string; status: RunStatus; detail: string; at: string; scenarioId?: string; screenshotPath?: string; visualInspection?: VisualInspectionStatus; source?: 'ui' | 'internal' | 'recovery'; executionMode?: StepExecutionMode; locator?: Locator; actualLocator?: Locator; inputRefs?: Record<string, string>; driverCommand?: string; driverParams?: Record<string, unknown>; expectedState?: string; actualState?: string; adaptation?: string; humanApproval?: HumanStepApproval; humanVerdict?: { status: RunStatus; confirmedBy: string; confirmationSource?: 'current-chat-explicit-approval' | 'external-review-record'; statement: string; note?: string; confirmedAt: string } }>;
   scenarioResults: Array<{ scenarioId: string; status: RunStatus; detail?: string }>;
   evidence: Array<{ type: string; path?: string; summary: string }>;
   conclusion?: string;
