@@ -1,8 +1,9 @@
 import { cpSync, existsSync } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { basename, join } from 'node:path';
 import { builtInSkills } from './built-in-skills.ts';
 import { schemas } from './schemas.ts';
 import { listFiles, now, readJson, writeJsonAtomic } from './store.ts';
+import { bundledRunnerDir } from './runner-path.ts';
 import { QA_AGENT_VERSION } from './version.ts';
 
 export interface ManagedAssetSyncResult {
@@ -75,11 +76,8 @@ export function syncManagedRuntimeAssets(qaRoot: string): ManagedAssetSyncResult
 }
 
 function syncRunnerAssets(qaRoot: string): boolean {
-  // Find runner source: either bundled with npm package or dev layout
-  const packageRoot = resolve(qaRoot, '..');
-  const devRunner = join(packageRoot, 'runner');
-  const bundledRunner = join(packageRoot, 'runner'); // same in dev
-  const source = existsSync(join(devRunner, 'qa_agent_runner')) ? devRunner : undefined;
+  const bundled = bundledRunnerDir();
+  const source = existsSync(join(bundled, 'qa_agent_runner')) ? bundled : undefined;
   if (!source) return false;
 
   const target = join(qaRoot, 'runner');
@@ -135,6 +133,9 @@ export function inspectManagedRuntimeAssets(qaRoot: string): string[] {
   for (const path of listFiles(skillDirectory, item => item.endsWith('.json'))) {
     if (!expectedSkills.has(basename(path))) errors.push(`${path}: unsupported managed built-in Skill is present; create a fresh .qa-agent project.`);
   }
+
+  const runnerDirectory = join(qaRoot, 'runner');
+  if (!existsSync(join(runnerDirectory, 'qa_agent_runner'))) errors.push(`${runnerDirectory}: managed Python Runner is missing; run qa-agent update.`);
 
   const indexPath = join(qaRoot, 'index', 'skills.json');
   if (!existsSync(indexPath)) errors.push(`${indexPath}: managed Skill index is missing.`);

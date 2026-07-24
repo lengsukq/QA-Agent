@@ -1,5 +1,11 @@
 # 更新日志
 
+## v0.3.92
+
+- npm 包包含统一 Python 执行器，初始化或更新项目时复制到 `.qa-agent/runner`；
+- Python Driver、JSON 回放和 Doctor 诊断统一使用托管 Runner 路径；
+- 新增 `qa-agent-doctor` 首次环境引导 Skill，按步骤解释阻塞项和推荐项，不自动安装第三方依赖。
+
 ## v0.3.7
 
 v0.3.7 将 AI 主导和用户主导统一到同一套 Task、Plan、Run、Step、Evidence 和 Report 内核，只在"谁决定下一步"上采用不同控制策略：

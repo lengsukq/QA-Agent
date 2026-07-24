@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { invalidateApproval, PLAN_REQUIREMENTS_CONFIRMATION_ZH, START_TEST_CONFIRMATION_ZH, testPlanHash } from './approval.ts';
+import { approvalIsCurrent, invalidateApproval, PLAN_REQUIREMENTS_CONFIRMATION_ZH, planReviewIsCurrent, START_TEST_CONFIRMATION_ZH, testPlanHash } from './approval.ts';
+import { platformCapabilities } from './capabilities.ts';
 import { appendTaskEvent } from './events.ts';
 import { rebuildIndexes } from './indexer.ts';
 import { markPythonRegressionsStaleForPlanHash } from './python-regression.ts';
@@ -159,6 +160,11 @@ export function applyPlanDraft(root: string, draft: PlanDraft): PlanDraftApplyRe
     environments: stringArray(draft.scope?.environments, 'PlanDraft scope.environments', task.scope.environments),
     roles: stringArray(draft.scope?.roles, 'PlanDraft scope.roles', task.scope.roles),
   };
+  const platformCapabilityNames = new Set(['browser.interact', 'browser.inspect', 'android.adb', 'android.screenshot', 'ios.simulator.interact', 'ios.screenshot']);
+  task.capabilities.required = [...new Set([
+    ...task.capabilities.required.filter(capability => !platformCapabilityNames.has(capability)),
+    ...task.scope.platforms.flatMap(platformCapabilities),
+  ])];
   task.scenarios = materializeScenarios(draft, task, module.riskLevel);
   task.evidence.required = [...new Set(task.scenarios.flatMap(scenario => scenario.evidence))];
 
@@ -181,13 +187,18 @@ export function applyPlanDraft(root: string, draft: PlanDraft): PlanDraftApplyRe
   task.requirements.requirementTrace = requirementTrace(task.scenarios);
 
   let planHash = testPlanHash(task);
-  if (planHash === previousPlanHash) return { changed: false, moduleId: draft.moduleId, taskId: draft.taskId, planHash, previousPlanHash, requirementsConfirmationRequired: true, requiredRequirementsConfirmation: PLAN_REQUIREMENTS_CONFIRMATION_ZH, unresolvedQuestions: task.requirements?.userQuestions ?? [], approvalRequired: true, requiredConfirmation: START_TEST_CONFIRMATION_ZH, prdPath: taskPrdPath(root, draft.moduleId, draft.taskId), scenarioIds: task.scenarios.map(scenario => scenario.id), task };
+  if (planHash === previousPlanHash) return { changed: false, moduleId: draft.moduleId, taskId: draft.taskId, planHash, previousPlanHash, requirementsConfirmationRequired: !planReviewIsCurrent(task), requiredRequirementsConfirmation: PLAN_REQUIREMENTS_CONFIRMATION_ZH, unresolvedQuestions: task.requirements?.userQuestions ?? [], approvalRequired: !approvalIsCurrent(task), requiredConfirmation: START_TEST_CONFIRMATION_ZH, prdPath: taskPrdPath(root, draft.moduleId, draft.taskId), scenarioIds: task.scenarios.map(scenario => scenario.id), task };
   task.requirements.updatedAt = now();
   planHash = testPlanHash(task);
 
-  invalidateApproval(task);
   const fromState = resolveTaskState(task.metadata.status);
-  if (fromState !== 'awaiting_approval') transitionTaskState(root, task, 'awaiting_approval', 'test_plan_changed', 'plan_draft_applied', { actor: { type: 'agent', id: 'qa-agent' }, artifactHash: planHash, idempotencyKey: `plan-draft-state:${task.metadata.id}:${planHash}` });
+  const needsFreshConfirmation = Boolean(task.requirements?.userQuestions?.length);
+  if (needsFreshConfirmation) invalidateApproval(task);
+  if (!approvalIsCurrent(task)) {
+    if (fromState !== 'awaiting_approval') transitionTaskState(root, task, 'awaiting_approval', 'test_plan_changed', needsFreshConfirmation ? 'new_qa_question_requires_confirmation' : 'plan_draft_applied', { actor: { type: 'agent', id: 'qa-agent' }, artifactHash: planHash, idempotencyKey: `plan-draft-state:${task.metadata.id}:${planHash}` });
+  } else if (['planning', 'awaiting_approval'].includes(fromState)) {
+    transitionTaskState(root, task, 'ready', 'test_plan_updated', 'existing_approval_preserved', { actor: { type: 'agent', id: 'qa-agent' }, artifactHash: planHash, idempotencyKey: `plan-draft-ready:${task.metadata.id}:${planHash}` });
+  }
   appendTaskEvent(root, {
     type: 'plan_draft_applied', actor: { type: 'agent', id: 'qa-agent' }, moduleId: task.metadata.moduleId, taskId: task.metadata.id, reasonCode: 'structured_plan_materialized', artifactHash: planHash, idempotencyKey: `plan-draft-applied:${task.metadata.id}:${planHash}`, metadata: { previousPlanHash, scenarioIds: task.scenarios.map(scenario => scenario.id) },
   });
@@ -196,5 +207,6 @@ export function applyPlanDraft(root: string, draft: PlanDraft): PlanDraftApplyRe
   saveTask(root, task);
   markPythonRegressionsStaleForPlanHash(root, task, planHash);
   rebuildIndexes(root);
-  return { changed: true, moduleId: draft.moduleId, taskId: draft.taskId, planHash, previousPlanHash, requirementsConfirmationRequired: true, requiredRequirementsConfirmation: PLAN_REQUIREMENTS_CONFIRMATION_ZH, unresolvedQuestions: task.requirements?.userQuestions ?? [], approvalRequired: true, requiredConfirmation: START_TEST_CONFIRMATION_ZH, prdPath: taskPrdPath(root, draft.moduleId, draft.taskId), scenarioIds: task.scenarios.map(scenario => scenario.id), task: readTask(root, draft.moduleId, draft.taskId) };
+  const updatedTask = readTask(root, draft.moduleId, draft.taskId);
+  return { changed: true, moduleId: draft.moduleId, taskId: draft.taskId, planHash, previousPlanHash, requirementsConfirmationRequired: !planReviewIsCurrent(updatedTask), requiredRequirementsConfirmation: PLAN_REQUIREMENTS_CONFIRMATION_ZH, unresolvedQuestions: updatedTask.requirements?.userQuestions ?? [], approvalRequired: !approvalIsCurrent(updatedTask), requiredConfirmation: START_TEST_CONFIRMATION_ZH, prdPath: taskPrdPath(root, draft.moduleId, draft.taskId), scenarioIds: updatedTask.scenarios.map(scenario => scenario.id), task: updatedTask };
 }

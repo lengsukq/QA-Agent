@@ -48,7 +48,6 @@ export function planReviewIsCurrent(task: TestTask): boolean {
     && task.metadata.planReview.confirmationSource
     && isHumanApprover(task.metadata.planReview.confirmedBy)
     && isExplicitPlanRequirementsConfirmation(task.metadata.planReview.statement)
-    && task.metadata.planReview.planHash === testPlanHash(task)
     && !(task.requirements?.userQuestions?.length));
 }
 
@@ -58,7 +57,7 @@ export function approvalIsCurrent(task: TestTask): boolean {
     && task.metadata.approval.confirmationSource
     && isHumanApprover(task.metadata.approval.confirmedBy)
     && isExplicitStartConfirmation(task.metadata.approval.statement)
-    && task.metadata.approval.planHash === testPlanHash(task));
+  );
 }
 
 export function requiresTestPlanApproval(_task: TestTask): boolean {
@@ -70,7 +69,7 @@ export function executionContractIsCurrent(task: TestTask, planHash?: string): b
   return !requiresTestPlanApproval(task) || approvalIsCurrent(task);
 }
 
-/** A changed plan invalidates both the requirement review and execution approval. */
+/** Clear approvals only when a fresh unresolved business question requires QA input. */
 export function invalidateApproval(task: TestTask): boolean {
   const changed = Boolean(task.metadata.planReview || task.metadata.approval);
   delete task.metadata.planReview;

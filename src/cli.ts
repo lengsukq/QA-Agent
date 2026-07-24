@@ -13,7 +13,7 @@ import { validateProject, validateSkill } from './validation.ts';
 import { createMemoryCandidate, reviewMemory } from './memory.ts';
 import { configuredHostRecords, installHostIntegration, recordHostInstall, supportedHosts, updateHostIntegrations } from './host-adapters.ts';
 import { detectConfiguredHosts, hostsFromFlags, HOST_PLATFORMS } from './host-configurators/registry.ts';
-import { approvalIsCurrent, assertHumanApprover, invalidateApproval, isExplicitPlanRequirementsConfirmation, isExplicitStartConfirmation, PLAN_REQUIREMENTS_CONFIRMATION_ZH, planReviewIsCurrent, START_TEST_CONFIRMATION_ZH, testPlanHash } from './approval.ts';
+import { approvalIsCurrent, assertHumanApprover, isExplicitPlanRequirementsConfirmation, isExplicitStartConfirmation, PLAN_REQUIREMENTS_CONFIRMATION_ZH, planReviewIsCurrent, START_TEST_CONFIRMATION_ZH, testPlanHash } from './approval.ts';
 import { hostCapabilityDiagnosis } from './capabilities.ts';
 import { buildModuleRegressionSelection, buildReleaseRegressionSelection, buildTaskRegressionSelection, runRegressionSelection } from './regression.ts';
 import { analyzeProjectImpact } from './impact-analysis.ts';
@@ -721,15 +721,12 @@ ${advancedUsage}`);
     if (action === 'update') {
       const task = readTask(projectRoot, moduleId, subject);
       const beforePlanHash = testPlanHash(task);
-      const hadApproval = Boolean(task.metadata.approval);
       applyTaskRegressionMetadata(task);
       const name = flag('--name'); if (name) task.metadata.name = name;
       const currentPlanHash = testPlanHash(task);
-      if (hadApproval && beforePlanHash !== currentPlanHash) {
+      if (beforePlanHash !== currentPlanHash) {
         if (resolveTaskState(task.metadata.status) === 'running') throw new Error(`Task ${task.metadata.id} has an active Run; stop or complete it before changing the approved TestPlan.`);
-        invalidateApproval(task);
-        if (resolveTaskState(task.metadata.status) !== 'awaiting_approval') transitionTaskState(projectRoot, task, 'awaiting_approval', 'test_plan_changed', 'task_update_changed_plan_hash', { actor: { type: 'agent', id: 'qa-agent' }, artifactHash: currentPlanHash, idempotencyKey: `test-plan-changed:${task.metadata.id}:${currentPlanHash}` });
-              markPythonRegressionsStaleForPlanHash(projectRoot, task, currentPlanHash);
+        markPythonRegressionsStaleForPlanHash(projectRoot, task, currentPlanHash);
       }
       saveTask(projectRoot, task); rebuildIndexes(projectRoot); output(task); return;
     }

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -13,7 +13,7 @@ import { buildModuleRegressionSelection, buildReleaseRegressionSelection, buildT
 import { createReleaseCheck, finalizeReleaseCheck } from '../src/release.ts';
 import { createPythonRegressionDraft, publishPythonRegression, readPythonRegression, runPythonRegression } from '../src/python-regression.ts';
 import { validateProject } from '../src/validation.ts';
-import { testPlanHash } from '../src/approval.ts';
+import { approvalIsCurrent, testPlanHash } from '../src/approval.ts';
 import type { PythonRegressionManifest, TestRun, TestTask } from '../src/types.ts';
 
 const repository = process.cwd();
@@ -28,9 +28,9 @@ function run(cwd: string, ...arguments_: string[]): string {
   return result.stdout;
 }
 function json<T = any>(cwd: string, ...arguments_: string[]): T { return JSON.parse(run(cwd, ...arguments_)) as T; }
-function importHost(root: string): void {
+function importHost(root: string, capabilities = ['browser.interact', 'browser.inspect']): void {
   const path = join(root, 'host.json');
-  writeFileSync(path, JSON.stringify({ host: 'test-host', collectedAt: new Date().toISOString(), connections: [{ id: 'browser', capabilities: ['browser.interact', 'browser.inspect'], permissionStatus: 'verified' }] }));
+  writeFileSync(path, JSON.stringify({ host: 'test-host', collectedAt: new Date().toISOString(), connections: [{ id: 'test-host', capabilities, permissionStatus: 'verified' }] }));
   run(root, 'host', 'import', '--file', path);
 }
 function approve(task: TestTask): TestTask {
@@ -45,7 +45,8 @@ function approveThroughCli(root: string, moduleId: string, taskId: string): void
   run(root, 'plan', 'review', '--module', moduleId, '--task', taskId, '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '确认测试方案');
   run(root, 'review', '--module', moduleId, '--task', taskId, '--approve', '--confirmed-by', 'project-owner', '--confirmation-text', '确认开始测试');
 }
-function applyDetailedPlan(root: string, task: TestTask, options: { userQuestions?: string[]; confirmedDecisions?: string[] } = {}): TestTask {
+function applyDetailedPlan(root: string, task: TestTask, options: { userQuestions?: string[]; confirmedDecisions?: string[]; platforms?: string[] } = {}): TestTask {
+  const approvalWasCurrent = approvalIsCurrent(task);
   const scenario = task.scenarios[0]!;
   const planPath = join(root, `plan-${task.metadata.moduleId}-${task.metadata.id}.json`);
   writeFileSync(planPath, JSON.stringify({
@@ -55,7 +56,7 @@ function applyDetailedPlan(root: string, task: TestTask, options: { userQuestion
     taskName: task.metadata.name,
     description: task.description,
     objectives: task.objectives,
-    scope: task.scope,
+    scope: { ...task.scope, platforms: options.platforms ?? task.scope.platforms },
     preconditions: task.preconditions,
     userQuestions: options.userQuestions ?? [],
     confirmedDecisions: options.confirmedDecisions ?? [],
@@ -84,10 +85,10 @@ function applyDetailedPlan(root: string, task: TestTask, options: { userQuestion
     }],
   }, null, 2));
   const applied = json(root, 'plan', 'apply', '--file', planPath);
-  assert.equal(applied.requirementsConfirmationRequired, true);
+  assert.equal(applied.requirementsConfirmationRequired, !approvalWasCurrent || Boolean(options.userQuestions?.length));
   assert.equal(applied.requiredRequirementsConfirmation, '确认测试方案');
   assert.deepEqual(applied.unresolvedQuestions, options.userQuestions ?? []);
-  assert.equal(applied.approvalRequired, true);
+  assert.equal(applied.approvalRequired, !approvalWasCurrent || Boolean(options.userQuestions?.length));
   assert.equal(applied.requiredConfirmation, '确认开始测试');
   return readTask(root, task.metadata.moduleId, task.metadata.id);
 }
@@ -174,10 +175,10 @@ function strictTaskWithRun(root: string, moduleId: string, taskId: string, risk:
   return { task: readTask(root, moduleId, taskId), run: completed };
 }
 
-test('initializes v0.3.91 without replay directories and exposes simplified help', () => {
+test('initializes v0.3.92 with the managed Runner and exposes simplified help', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-init-'));
   run(root, 'init', '--id', 'fixture');
-  assert.equal(run(root, '--version').trim(), '0.3.91');
+  assert.equal(run(root, '--version').trim(), '0.3.92');
   const help = run(root, 'help');
   for (const commandName of ['init', 'check', 'continue', 'finish', 'doctor', 'update']) assert.match(help, new RegExp(commandName));
   assert.doesNotMatch(help, /operation plan|operation replay/i);
@@ -197,8 +198,19 @@ test('initializes v0.3.91 without replay directories and exposes simplified help
   assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'operation.schema.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'regression-suite.schema.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'skills', 'built-in', 'operation-replay.json')), false);
-  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.91');
+  assert.ok(existsSync(join(root, '.qa-agent', 'runner', 'qa_agent_runner', '__main__.py')));
+  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.92');
   assert.equal(validateProject(root).valid, true);
+});
+
+test('reports a missing managed Runner during project validation', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-runner-validation-'));
+  initializeProject(root, { id: 'runner-validation' });
+  const runner = join(root, '.qa-agent', 'runner', 'qa_agent_runner');
+  rmSync(runner, { recursive: true, force: true });
+  const result = validateProject(root);
+  assert.equal(result.valid, false);
+  assert.match(result.errors.join('\n'), /managed Python Runner is missing/i);
 });
 
 test('Quick Check completes with report, PRD, and direct Python eligibility', () => {
@@ -501,17 +513,40 @@ test('Archive requires validated Python coverage and succeeds after script valid
   assert.equal(readTask(root, 'account', 'profile').metadata.status, 'archived');
 });
 
-test('changing a Task plan marks Python stale and allows a replacement Source Run after reapproval', () => {
+test('changing a Task plan marks Python stale but preserves approval for a replacement Source Run', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-stale-'));
   initializeProject(root, { id: 'stale' }); importHost(root);
   const source = strictTaskWithRun(root, 'settings', 'preferences'); createFormalScript(root, source.task, source.run, 'preferences-script');
   run(root, 'task', 'update', 'preferences', '--module', 'settings', '--name', 'Changed preferences flow');
   assert.equal(readPythonRegression(root, 'settings', 'preferences', 'preferences-script').status, 'stale');
-  approveThroughCli(root, 'settings', 'preferences');
   const replacement = json(root, 'test', '--module', 'settings', '--task', 'preferences');
   assert.equal(replacement.status, 'running');
   assert.notEqual(replacement.runId, source.run.id);
   assert.equal(JSON.parse(readFileSync(taskSourceRunPath(root, 'settings', 'preferences'), 'utf8')).id, replacement.runId);
+});
+
+test('switching a reviewed Task from Web to iOS keeps approval and refreshes platform capabilities', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qa-agent-platform-switch-'));
+  initializeProject(root, { id: 'platform-switch', platforms: ['web'] });
+  const module = createModule(root, { id: 'checkout', name: 'Checkout', description: 'Checkout flow', platforms: ['web'] });
+  const initial = createTaskSkeleton(module, 'payment-method');
+  saveTask(root, initial);
+  applyDetailedPlan(root, readTask(root, 'checkout', 'payment-method'), { platforms: ['web'] });
+  approveThroughCli(root, 'checkout', 'payment-method');
+  const approved = readTask(root, 'checkout', 'payment-method');
+
+  const switched = applyDetailedPlan(root, readTask(root, 'checkout', 'payment-method'), { platforms: ['ios'] });
+  assert.deepEqual(switched.scope.platforms, ['ios']);
+  assert.equal(switched.capabilities.required.includes('browser.interact'), false);
+  assert.equal(switched.capabilities.required.includes('ios.simulator.interact'), true);
+  assert.equal(approvalIsCurrent(switched), true);
+  assert.equal(switched.metadata.status, 'ready');
+  assert.equal(approved.metadata.approval?.confirmedBy, switched.metadata.approval?.confirmedBy);
+
+  importHost(root, ['ios.simulator.interact', 'ios.screenshot']);
+  const started = json(root, 'test', '--module', 'checkout', '--task', 'payment-method', '--platform', 'ios');
+  assert.equal(started.status, 'running');
+  assert.equal(started.context.platform, 'ios');
 });
 
 test('rejects projects created by another Runtime version instead of migrating them', () => {

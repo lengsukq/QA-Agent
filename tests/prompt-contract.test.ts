@@ -21,6 +21,7 @@ function skillText(): string {
     join(skillRoot, 'references', 'regression-runner.md'),
     join(skillRoot, 'references', 'recommended-regression-stack.md'),
     join(skillRoot, 'references', 'cli-command-reference.md'),
+    join(skillRoot, 'skills', 'doctor', 'SKILL.md'),
     join(skillRoot, 'skills', 'guided', 'SKILL.md'),
     join(skillRoot, 'skills', 'regression-test', 'SKILL.md'),
   ];
@@ -63,8 +64,9 @@ test('keeps one compact ordinary QA Skill with act commands and regression owner
   assert.doesNotMatch(main, /qa-agent-(quick|start|review|test|result|finish|operation|recovery|archive)/);
 });
 
-test('installs only guided and regression-test advanced Skills', () => {
-  assert.deepEqual([...QA_SUBSKILLS], ['guided', 'regression-test']);
+test('installs doctor, guided, and regression-test advanced Skills', () => {
+  assert.deepEqual([...QA_SUBSKILLS], ['doctor', 'guided', 'regression-test']);
+  assert.ok(existsSync(join(skillRoot, 'skills', 'doctor', 'SKILL.md')));
   assert.ok(existsSync(join(skillRoot, 'skills', 'guided', 'SKILL.md')));
   assert.ok(existsSync(join(skillRoot, 'skills', 'regression-test', 'SKILL.md')));
   for (const removed of ['quick', 'start', 'review', 'test', 'result', 'finish', 'operation', 'recovery', 'archive', 'regression', 'plan']) assert.equal(existsSync(join(skillRoot, 'skills', removed)), false);
@@ -85,7 +87,7 @@ test('documents the Guided QA action and verdict handshake', () => {
 
 test('keeps host guidance thin and routes published scripts to regression-test', () => {
   assert.ok(words(sharedGuidance) < 240, `shared host guidance is too large: ${words(sharedGuidance)} words`);
-  for (const phrase of ['references/workflow.md', 'qa-agent continue', 'QA_AGENT_SESSION_KEY', 'Task prd.md', '确认测试方案', '确认开始测试', 'qa-agent-guided', 'qa-agent-regression-test', 'regression-steps draft']) assert.match(sharedGuidance, new RegExp(phrase, 'i'));
+  for (const phrase of ['references/workflow.md', 'qa-agent-doctor', 'qa-agent continue', 'QA_AGENT_SESSION_KEY', 'Task prd.md', '确认测试方案', '确认开始测试', 'qa-agent-guided', 'qa-agent-regression-test', 'regression-steps draft']) assert.match(sharedGuidance, new RegExp(phrase, 'i'));
   assert.doesNotMatch(sharedGuidance, /approved_unverified|planHash|resumeToken|contextHash/);
 });
 
@@ -149,6 +151,24 @@ test('requires separate export and publication approval with Run-level flow trac
   assert.match(sourceText(), /sourceFlowHash/);
 });
 
+test('routes Agent-generated regression steps through the managed unified Runner', () => {
+  const main = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
+  const contract = readFileSync(join(skillRoot, 'references', 'regression-runner.md'), 'utf8');
+  const pythonRegression = readFileSync(join(repository, 'src', 'python-regression.ts'), 'utf8');
+  const driver = readFileSync(join(repository, 'src', 'driver.ts'), 'utf8');
+  const act = readFileSync(join(repository, 'src', 'act.ts'), 'utf8');
+  assert.match(main, /Runtime exports regression steps automatically/i);
+  assert.match(contract, /structured steps file.*\.steps\.json/i);
+  assert.match(contract, /Agent never writes Python scripts/i);
+  assert.match(contract, /python3 -m qa_agent_runner replay/i);
+  assert.match(pythonRegression, /isStepsJson/);
+  assert.match(pythonRegression, /projectRunnerDir\(root\)/);
+  assert.match(pythonRegression, /'replay', scriptPath/);
+  assert.match(driver, /projectRunnerDir\(root\)/);
+  assert.match(driver, /qa_agent_runner', 'server'/);
+  assert.match(act, /ensureDriver|initDriver/);
+});
+
 test('requires clickable artifacts, Markdown-embedded screenshots, and an explicit regression offer', () => {
   const main = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
   const workflow = readFileSync(join(skillRoot, 'references', 'workflow.md'), 'utf8');
@@ -163,9 +183,10 @@ test('requires clickable artifacts, Markdown-embedded screenshots, and an explic
   assert.match(readFileSync(join(repository, 'src', 'cli.ts'), 'utf8'), /mustAskUserQuestion/);
 });
 
-test('publishes v0.3.91 without source and lockfile implementation payloads', () => {
+test('publishes v0.3.92 with the Runner but without source and lockfile implementation payloads', () => {
   const pkg = JSON.parse(readFileSync(join(repository, 'package.json'), 'utf8')) as { version: string; files: string[] };
-  assert.equal(pkg.version, '0.3.91');
+  assert.equal(pkg.version, '0.3.92');
   assert.equal(pkg.files.includes('src/'), false);
   assert.equal(pkg.files.includes('package-lock.json'), false);
+  assert.equal(pkg.files.includes('runner/qa_agent_runner/*.py'), true);
 });

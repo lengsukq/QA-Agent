@@ -28,7 +28,7 @@ function importHostSnapshot(root: string): void {
 }
 
 function installStubRunner(root: string): void {
-  const runnerDir = join(root, 'runner', 'qa_agent_runner');
+  const runnerDir = join(root, '.qa-agent', 'runner', 'qa_agent_runner');
   mkdirSync(runnerDir, { recursive: true });
   writeFileSync(join(runnerDir, '__init__.py'), '', 'utf8');
   writeFileSync(join(runnerDir, '__main__.py'), `import json, os, sys

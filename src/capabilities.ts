@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { qaPath } from './project.ts';
+import { projectRunnerDir } from './runner-path.ts';
 import { readJson } from './store.ts';
 import type { CapabilityStatus, ExecutionSnapshot, PermissionStatus } from './types.ts';
 
@@ -82,10 +83,8 @@ export function runnerDiagnosis(root: string): RunnerDiagnosis {
   const playwrightCheck = check('python3', ['-c', 'import playwright; print(playwright.__version__)']);
   const idbCheck = check('which', ['idb']);
 
-  const bundledRunner = qaPath(root, 'runner');
-  const devRunner = join(root, 'runner');
-  const runnerPath = existsSync(join(bundledRunner, 'qa_agent_runner')) ? bundledRunner
-    : existsSync(join(devRunner, 'qa_agent_runner')) ? devRunner : undefined;
+  const candidate = projectRunnerDir(root);
+  const runnerPath = existsSync(join(candidate, 'qa_agent_runner')) ? candidate : undefined;
 
   return {
     python3: { available: !!pythonVersion, version: pythonVersion?.replace('Python ', '') },

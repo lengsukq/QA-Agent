@@ -44,7 +44,7 @@ export function copyMainSkill(destination: string, force: boolean): void {
 
 }
 
-export const QA_SUBSKILLS = ['guided', 'regression-test'] as const;
+export const QA_SUBSKILLS = ['doctor', 'guided', 'regression-test'] as const;
 
 export function copySubSkills(parent: string, force: boolean): string[] {
   const sourceRoot = skillSource();
@@ -82,17 +82,18 @@ export function detected(config: HostPlatformConfig, projectRoot: string): boole
 
 export const sharedGuidance = `# QA Agent
 
-Load the installed qa-agent Skill and references/workflow.md.
+Load the qa-agent Skill and references/workflow.md.
 
+- First run: load qa-agent-doctor and run qa-agent doctor; fix blocking capabilities one step at a time.
 - check/start creates planning assets only. Inspect the project, apply ordered Scenario steps, and present Task prd.md through its clickable userFacingArtifacts markdownLink.
-- Resolve every requirement, environment, account, expected-result, and safety question with the QA. Persist confirmedDecisions and reapply the plan.
+- Resolve requirement, environment, account, expected-result, and safety questions with QA; persist confirmedDecisions and reapply.
 - Require exact “确认测试方案” through plan review, then a separate exact “确认开始测试” through review. Vague approval never authorizes UI.
-- Runtime owns state, evidence, reports, approvals, publication, and results. Never edit its JSON or write competing reports. Formal reports embed screenshots in Markdown; paths alone are invalid. Completion replies link the report, plus PRD for Source Runs.
+- Runtime owns state, evidence, reports, approvals, publication, and results. Never edit JSON or write competing reports. Embed screenshots in formal reports; paths alone are invalid; link report and PRD for Source Runs.
 - Load qa-agent-guided for user-led testing. Runtime keeps one pending interaction at a time: one approved action, one screenshot-backed UI operation, then one QA verdict. Completed approvals and verdicts live on the Step.
 - Use qa-agent continue after interruption. Use UI tools only with uiExecutionAllowed=true, mustStop=false, and runId. Pass QA_AGENT_SESSION_KEY when available.
 - After an eligible AI-led report, consent exports one full-flow regression-steps draft (steps.json) only. User-led completion creates one independent steps draft per Scenario automatically. Show the relevant steps or diff and publish only after separate approval; publication freezes the Source Run.
-- Load qa-agent-regression-test for later regression-runs. Strict matrices and release planning stay in the main Skill.
-- Ask at most one user-owned question per turn. Never bypass safety or fabricate evidence, decisions, or results.
+- Load qa-agent-regression-test for later regression-runs. Strict matrices and release planning stay in main Skill.
+- Ask one user-owned question per turn. Never bypass safety or fabricate evidence, decisions, or results.
 `;
 
 export function renderGuidance(config: HostPlatformConfig): string {

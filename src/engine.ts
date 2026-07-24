@@ -37,7 +37,9 @@ function newRun(root: string, task: TestTask, input: RunContextInput = {}): Test
     id: `run-${startedAt.replace(/[-:.TZ]/g, '').slice(0, 14)}-${randomUUID().slice(0, 8)}`,
     taskId: task.metadata.id,
     moduleId: task.metadata.moduleId,
-    planHash: task.metadata.approval?.planHash ?? testPlanHash(task),
+    // Keep the full current contract hash on the Run. Approval metadata is a
+    // human decision record and is intentionally not used as the Run hash.
+    planHash: testPlanHash(task),
     context: buildExecutionSnapshot(root, task, input),
     git: gitMetadata(root),
     status: 'pending',

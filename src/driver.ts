@@ -3,6 +3,7 @@ import { createInterface, type Interface } from 'node:readline';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { qaPath, taskSourceRunDirectory } from './project.ts';
+import { projectRunnerDir } from './runner-path.ts';
 import type { TestRun } from './types.ts';
 
 export interface DriverResult {
@@ -28,16 +29,6 @@ function pidFilePath(root: string, runId: string): string {
   return qaPath(root, '.runtime', `driver-${runId}.pid`);
 }
 
-function runnerDir(root: string): string {
-  // During development, use the runner/ at project root; in production, .qa-agent/runner/
-  const bundled = qaPath(root, 'runner');
-  if (existsSync(join(bundled, 'qa_agent_runner'))) return bundled;
-  // Fallback: development layout (runner/ next to src/)
-  const dev = join(root, 'runner');
-  if (existsSync(join(dev, 'qa_agent_runner'))) return dev;
-  return bundled;
-}
-
 /**
  * Ensure a driver process is running for the given Run. Returns the handle.
  */
@@ -49,7 +40,7 @@ export function ensureDriver(root: string, run: TestRun, platform: 'web' | 'ios'
   mkdirSync(screenshotDir, { recursive: true });
 
   const python = process.env.QA_AGENT_PYTHON ?? 'python3';
-  const cwd = runnerDir(root);
+  const cwd = projectRunnerDir(root);
   const child = spawn(python, ['-m', 'qa_agent_runner', 'server'], {
     cwd,
     stdio: ['pipe', 'pipe', 'pipe'],

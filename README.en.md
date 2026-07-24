@@ -2,12 +2,13 @@
 
 QA Agent is a project-local AI testing runtime. Developers can request real UI checks in natural language while the Runtime persists Tasks, Runs, screenshots, business observations, cleanup, and reports.
 
-Current version: **v0.3.91**
+Current version: **v0.3.92**
 
-### What's new in v0.3.91
+### What's new in v0.3.92
 
-- **Python Runtime Agent** — New `runner/` Python subsystem with Web interaction (Playwright), iOS simulator control (simctl + idb), and operation replay engine. Replaces the legacy Python Regression Contract.
-- **Regression step export** — New `regression-steps` command extracts validated steps from a Source Run into reusable regression scripts.
+- **Packaged unified Python executor** — npm now ships `runner/`; project initialization copies it to `.qa-agent/runner` and JSON replay uses that managed executor.
+- **qa-agent-doctor** — New first-run environment Skill that separates blocking capabilities from advisory tools and guides one repair step at a time.
+- **Regression step export** — `qa-agent regression export` extracts validated steps from a Source Run into a JSON replay draft.
 - **Capability detection** — `qa-agent doctor` now auto-detects browser, simulator, device, and Python regression environment readiness.
 - **UI interaction primitives** — New `act` / `driver` modules unify how host Agent UI operations are invoked and verdicts recorded.
 - **Task lifecycle management** — Engine refactored with Source Run freeze, regression run isolation, and automatic `stale` marking when TestPlan changes.
@@ -22,9 +23,9 @@ v0.3.91 puts AI-led and user-led execution on one Task, Plan, Run, Step, Evidenc
 - AI-led mode executes the approved PRD continuously without a per-step prepare gate or human verdict;
 - user-led mode keeps only one pending interaction: approve one action, execute and screenshot it, then confirm its result;
 - approvals and verdicts are stored directly on the corresponding Step instead of in a second interaction-history state machine;
-- after a user-led Run completes, Runtime automatically creates one independent Python regression draft per selected Scenario;
+- after a user-led Run completes, Runtime automatically creates one independent JSON steps draft per selected Scenario;
 - Scenario drafts are stored under `source-run/scenario-regressions/<scenario-id>/` and still require separate review before formal publication;
-- AI-led Runs retain the optional post-test question for generating one full-flow Python draft;
+- AI-led Runs retain the optional post-test question for exporting one full-flow JSON steps draft;
 - Runtime persists real screenshots, QA decisions, assertions, cleanup, and formal reports;
 - PRDs, test reports, and Scenario script drafts are surfaced through clickable Markdown links;
 - formal test and regression reports must embed screenshots directly in Markdown rather than list paths only;
@@ -67,7 +68,7 @@ qa-agent --version
 Expected output:
 
 ```text
-0.3.91
+0.3.92
 ```
 
 ## Initialize a project
@@ -162,7 +163,7 @@ Use `simctl` for simulator, app, permission, and screenshot management; use `fb-
 
 ### Agent-assisted exploration
 
-`ios-simulator-mcp` may assist the first exploratory run and screenshots, but it is not the only dependency of a formal Python regression script.
+`ios-simulator-mcp` may assist the first exploratory run and screenshots, but it is not the only dependency of a formal regression replay.
 
 ### Formal output
 
@@ -286,7 +287,7 @@ Each Task keeps exactly one Source Run used to derive the reusable script:
     ├── evidence/
     └── scenario-regressions/       # user-led mode only
         └── <scenario-id>/
-            ├── script.py
+            ├── steps.json
             └── manifest.json
 ```
 
@@ -296,34 +297,33 @@ Each Task keeps exactly one Source Run used to derive the reusable script:
 - `screenshots/` and `evidence/` contain real artifacts;
 - user-led completion writes one independent draft under `scenario-regressions/<scenario-id>/` for every selected Scenario.
 
-A Task no longer keeps multiple `runs/<run-id>/` histories. Before a formal Python script is published, another initial test replaces the unpublished Source Run and records the restart in `events.jsonl`. After publication, the Source Run is frozen and all later execution goes to `regression-runs/`.
+A Task no longer keeps multiple `runs/<run-id>/` histories. Before formal regression steps are published, another initial test replaces the unpublished Source Run and records the restart in `events.jsonl`. After publication, the Source Run is frozen and all later execution goes to `regression-runs/`.
 
-When the TestPlan changes, the old Python script first becomes `stale`. After the user reviews and approves the changed plan, Runtime may create a replacement Source Run and a revised script.
+When the TestPlan changes, the old regression steps first become `stale`, while existing approval remains valid for ordinary plan or platform adjustments. Runtime may create a replacement Source Run without repeating both confirmations; new unresolved business questions still require QA confirmation.
 
-v0.3.91 does not create duplicate `summary.md`, Quick observed-Scenario JSON, Source Run history indexes, or Session Journal files.
+v0.3.92 does not create duplicate `summary.md`, Quick observed-Scenario JSON, Source Run history indexes, or Session Journal files.
 
-## Python regression scripts
+## Regression steps and the unified Runner
 
-AI-led mode may ask whether to generate one full-flow Python draft after Runtime confirms that the Source Run has stable steps, locators, input references, assertions, screenshots, and cleanup.
+AI-led mode may ask whether to export one full-flow steps draft after Runtime confirms that the Source Run has stable steps, locators, input references, assertions, screenshots, and cleanup.
 
 User-led mode does not ask the same question. `qa-agent run complete` automatically creates one draft per selected Scenario from the human-approved and human-confirmed Steps. Those files remain Source Run artifacts until they are separately reviewed and promoted into the formal regression workflow.
 
 Formal draft generation and publication remain separate decisions:
 
 ```text
-approve draft generation
+approve steps export
 ≠
 approve publication into the Task
 ```
 
-After the first approval, the Agent writes Python from the source Run's actual steps, final locators, input references, business assertions, screenshot points, and cleanup, then saves a Session draft:
+Runtime exports the source Run's actual steps, final locators, input references, business assertions, screenshot points, and cleanup into a Session draft. The Agent does not write Python or invent another test executor:
 
 ```bash
-qa-agent regression draft \
+qa-agent regression export \
   --module <module> \
   --task <task> \
   --run <source-run> \
-  --file <temporary-script.py> \
   --id <script-id>
 ```
 
@@ -331,9 +331,10 @@ The draft remains under:
 
 ```text
 .qa-agent/.runtime/drafts/<session>/<script-id>/
+└── steps.json
 ```
 
-It does not enter the Task, formal regression, or release selection. The Agent must show the complete script or complete diff and explain environment variables, the host bridge, assertions, screenshots, and cleanup.
+It does not enter the Task, formal regression, or release selection. The Agent must show the complete JSON steps or diff and explain environment variables, the host bridge, assertions, screenshots, and cleanup.
 
 Only after the user explicitly approves the reviewed script may Runtime publish it:
 
@@ -350,7 +351,7 @@ Formal assets are stored under:
 ```text
 .qa-agent/modules/<module>/tasks/<task>/
 ├── regression/
-│   ├── <script-id>.py
+│   ├── <script-id>.steps.json
 │   └── <script-id>.json
 └── regression-runs/
     └── <run-id>/
@@ -363,13 +364,19 @@ Formal assets are stored under:
         └── evidence/
 ```
 
-Run the formal script from the command line:
+Run the published steps from the command line. Runtime starts the managed executor copied to `.qa-agent/runner`:
 
 ```bash
 qa-agent regression run <script-id> \
   --module <module> \
   --task <task> \
   --bridge '<host bridge command>'
+```
+
+The replay path is always the unified executor:
+
+```text
+qa-agent regression run → python3 -m qa_agent_runner replay <steps-file>
 ```
 
 Python fixes the execution order and the host bridge performs real browser, simulator, or device operations. Runtime stores the structured result and report. The Agent reviews the result, screenshots, stdout, stderr, and cleanup without replanning the steps.
@@ -435,22 +442,22 @@ Show strict regression, release, and administration commands with:
 qa-agent help --advanced
 ```
 
-## Initialize v0.3.7 from scratch
+## Initialize v0.3.92 from scratch
 
 Install the CLI:
 
 ```bash
-npm install -g qa-agent-skill@0.3.7
+npm install -g qa-agent-skill@0.3.92
 ```
 
-v0.3.7 has no cross-version migration path and does not read or transform an older `.qa-agent` directory. Initialize the project with this version. To keep previous results as ordinary backup files, move the old directory aside first:
+v0.3.92 has no cross-version migration path and does not read or transform an older `.qa-agent` directory. Initialize the project with this version. To keep previous results as ordinary backup files, move the old directory aside first:
 
 ```bash
 mv .qa-agent .qa-agent.backup
 qa-agent init
 ```
 
-`qa-agent update` only refreshes managed files created by the same 0.3.7 Runtime. A version mismatch is rejected.
+`qa-agent update` refreshes managed files, including the packaged Runner, created by the same 0.3.92 Runtime. A version mismatch is rejected.
 
 ## Validate a project
 
@@ -467,18 +474,20 @@ npm run verify
 npm run pack:check
 ```
 
-## Three Skills
+## Four Skills
 
-v0.3.7 installs:
+v0.3.92 installs:
 
 ```text
 qa-agent
+qa-agent-doctor
 qa-agent-guided
 qa-agent-regression-test
 ```
 
-- `qa-agent`: AI-led testing, two-stage PRD approval, strict matrices and release planning, results, and Python draft/publication;
+- `qa-agent`: AI-led testing, two-stage PRD approval, strict matrices and release planning, results, and JSON steps export/publication;
+- `qa-agent-doctor`: first-run project, host, managed Runner, Python, platform tool, and capability readiness guidance;
 - `qa-agent-guided`: QA-led single-step testing with action approval before execution and a result verdict afterward;
-- `qa-agent-regression-test`: only runs approved Python regression scripts already stored in a Task and reviews the Runtime-generated regression report.
+- `qa-agent-regression-test`: only replays approved JSON steps already stored in a Task through the managed Runner and reviews the Runtime-generated regression report.
 
 Runtime complexity remains internal. Users should only see the goal, progress, result, and any decision they must make.

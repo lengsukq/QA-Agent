@@ -100,7 +100,7 @@ Show the complete steps file. After explicit review approval, publish:
 qa-agent regression publish --module MODULE --task TASK --draft SCRIPT_ID --confirmed-by HUMAN
 ```
 
-A draft is not a formal Task asset. Publication places the `.steps.json` file and its manifest under `regression/` and freezes the current Source Run. Later execution must use the published steps; do not start another initial Source Run unless the TestPlan changes and the old steps become `stale`.
+A draft is not a formal Task asset. Publication places the `.steps.json` file and its manifest under `regression/` and freezes the current Source Run. Later execution must use the published steps; do not start another initial Source Run unless the TestPlan changes and the old steps become `stale`. A normal plan or platform correction does not require repeating the two QA confirmations.
 
 ## Execution
 
