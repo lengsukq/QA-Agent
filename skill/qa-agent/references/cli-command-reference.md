@@ -40,6 +40,34 @@ qa-agent check [--mode guided]
 
 Before both exact confirmations, `qa-agent test` fails without creating a Run and UI tools remain forbidden.
 
+## UI execution (act commands)
+
+All UI interactions use `qa-agent act` commands. Each command auto-screenshots and auto-records to the active Run.
+
+| Command | Purpose |
+| --- | --- |
+| `qa-agent act navigate --run RUN --url URL` | Navigate to a URL (web). |
+| `qa-agent act click --run RUN --locator "strategy=value"` | Click an element (web). |
+| `qa-agent act fill --run RUN --locator "strategy=value" --input-ref KEY` | Fill input with secret ref (web). |
+| `qa-agent act fill --run RUN --locator "strategy=value" --value TEXT` | Fill input with plain text (web). |
+| `qa-agent act select --run RUN --locator "strategy=value" --value VAL` | Select dropdown option (web). |
+| `qa-agent act assert-text --run RUN --locator "strategy=value" --expected TEXT` | Assert element text. |
+| `qa-agent act assert-visible --run RUN --locator "strategy=value"` | Assert element visible. |
+| `qa-agent act tap --run RUN --x N --y N` | Tap coordinates (iOS). |
+| `qa-agent act type-text --run RUN --text TEXT` | Type text (iOS). |
+| `qa-agent act swipe --run RUN --direction DIR` | Swipe in a direction (iOS). |
+| `qa-agent act launch --run RUN --bundle-id ID` | Launch app (iOS). |
+| `qa-agent act home --run RUN` | Press Home button (iOS). |
+| `qa-agent act back --run RUN` | Press Back button (iOS). |
+| `qa-agent act describe --run RUN` | Get accessibility tree (iOS). |
+| `qa-agent act wait --run RUN --ms N` | Wait for duration. |
+| `qa-agent act wait --run RUN --locator "strategy=value"` | Wait for element. |
+| `qa-agent act screenshot --run RUN --name NAME` | Take named screenshot. |
+| `qa-agent act scroll --run RUN --direction DIR` | Scroll page (web). |
+| `qa-agent act hover --run RUN --locator "strategy=value"` | Hover element (web). |
+
+Locator format: `strategy=value` (e.g. `role=button:Login`, `css=#submit`, `text=Welcome`).
+
 ## Runtime execution
 
 | Command | Purpose |
@@ -97,21 +125,21 @@ A Guided UI step cannot run without a pending action approval. After it runs, Ru
 }
 ```
 
-## Python regression scripts
+## Regression steps
 
-Runtime never generates Python. The Agent writes a script only after the user requests a draft, and publication requires a second explicit approval.
+Runtime exports structured steps from completed Runs. The Agent never writes Python scripts. See `references/regression-runner.md` for the full contract.
 
 | Command | Purpose |
 | --- | --- |
-| `qa-agent regression draft --module MODULE --task TASK --run RUN --file SCRIPT.py [--id ID]` | Validate and save an Agent-authored Session draft. |
+| `qa-agent regression export --module MODULE --task TASK --run RUN [--id ID]` | Export steps from a completed Run. |
 | `qa-agent regression drafts [--session KEY]` | List current Session drafts. |
-| `qa-agent regression draft-show ID [--session KEY]` | Show a draft and its complete script. |
-| `qa-agent regression publish --module MODULE --task TASK --draft ID --confirmed-by HUMAN` | Publish a separately reviewed script into the Task. |
-| `qa-agent regression list --module MODULE --task TASK` | List formal Task scripts. |
-| `qa-agent regression show ID --module MODULE --task TASK` | Show a formal script manifest. |
-| `qa-agent regression run ID --module MODULE --task TASK [--bridge COMMAND]` | Run one formal Python script and generate a Runtime report. |
-| `qa-agent task regression show|run TASK --module MODULE` | Show or run validated scripts for one Task. |
-| `qa-agent module regression show|run MODULE [--priority p0|p1|p2|p3]` | Show or run validated scripts for a Module. |
+| `qa-agent regression draft-show ID [--session KEY]` | Show a draft and its steps. |
+| `qa-agent regression publish --module MODULE --task TASK --draft ID --confirmed-by HUMAN` | Publish reviewed steps into the Task. |
+| `qa-agent regression list --module MODULE --task TASK` | List formal Task steps. |
+| `qa-agent regression show ID --module MODULE --task TASK` | Show a formal steps manifest. |
+| `qa-agent regression run ID --module MODULE --task TASK` | Replay published steps via the built-in runner. |
+| `qa-agent task regression show|run TASK --module MODULE` | Show or run validated steps for one Task. |
+| `qa-agent module regression show|run MODULE [--priority p0|p1|p2|p3]` | Show or run validated steps for a Module. |
 
 ## Release, archive, and administration
 

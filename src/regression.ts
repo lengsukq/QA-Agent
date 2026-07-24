@@ -243,7 +243,7 @@ function batchStatus(statuses: PythonRegressionBusinessStatus[], contracts: stri
   return statuses.length ? 'passed' : 'blocked';
 }
 
-export function runRegressionSelection(root: string, selection: PythonRegressionSelection, input: { pythonCommand?: string; bridge?: string; timeoutMs?: number } = {}): RegressionRun {
+export function runRegressionSelection(root: string, selection: PythonRegressionSelection, input: { pythonCommand?: string; timeoutMs?: number } = {}): RegressionRun {
   const startedAt = now();
   const run: RegressionRun = {
     apiVersion: 'qa-agent/python-regression-batch-run/v1',
@@ -269,7 +269,7 @@ export function runRegressionSelection(root: string, selection: PythonRegression
   } else {
     for (const member of selection.members) {
       try {
-        const child = runPythonRegression(root, { moduleId: member.moduleId, taskId: member.taskId, scriptId: member.regressionId, pythonCommand: input.pythonCommand, bridge: input.bridge, timeoutMs: input.timeoutMs });
+        const child = runPythonRegression(root, { moduleId: member.moduleId, taskId: member.taskId, scriptId: member.regressionId, pythonCommand: input.pythonCommand, timeoutMs: input.timeoutMs });
         run.childRuns.push({ regressionRunId: child.id, regressionId: member.regressionId, taskId: member.taskId, moduleId: member.moduleId, scenarioIds: member.scenarioIds, priority: member.priority, releaseGate: member.releaseGate, status: child.status, contractStatus: child.contractStatus, reportPath: `modules/${member.moduleId}/tasks/${member.taskId}/regression-runs/${child.id}/${child.reportRef}`, detail: child.conclusion });
       } catch (error) {
         run.childRuns.push({ regressionId: member.regressionId, taskId: member.taskId, moduleId: member.moduleId, scenarioIds: member.scenarioIds, priority: member.priority, releaseGate: member.releaseGate, status: 'blocked', contractStatus: 'failed_to_start', detail: (error as Error).message });

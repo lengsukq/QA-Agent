@@ -74,7 +74,6 @@ export interface RunPythonRegressionInput {
   taskId: string;
   scriptId: string;
   pythonCommand?: string;
-  bridge?: string;
   timeoutMs?: number;
 }
 
@@ -583,10 +582,13 @@ export function runPythonRegression(root: string, input: RunPythonRegressionInpu
   }
   const scriptPath = regressionScriptPath(root, input.moduleId, input.taskId, input.scriptId);
   if (!existsSync(scriptPath)) throw new Error(`Python regression script is missing: ${manifest.scriptRef}.`);
+  const isStepsJson = scriptPath.endsWith('.steps.json');
   const script = readFileSync(scriptPath, 'utf8');
   if (hashText(script) !== manifest.scriptHash && hashText(script.trimEnd()) !== manifest.scriptHash) throw new Error(`Python regression ${manifest.id} script hash changed outside Runtime.`);
-  validatePythonSyntax(script, input.pythonCommand);
-  validatePythonSafety(script);
+  if (!isStepsJson) {
+    validatePythonSyntax(script, input.pythonCommand);
+    validatePythonSafety(script);
+  }
 
   const runId = `pyreg-${now().replace(/[-:.TZ]/g, '').slice(0, 14)}-${randomUUID().slice(0, 8)}`;
   const runDirectory = regressionRunDirectory(root, input.moduleId, input.taskId, runId);
@@ -596,10 +598,18 @@ export function runPythonRegression(root: string, input: RunPythonRegressionInpu
   const stdoutPath = join(runDirectory, 'stdout.log');
   const stderrPath = join(runDirectory, 'stderr.log');
   const startedAt = now();
-  const execution = spawnSync(input.pythonCommand ?? 'python3', [scriptPath], {
-    cwd: taskDirectory(root, input.moduleId, input.taskId),
+  const pythonCmd = input.pythonCommand ?? 'python3';
+  const spawnArgs = isStepsJson
+    ? ['-m', 'qa_agent_runner', 'replay', scriptPath]
+    : [scriptPath];
+  const spawnCwd = isStepsJson
+    ? join(root, 'runner')
+    : taskDirectory(root, input.moduleId, input.taskId);
+  const execution = spawnSync(pythonCmd, spawnArgs, {
+    cwd: spawnCwd,
     env: {
       ...process.env,
+      ...(isStepsJson ? { PYTHONPATH: spawnCwd } : {}),
       QA_AGENT_PROJECT_ROOT: root,
       QA_AGENT_TASK_DIR: taskDirectory(root, input.moduleId, input.taskId),
       QA_AGENT_REGRESSION_RUN_DIR: runDirectory,
@@ -608,7 +618,6 @@ export function runPythonRegression(root: string, input: RunPythonRegressionInpu
       QA_AGENT_EVIDENCE_DIR: join(runDirectory, 'evidence'),
       QA_AGENT_SOURCE_RUN_ID: manifest.sourceRunId,
       QA_AGENT_REGRESSION_ID: manifest.id,
-      ...(input.bridge ? { QA_AGENT_HOST_BRIDGE: input.bridge } : {}),
     },
     encoding: 'utf8',
     timeout: input.timeoutMs ?? 15 * 60_000,

@@ -1,5 +1,5 @@
-import { existsSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { cpSync, existsSync } from 'node:fs';
+import { basename, join, resolve } from 'node:path';
 import { builtInSkills } from './built-in-skills.ts';
 import { schemas } from './schemas.ts';
 import { listFiles, now, readJson, writeJsonAtomic } from './store.ts';
@@ -8,6 +8,7 @@ import { QA_AGENT_VERSION } from './version.ts';
 export interface ManagedAssetSyncResult {
   synchronizedSchemas: number;
   synchronizedBuiltInSkills: number;
+  synchronizedRunner: boolean;
   updatedProjectVersion: number;
 }
 
@@ -40,6 +41,7 @@ export function syncManagedRuntimeAssets(qaRoot: string): ManagedAssetSyncResult
   const result: ManagedAssetSyncResult = {
     synchronizedSchemas: 0,
     synchronizedBuiltInSkills: 0,
+    synchronizedRunner: false,
     updatedProjectVersion: existing?.version === QA_AGENT_VERSION ? 0 : 1,
   };
 
@@ -65,7 +67,28 @@ export function syncManagedRuntimeAssets(qaRoot: string): ManagedAssetSyncResult
     initializedAt: existing?.initializedAt ?? now(),
     updatedAt: now(),
   });
+
+  // Sync runner directory if available
+  result.synchronizedRunner = syncRunnerAssets(qaRoot);
+
   return result;
+}
+
+function syncRunnerAssets(qaRoot: string): boolean {
+  // Find runner source: either bundled with npm package or dev layout
+  const packageRoot = resolve(qaRoot, '..');
+  const devRunner = join(packageRoot, 'runner');
+  const bundledRunner = join(packageRoot, 'runner'); // same in dev
+  const source = existsSync(join(devRunner, 'qa_agent_runner')) ? devRunner : undefined;
+  if (!source) return false;
+
+  const target = join(qaRoot, 'runner');
+  try {
+    cpSync(source, target, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function sameJson(left: unknown, right: unknown): boolean {

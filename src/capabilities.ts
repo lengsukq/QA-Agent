@@ -1,3 +1,6 @@
+import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { qaPath } from './project.ts';
 import { readJson } from './store.ts';
 import type { CapabilityStatus, ExecutionSnapshot, PermissionStatus } from './types.ts';
@@ -57,5 +60,37 @@ export function hostCapabilityDiagnosis(root: string, platform: string): object 
     permissionNote: 'The runtime cannot grant or verify macOS permissions. The host Agent must submit a fresh capability snapshot after the user grants them.',
     requestToUser: status.missing.length || permissionStatus !== 'verified' ? `APP testing needs an approved least-privilege ${platform === 'android' ? 'Android Emulator/ADB' : 'iOS Simulator/Appium'} MCP with interaction and screenshot access, plus verified macOS permissions.` : undefined,
     nextSteps: status.missing.length || permissionStatus !== 'verified' ? [`Ask the user to approve connecting or installing the MCP.`, `Ask the user to grant Screen Recording and Accessibility permissions in macOS System Settings → Privacy & Security.`, `Have the host Agent import its fresh capability snapshot with qa-agent host import --file <snapshot.json>.`, `qa-agent host doctor --platform ${platform}`] : ['Mobile capability preflight passed; start an Agent-guided Run.'],
+  };
+}
+
+export interface RunnerDiagnosis {
+  python3: { available: boolean; version?: string };
+  playwright: { available: boolean };
+  idb: { available: boolean };
+  runnerDir: { available: boolean; path?: string };
+}
+
+/**
+ * Check local runner environment: python3, playwright, idb, runner directory.
+ */
+export function runnerDiagnosis(root: string): RunnerDiagnosis {
+  const check = (cmd: string, args: string[]): string | undefined => {
+    try { return execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 }).trim(); } catch { return undefined; }
+  };
+
+  const pythonVersion = check('python3', ['--version']);
+  const playwrightCheck = check('python3', ['-c', 'import playwright; print(playwright.__version__)']);
+  const idbCheck = check('which', ['idb']);
+
+  const bundledRunner = qaPath(root, 'runner');
+  const devRunner = join(root, 'runner');
+  const runnerPath = existsSync(join(bundledRunner, 'qa_agent_runner')) ? bundledRunner
+    : existsSync(join(devRunner, 'qa_agent_runner')) ? devRunner : undefined;
+
+  return {
+    python3: { available: !!pythonVersion, version: pythonVersion?.replace('Python ', '') },
+    playwright: { available: !!playwrightCheck },
+    idb: { available: !!idbCheck },
+    runnerDir: { available: !!runnerPath, path: runnerPath },
   };
 }

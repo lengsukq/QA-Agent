@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { availableCapabilities, capabilityAdvice, platformCapabilities } from './capabilities.ts';
+import { availableCapabilities, capabilityAdvice, platformCapabilities, runnerDiagnosis } from './capabilities.ts';
 import { approveGuidedAction, beginAgentGuidedRun, completeAgentGuidedRun, recordAgentStep, recordCleanupFinding, recordGuidedVerdict, recordHostEvidence, recordRecoveryAttempt, recordVisualFinding } from './engine.ts';
 import { readIndex, rebuildIndexes } from './indexer.ts';
 import { createTaskSkeleton, planModule, taskPlan } from './planning.ts';
@@ -44,6 +44,7 @@ import { assertManagedRuntimeVersion, syncManagedRuntimeAssets } from './managed
 import { QA_AGENT_VERSION } from './version.ts';
 import { planningPrdIsCurrent } from './task-prd.ts';
 import { artifactLinksSentence, userFacingArtifact } from './user-facing-artifacts.ts';
+import { executeAct, killDriver } from './act.ts';
 
 const args = process.argv.slice(2);
 const hostFlags = supportedHosts.map(host => `--${HOST_PLATFORMS[host].cliFlag}`).join(' ');
@@ -74,7 +75,7 @@ Commands:
   regression drafts [--session SESSION_KEY] | regression draft-show DRAFT_ID [--session SESSION_KEY]
   regression publish --module MODULE --task TASK --draft DRAFT_ID --confirmed-by HUMAN [--confirmation-source current-chat-explicit-approval] [--replace] [--session SESSION_KEY]
   regression list --module MODULE --task TASK | regression show SCRIPT_ID --module MODULE --task TASK
-  regression run SCRIPT_ID --module MODULE --task TASK [--python PYTHON] [--bridge HOST_BRIDGE] [--timeout-seconds N]
+  regression run SCRIPT_ID --module MODULE --task TASK [--python PYTHON] [--timeout-seconds N]
   impact analyze [--base REF] [--head REF] [--changed-files FILE1,FILE2]
   release check [--profile fast|normal|full] [--base REF] [--head REF] [--changed-files FILE1,FILE2] [--plan-only] [execution context flags]
   release list | release show|report CHECK_ID
@@ -85,6 +86,7 @@ Commands:
   module regression show|run MODULE [--priority p0|p1|p2|p3]
   memory list | memory search TEXT | memory add ID --module MODULE [--task TASK] --title TEXT --content TEXT | memory review ID --module MODULE [--task TASK] --approve|--reject
   run guide-approve RUN --scenario ID [--planned-step STEP_ID | --action TEXT --expected TEXT] --confirmed-by HUMAN --confirmation-text TEXT
+  act <command> --run RUN_ID [options]  — execute a UI action via built-in driver
   run step RUN --action TEXT --detail TEXT --screenshot PATH [--ui-action launch|navigate|click|input|fill|swipe|back|wait|assert|screenshot|reset|restart-app] [--safety-action ACTION] [--scenario SCENARIO] [--status passed|failed|paused|blocked|adapted] [--visual-inspection performed|not-required|skipped] [--execution-mode host-automated|user-assisted|system-component-blocked|preseeded-test-data] [--locator-strategy STRATEGY] [--locator-value VALUE] [--actual-locator-strategy STRATEGY] [--actual-locator-value VALUE] [--input-refs key=ref,key=ref] [--expected-state TEXT] [--actual-state TEXT] [--adaptation TEXT]
   run evidence RUN --type TYPE --summary TEXT [--file PATH]
   run cleanup RUN --scenario ID --cleanup TEXT --actual TEXT --status passed|failed|blocked|paused|inconclusive [--screenshot PATH]
@@ -392,6 +394,7 @@ async function main(): Promise<void> {
       configuredPlatforms: projectPlatforms,
       availableCapabilities: available,
       notes: capabilityAdvice(missingCapabilities),
+      runner: runnerDiagnosis(projectRoot),
       recommendedRegressionStack: recommendedRegressionStackDiagnosis(projectRoot, projectPlatforms),
     }); return;
   }
@@ -619,7 +622,7 @@ ${advancedUsage}`);
         taskId: requiredFlag('--task'),
         scriptId: subject,
         pythonCommand: flag('--python'),
-        bridge: flag('--bridge'),
+        
         timeoutMs,
       });
       rebuildIndexes(projectRoot);
@@ -650,7 +653,7 @@ ${advancedUsage}`);
       if (args.includes('--plan-only') || !selection.members.length) { output(check); return; }
       const timeoutSeconds = flag('--timeout-seconds'); const timeoutMs = timeoutSeconds === undefined ? undefined : Number(timeoutSeconds) * 1000;
       if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) throw new Error('--timeout-seconds must be a positive number.');
-      const regressionRun = runRegressionSelection(projectRoot, selection, { pythonCommand: flag('--python'), bridge: flag('--bridge'), timeoutMs });
+      const regressionRun = runRegressionSelection(projectRoot, selection, { pythonCommand: flag('--python'), timeoutMs });
       attachRegressionRun(check, regressionRun); finalizeReleaseCheck(check, regressionRun);
       saveReleaseCheck(projectRoot, check); writeReleaseReport(projectRoot, check, regressionRun); rebuildIndexes(projectRoot);
       output({ releaseCheck: check, regressionRun }); return;
@@ -745,7 +748,7 @@ ${advancedUsage}`);
       if (regressionAction === 'run') {
         const timeoutSeconds = flag('--timeout-seconds'); const timeoutMs = timeoutSeconds === undefined ? undefined : Number(timeoutSeconds) * 1000;
         if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) throw new Error('--timeout-seconds must be a positive number.');
-        const result = runRegressionSelection(projectRoot, selection, { pythonCommand: flag('--python'), bridge: flag('--bridge'), timeoutMs }); rebuildIndexes(projectRoot); return output(result);
+        const result = runRegressionSelection(projectRoot, selection, { pythonCommand: flag('--python'), timeoutMs }); rebuildIndexes(projectRoot); return output(result);
       }
       throw new Error('Task regression action must be show or run.');
     }
@@ -770,6 +773,36 @@ ${advancedUsage}`);
       const memory = reviewMemory(projectRoot, requiredFlag('--module'), subject, approve ? 'approve' : 'reject', (flag('--knowledge-level') as ProjectMemory['knowledgeLevel'] | undefined) ?? 'confirmed', flag('--task'));
       rebuildIndexes(projectRoot); output(memory); return;
     }
+  }
+  if (group === 'act') {
+    const projectRoot = root();
+    const command = action;
+    if (!command) throw new Error('act requires a command: navigate, click, fill, select, assert-text, assert-visible, tap, type-text, swipe, launch, describe, wait, screenshot, scroll, hover, home, back, key');
+    const runId = requiredFlag('--run');
+    const result = await executeAct(projectRoot, command, {
+      run: runId,
+      locator: flag('--locator'),
+      url: flag('--url'),
+      inputRef: flag('--input-ref'),
+      value: flag('--value'),
+      expected: flag('--expected'),
+      text: flag('--text'),
+      x: flag('--x'),
+      y: flag('--y'),
+      x1: flag('--x1'),
+      y1: flag('--y1'),
+      x2: flag('--x2'),
+      y2: flag('--y2'),
+      direction: flag('--direction'),
+      ms: flag('--ms'),
+      name: flag('--name'),
+      bundleId: flag('--bundle-id'),
+      keycode: flag('--keycode'),
+      scenario: flag('--scenario'),
+      platform: flag('--platform'),
+      deviceUdid: flag('--device-udid'),
+    });
+    output(result); return;
   }
   if (group === 'run') {
     if (!['show', 'report', 'guide-approve', 'guide-verdict', 'step', 'evidence', 'cleanup', 'recover', 'observe', 'complete'].includes(action ?? '')) throw new Error(`Unsupported command.\n\n${advancedUsage}`);
@@ -811,6 +844,7 @@ ${advancedUsage}`);
       output(executionEnvelope(projectRoot, updated)); return;
     }
     if (action === 'complete') {
+      killDriver(projectRoot, subject);
       const updated = completeAgentGuidedRun(projectRoot, readTask(projectRoot, (run as { moduleId: string }).moduleId, (run as { taskId: string }).taskId), subject);
       rebuildIndexes(projectRoot); output(executionEnvelope(projectRoot, updated)); return;
     }
@@ -823,7 +857,7 @@ ${advancedUsage}`);
     if (regressionAction === 'show') return output(selection);
     const timeoutSeconds = flag('--timeout-seconds'); const timeoutMs = timeoutSeconds === undefined ? undefined : Number(timeoutSeconds) * 1000;
     if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) throw new Error('--timeout-seconds must be a positive number.');
-    const result = runRegressionSelection(projectRoot, selection, { pythonCommand: flag('--python'), bridge: flag('--bridge'), timeoutMs }); rebuildIndexes(projectRoot); return output(result);
+    const result = runRegressionSelection(projectRoot, selection, { pythonCommand: flag('--python'), timeoutMs }); rebuildIndexes(projectRoot); return output(result);
   }
   if (group === 'skill') {
     const skillRoot = join(process.cwd(), 'skill', 'qa-agent');

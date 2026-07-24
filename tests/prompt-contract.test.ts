@@ -18,7 +18,7 @@ function skillText(): string {
   const files = [
     join(skillRoot, 'SKILL.md'),
     join(skillRoot, 'references', 'workflow.md'),
-    join(skillRoot, 'references', 'python-regression.md'),
+    join(skillRoot, 'references', 'regression-runner.md'),
     join(skillRoot, 'references', 'recommended-regression-stack.md'),
     join(skillRoot, 'references', 'cli-command-reference.md'),
     join(skillRoot, 'skills', 'guided', 'SKILL.md'),
@@ -28,7 +28,7 @@ function skillText(): string {
 }
 
 test('uses installed workflow references without a project Prompt Bundle', () => {
-  for (const file of ['workflow.md', 'python-regression.md', 'recommended-regression-stack.md', 'cli-command-reference.md']) assert.ok(existsSync(join(skillRoot, 'references', file)));
+  for (const file of ['workflow.md', 'regression-runner.md', 'recommended-regression-stack.md', 'cli-command-reference.md']) assert.ok(existsSync(join(skillRoot, 'references', file)));
   const workflow = readFileSync(join(skillRoot, 'references', 'workflow.md'), 'utf8');
   for (const heading of ['## Request classification', '## Session continuity', '## Shared PRD review gates', '## Daily Quick workflow', '## Guided workflow', '## Strict and release workflow', '## Session finish', '## User-visible language', '## Safety boundaries']) assert.match(workflow, new RegExp(heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-no-prompt-bundle-'));
@@ -42,10 +42,9 @@ test('documents one advisory recommended regression stack for Web and iOS', () =
   const stack = readFileSync(join(skillRoot, 'references', 'recommended-regression-stack.md'), 'utf8');
   for (const phrase of ['recommended, not mandatory', 'Python 3.12', 'pytest-playwright', 'xcrun simctl', 'fb-idb', 'idb_companion', 'ios-simulator-mcp', 'result.json', 'report.md', 'screenshots/', 'stdout.log', 'stderr.log', 'evidence/']) assert.match(stack, new RegExp(phrase, 'i'));
   assert.doesNotMatch(stack, /junit|allure|ui-tree|Playwright Trace|videos?\//i);
-  const main = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
-  const python = readFileSync(join(skillRoot, 'references', 'python-regression.md'), 'utf8');
-  assert.match(main, /recommended-regression-stack\.md/);
-  assert.match(python, /recommended-regression-stack\.md/);
+  const runner = readFileSync(join(skillRoot, 'references', 'regression-runner.md'), 'utf8');
+  assert.match(runner, /QA_AGENT_SCREENSHOT_DIR/);
+  assert.match(runner, /QA_AGENT_RESULT_PATH/);
 });
 
 test('guides first-time users to run Doctor after initialization', () => {
@@ -57,10 +56,10 @@ test('guides first-time users to run Doctor after initialization', () => {
   assert.match(englishReadme, /Missing recommended tools are advisory and do not automatically block QA Agent/);
 });
 
-test('keeps one compact ordinary QA Skill with Python draft and publication ownership', () => {
+test('keeps one compact ordinary QA Skill with act commands and regression ownership', () => {
   const main = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
   assert.ok(words(main) < 600, `main Skill is too large: ${words(main)} words`);
-  for (const phrase of ['qa-agent check', 'qa-agent continue', 'qa-agent finish', 'qa-agent-guided', 'qa-agent-regression-test', 'userQuestions', 'confirmedDecisions', 'Task PRD', '确认测试方案', '确认开始测试', 'pythonRegressionEligibility', 'qa-agent regression draft', 'qa-agent regression publish']) assert.match(main, new RegExp(phrase, 'i'));
+  for (const phrase of ['qa-agent check', 'qa-agent continue', 'qa-agent finish', 'qa-agent-guided', 'qa-agent-regression-test', 'userQuestions', 'confirmedDecisions', 'Task PRD', '确认测试方案', '确认开始测试', 'qa-agent act', 'qa-agent regression publish']) assert.match(main, new RegExp(phrase, 'i'));
   assert.doesNotMatch(main, /qa-agent-(quick|start|review|test|result|finish|operation|recovery|archive)/);
 });
 
@@ -137,18 +136,16 @@ test('requires Task PRD review and exact start confirmation before UI execution'
   assert.match(readFileSync(join(repository, 'src', 'task-prd.ts'), 'utf8'), /\| 步骤 \| 操作 \| 预期结果 \|/);
 });
 
-test('requires separate generation and publication approval with Run-level flow traceability', () => {
+test('requires separate export and publication approval with Run-level flow traceability', () => {
   const main = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
   const workflow = readFileSync(join(skillRoot, 'references', 'workflow.md'), 'utf8');
-  const contract = readFileSync(join(skillRoot, 'references', 'python-regression.md'), 'utf8');
+  const contract = readFileSync(join(skillRoot, 'references', 'regression-runner.md'), 'utf8');
   const regressionSkill = readFileSync(join(skillRoot, 'skills', 'regression-test', 'SKILL.md'), 'utf8');
-  for (const phrase of ['Generation approval', 'publication approval', 'Runtime never authors Python', 'sourceFlowHash', 'QA_AGENT_REGRESSION:', 'QA_AGENT_RESULT_PATH', 'qa-agent/python-regression-result/v1']) assert.match(contract, new RegExp(phrase, 'i'));
-  assert.match(main, /Generation consent authorizes a draft only/i);
-  assert.match(workflow, /Generation consent permits only draft creation/i);
-  assert.match(workflow, /separate script-publication approval/i);
-  assert.match(regressionSkill, /previously approved Python regression scripts/i);
+  for (const phrase of ['Export approval', 'publication approval', 'sourceFlowHash', 'QA_AGENT_RESULT_PATH', 'qa-agent/python-regression-result/v1']) assert.match(contract, new RegExp(phrase, 'i'));
+  assert.match(main, /separate explicit approval/i);
+  assert.match(workflow, /separate explicit approval/i);
   assert.match(regressionSkill, /Runtime-generated regression report/i);
-  assert.doesNotMatch(regressionSkill, /qa-agent regression draft|qa-agent regression publish/);
+  assert.doesNotMatch(regressionSkill, /qa-agent regression export|qa-agent regression publish/);
   assert.match(sourceText(), /sourceFlowHash/);
 });
 
@@ -162,10 +159,7 @@ test('requires clickable artifacts, Markdown-embedded screenshots, and an explic
     assert.match(text, /Markdown image syntax|embed/i);
     assert.match(text, /plain path|paths alone|path-only/i);
   }
-  assert.match(main, /requiredUserQuestion/);
-  assert.match(workflow, /requiredUserQuestion/);
   assert.match(readFileSync(join(repository, 'src', 'report.ts'), 'utf8'), /## Embedded Screenshots/);
-  assert.match(readFileSync(join(repository, 'src', 'workflow.ts'), 'utf8'), /是否基于本次已验证流程生成 Python 回归脚本草稿/);
   assert.match(readFileSync(join(repository, 'src', 'cli.ts'), 'utf8'), /mustAskUserQuestion/);
 });
 
