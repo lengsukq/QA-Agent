@@ -45,8 +45,14 @@ def run_replay(steps_file: str) -> None:
             return f"Tap {loc_val or params.get('detail', '')}".strip()
         if cmd in ("fill", "type_text"):
             return f"Input {loc_val or ''}".strip()
-        if cmd in ("assert_text", "assert_visible"):
+        if cmd in ("assert_text", "assert_visible", "assert_value"):
             return f"Assert {params.get('expected', '') or loc_val or ''}".strip()
+        if cmd == "assert_not_visible":
+            return f"Assert not visible {loc_val or ''}".strip()
+        if cmd == "assert_attribute":
+            return f"Assert {params.get('attribute', '')}={params.get('expected', '')}".strip()
+        if cmd == "assert_count":
+            return f"Assert count {params.get('expected', '')} for {loc_val or ''}".strip()
         if cmd == "swipe":
             return f"Swipe {params.get('direction', '')}".strip()
         return f"{cmd} {loc_val or params.get('detail', '')}".strip() or (cmd or "step")

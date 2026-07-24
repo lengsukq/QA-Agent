@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { qaPath } from './project.ts';
-import { resolveRunner } from './runner-path.ts';
+import { resolveRunner, resolvePython } from './runner-path.ts';
 import { assertSupportedPlatform, isSupportedPlatform, platformMismatchAdvice, SUPPORTED_PLATFORMS, type SupportedPlatform } from './platform.ts';
 import { readJson } from './store.ts';
 import type { CapabilityStatus, ExecutionSnapshot, PermissionStatus } from './types.ts';
@@ -94,7 +94,7 @@ export function runnerDiagnosis(root: string): RunnerDiagnosis {
   };
   const command = process.platform === 'win32' ? 'where' : 'which';
 
-  const python = process.env.QA_AGENT_PYTHON?.trim() || 'python3';
+  const python = resolvePython(root);
   const pythonVersion = check(python, ['--version']);
   const playwrightCheck = check(python, ['-c', 'import playwright; print(getattr(playwright, "__version__", "available"))']);
   const xcrunCheck = check('xcrun', ['--find', 'simctl']);

@@ -14,7 +14,7 @@ import {
 } from './project.ts';
 import { hasRuntimeReportMarker } from './report-contract.ts';
 import { exportStepsFromRun, validateStepsFile, type RegressionStepsFile } from './regression-steps.ts';
-import { projectRunnerDir } from './runner-path.ts';
+import { projectRunnerDir, resolvePython } from './runner-path.ts';
 import { resolveSessionIdentity } from './session.ts';
 import {
   assertSafeId,
@@ -691,7 +691,7 @@ export function runPythonRegression(root: string, input: RunPythonRegressionInpu
   const stdoutPath = join(runDirectory, 'stdout.log');
   const stderrPath = join(runDirectory, 'stderr.log');
   const startedAt = now();
-  const pythonCmd = input.pythonCommand ?? 'python3';
+  const pythonCmd = input.pythonCommand ?? resolvePython(root);
   const spawnArgs = isStepsJson
     ? ['-m', 'qa_agent_runner', 'replay', scriptPath]
     : [scriptPath];

@@ -3,7 +3,7 @@ import { createInterface, type Interface } from 'node:readline';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { qaPath, taskSourceRunDirectory } from './project.ts';
-import { projectRunnerDir } from './runner-path.ts';
+import { projectRunnerDir, resolvePython } from './runner-path.ts';
 import type { TestRun } from './types.ts';
 
 export interface DriverResult {
@@ -41,7 +41,7 @@ export function ensureDriver(root: string, run: TestRun, platform: 'web' | 'ios'
   const screenshotDir = join(taskSourceRunDirectory(root, run.moduleId, run.taskId), 'screenshots', 'steps');
   mkdirSync(screenshotDir, { recursive: true });
 
-  const python = process.env.QA_AGENT_PYTHON ?? 'python3';
+  const python = resolvePython(root);
   const cwd = projectRunnerDir(root);
   const child = spawn(python, ['-m', 'qa_agent_runner', 'server'], {
     cwd,

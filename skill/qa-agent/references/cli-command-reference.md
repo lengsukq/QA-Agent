@@ -53,7 +53,10 @@ Only Web and iOS Simulator are supported. All UI interactions use `qa-agent act`
 | `qa-agent act select --run RUN --locator "strategy=value" --value VAL` | Select dropdown option (web). |
 | `qa-agent act assert-text --run RUN --locator "strategy=value" --expected TEXT` | Assert element text. |
 | `qa-agent act assert-visible --run RUN --locator "strategy=value"` | Assert element visible. |
-| `qa-agent act assert-value --run RUN --locator "strategy=value" --expected TEXT` | Assert an exact iOS accessibility value. |
+| `qa-agent act assert-value --run RUN --locator "strategy=value" --expected TEXT` | Assert an exact input value (web) or iOS accessibility value. |
+| `qa-agent act assert-not-visible --run RUN --locator "strategy=value"` | Assert element does not exist or is not visible. |
+| `qa-agent act assert-attribute --run RUN --locator "strategy=value" --attribute ATTR --expected TEXT` | Assert a specific element attribute value. |
+| `qa-agent act assert-count --run RUN --locator "strategy=value" --expected N` | Assert the number of matching elements. |
 | `qa-agent act tap --run RUN --locator "strategy=value"` | Semantically tap an iOS element from the current accessibility tree. |
 | `qa-agent act tap --run RUN --x N --y N` | Tap coordinates (iOS fallback only). |
 | `qa-agent act type-text --run RUN --text TEXT` | Type text (iOS). |

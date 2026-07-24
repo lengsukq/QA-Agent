@@ -89,6 +89,7 @@ function plannedStepsFor(input: PlanDraftScenario, scenarioId: string): PlannedT
     id: uniqueId(step.id ? requiredText(step.id, `Scenario ${scenarioId} step id`) : safeSlug(step.action, `step-${index + 1}`), used, `step-${index + 1}`),
     action: requiredText(step.action, `Scenario ${scenarioId} step ${index + 1} action`),
     expected: requiredText(step.expected, `Scenario ${scenarioId} step ${index + 1} expected`),
+    regressionStep: step.regressionStep,
   }));
 }
 

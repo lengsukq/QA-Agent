@@ -285,6 +285,18 @@ export function recordAgentStep(root: string, runId: string, input: { action: st
     adaptation: input.adaptation,
     humanApproval: guidedApproval?.approval,
   });
+  // Auto-backfill regressionStep on the corresponding PlannedTestStep when a UI step passes with a driver command.
+  const resolvedPlannedStepId = guidedApproval?.plannedStepId ?? input.plannedStepId;
+  const stepStatus = guidedApproval ? 'blocked' : input.status ?? 'passed';
+  if (resolvedPlannedStepId && input.driverCommand && ['passed', 'adapted'].includes(stepStatus)) {
+    const scenario = task.scenarios.find(item => item.id === scenarioId);
+    const plannedStep = scenario?.plannedSteps.find(item => item.id === resolvedPlannedStepId);
+    if (plannedStep && !plannedStep.regressionStep) {
+      plannedStep.regressionStep = { cmd: input.driverCommand, params: { ...(input.driverParams ?? {}) } };
+      task.updatedAt = now();
+      saveTask(root, task);
+    }
+  }
   if (guidedApproval) run.guidedPending = { type: 'result_verdict', stepId };
   checkpointRun(root, run);
   return run;

@@ -20,6 +20,18 @@ export function bundledRunnerDir(): string {
   return resolve(dirname(fileURLToPath(import.meta.url)), '..', 'runner');
 }
 
+/**
+ * Resolve the Python interpreter for the unified Runner.
+ * Priority: QA_AGENT_PYTHON env > .qa-agent/venv/bin/python > python3
+ */
+export function resolvePython(root: string): string {
+  const configured = process.env.QA_AGENT_PYTHON?.trim();
+  if (configured) return configured;
+  const venvPython = join(root, '.qa-agent', 'venv', 'bin', 'python');
+  if (existsSync(venvPython)) return venvPython;
+  return 'python3';
+}
+
 /** Resolve the Runner once for all UI and replay entry points. */
 export function resolveRunner(root: string): RunnerResolution {
   const configured = process.env.QA_AGENT_RUNNER_DIR?.trim();

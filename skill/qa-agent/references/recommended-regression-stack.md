@@ -18,8 +18,9 @@ Python 3.12+
 Recommended setup:
 
 ```bash
-python3.12 -m pip install pytest pytest-playwright
-python3.12 -m playwright install chromium
+python3 -m venv .qa-agent/venv
+.qa-agent/venv/bin/pip install pytest pytest-playwright
+.qa-agent/venv/bin/playwright install chromium
 ```
 
 Use Playwright for browser lifecycle, stable locators, UI actions, assertions, and screenshots. Use pytest for fixtures, parameterization, assertions, cleanup, and execution control.
@@ -58,7 +59,8 @@ pytest
 Recommended setup:
 
 ```bash
-python3.12 -m pip install pytest fb-idb
+python3 -m venv .qa-agent/venv
+.qa-agent/venv/bin/pip install pytest fb-idb
 brew tap facebook/fb
 brew install idb-companion
 ```
@@ -117,3 +119,10 @@ unknown
 ```
 
 Missing Python/Playwright blocks Web. Missing Python/`xcrun simctl`/`idb`/a booted Simulator blocks iOS. Run `qa-agent doctor --platforms <web|ios>` for the next repair command.
+
+## Virtual environment
+
+- Location is fixed at `.qa-agent/venv/`.
+- Runtime Python resolution priority: `QA_AGENT_PYTHON` env > `.qa-agent/venv/bin/python` > `python3`.
+- All pip packages (playwright, fb-idb, pytest, etc.) are installed inside the venv.
+- No manual `source activate` is needed; Runtime references the binary path directly.

@@ -52,7 +52,7 @@ function buildScenarioStepsFile(input: { scriptId: string; run: TestRun; scenari
     platform,
     sourceRunId: input.run.id,
     sourcePlanHash: input.run.planHash,
-    steps: stepsFromSourceSteps(input.steps),
+    steps: stepsFromSourceSteps(input.steps, input.scenario.plannedSteps),
     cleanup,
   };
 }

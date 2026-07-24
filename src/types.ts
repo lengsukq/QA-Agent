@@ -375,6 +375,7 @@ export interface PlannedTestStep {
   id: string;
   action: string;
   expected: string;
+  regressionStep?: { cmd: string; params: Record<string, unknown> };
 }
 
 export interface EvidencePolicy {
@@ -452,6 +453,7 @@ export interface PlanDraftStep {
   id?: string;
   action: string;
   expected: string;
+  regressionStep?: { cmd: string; params: Record<string, unknown> };
 }
 
 export interface PlanDraftScenario {

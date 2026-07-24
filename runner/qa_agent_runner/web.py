@@ -132,6 +132,44 @@ class WebDriver:
         loc.wait_for(state="visible", timeout=params.get("timeout", 30_000))
         return f"{params.get('locator', {}).get('value', 'element')} is visible"
 
+    def _cmd_assert_value(self, params: dict[str, Any]) -> str:
+        """Check the current value of an input/textarea/select element."""
+        loc = self._resolve(params.get("locator"))
+        expected = params.get("expected", "")
+        actual = loc.input_value(timeout=params.get("timeout", 30_000))
+        if actual != expected:
+            raise AssertionError(f"Expected value '{expected}', got '{actual}'")
+        return actual
+
+    def _cmd_assert_not_visible(self, params: dict[str, Any]) -> str:
+        """Check that an element does not exist or is not visible."""
+        loc = self._resolve(params.get("locator"))
+        try:
+            loc.wait_for(state="hidden", timeout=params.get("timeout", 5_000))
+        except Exception:
+            if loc.count() > 0 and loc.is_visible():
+                raise AssertionError(f"Element '{params.get('locator', {}).get('value', 'element')}' is still visible")
+        return f"{params.get('locator', {}).get('value', 'element')} is not visible"
+
+    def _cmd_assert_attribute(self, params: dict[str, Any]) -> str:
+        """Check a specific attribute value of an element."""
+        loc = self._resolve(params.get("locator"))
+        attr = params.get("attribute", "")
+        expected = params.get("expected", "")
+        actual = loc.get_attribute(attr, timeout=params.get("timeout", 30_000))
+        if actual != expected:
+            raise AssertionError(f"Expected {attr}='{expected}', got '{actual}'")
+        return actual
+
+    def _cmd_assert_count(self, params: dict[str, Any]) -> str:
+        """Check the number of elements matching a locator."""
+        loc = self._resolve(params.get("locator"))
+        expected = int(params.get("expected", 0))
+        actual = loc.count()
+        if actual != expected:
+            raise AssertionError(f"Expected count {expected}, got {actual}")
+        return str(actual)
+
     def _cmd_wait(self, params: dict[str, Any]) -> str:
         ms = params.get("ms")
         locator = params.get("locator")

@@ -509,6 +509,66 @@ class IosDriver:
             raise AssertionError(f"Expected iOS AXValue {expected!r}, got {actual!r} for {resolved}.")
         return {"action": "assert-value", "resolvedLocator": resolved, "expected": expected, "actual": actual, "element": element}
 
+    def _cmd_assert_not_visible(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Check that an element does not exist in the visible tree."""
+        locator = params.get("locator")
+        try:
+            self._resolve_element(locator, exact=bool(params.get("exact", True)))
+            raise AssertionError(f"Element still visible: {locator}")
+        except (AssertionError, ValueError) as exc:
+            if "not found" in str(exc):
+                return {"action": "assert-not-visible", "locator": locator}
+            raise
+
+    def _cmd_assert_attribute(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Check a specific accessibility attribute of an element."""
+        attr = params.get("attribute", "")
+        expected = self._text(params.get("expected"))
+        element, resolved = self._resolve_element(params.get("locator"), exact=True)
+        actual = self._text(element.get(attr))
+        if actual != expected:
+            raise AssertionError(f"Expected {attr}={expected!r}, got {actual!r} for {resolved}.")
+        return {"action": "assert-attribute", "attribute": attr, "expected": expected, "actual": actual, "resolvedLocator": resolved}
+
+    def _cmd_assert_count(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Check the number of visible elements matching a locator."""
+        locator = params.get("locator")
+        expected = int(params.get("expected", 0))
+        tree = self._read_tree()
+        count = self._count_matches(locator, tree)
+        if count != expected:
+            raise AssertionError(f"Expected count {expected}, got {count} for {locator}.")
+        return {"action": "assert-count", "expected": expected, "actual": count, "locator": locator}
+
+    def _count_matches(self, locator: dict[str, Any] | None, tree: list[dict[str, Any]]) -> int:
+        """Count visible elements matching a locator without raising ambiguity errors."""
+        if not locator:
+            return 0
+        strategy = str(locator.get("strategy", "accessibility"))
+        value = self._text(locator.get("value"))
+        if strategy == "coordinate":
+            return 1  # Coordinates always match exactly one point
+        count = 0
+        for element in tree:
+            if not self._is_visible(element):
+                continue
+            element_type = self._text(element.get("type") or element.get("role") or element.get("role_description"))
+            if strategy in ("accessibility", "label", "text"):
+                if self._matches_text(element, value, True) or self._matches_text(element, value, False):
+                    count += 1
+            elif strategy == "value":
+                if self._text(element.get("AXValue")) == value:
+                    count += 1
+            elif strategy in ("role", "type"):
+                role = value
+                name: str | None = None
+                if strategy == "role" and ":" in value:
+                    role, name = value.split(":", 1)
+                if role.casefold() in element_type.casefold():
+                    if name is None or self._matches_text(element, name, False):
+                        count += 1
+        return count
+
     def _cmd_screenshot(self, params: dict[str, Any]) -> dict[str, Any]:
         return {"action": "screenshot", "name": params.get("name", "explicit")}
 

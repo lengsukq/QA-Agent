@@ -6,8 +6,8 @@ import type { Locator, TestRun, UiAction } from './types.ts';
 import { isSupportedPlatform } from './platform.ts';
 
 const PLATFORM_COMMANDS: Record<'web' | 'ios', Set<string>> = {
-  web: new Set(['navigate', 'click', 'fill', 'select', 'assert-text', 'assert-visible', 'wait', 'screenshot', 'scroll', 'hover', 'key']),
-  ios: new Set(['launch', 'terminate', 'install', 'tap', 'type-text', 'fill', 'clear', 'swipe', 'scroll', 'back', 'home', 'assert-visible', 'assert-text', 'assert-value', 'wait', 'screenshot', 'describe', 'key']),
+  web: new Set(['navigate', 'click', 'fill', 'select', 'assert-text', 'assert-visible', 'assert-value', 'assert-not-visible', 'assert-attribute', 'assert-count', 'wait', 'screenshot', 'scroll', 'hover', 'key']),
+  ios: new Set(['launch', 'terminate', 'install', 'tap', 'type-text', 'fill', 'clear', 'swipe', 'scroll', 'back', 'home', 'assert-visible', 'assert-text', 'assert-value', 'assert-not-visible', 'assert-attribute', 'assert-count', 'wait', 'screenshot', 'describe', 'key']),
 };
 
 function platformCommandError(platform: 'web' | 'ios', command: string): string | undefined {
@@ -46,6 +46,9 @@ const CMD_TO_UI_ACTION: Record<string, UiAction> = {
   'assert-text': 'assert',
   'assert-visible': 'assert',
   'assert-value': 'assert',
+  'assert-not-visible': 'assert',
+  'assert-attribute': 'assert',
+  'assert-count': 'assert',
   tap: 'click',
   'type-text': 'input',
   clear: 'input',
@@ -226,6 +229,10 @@ function buildActionDescription(command: string, options: ActOptions, result: Dr
     case 'select': return `Select '${options.value}' in ${options.locator}`;
     case 'assert-text': return `Assert text '${options.expected}' in ${options.locator}`;
     case 'assert-visible': return `Assert visible: ${options.locator}`;
+    case 'assert-value': return `Assert value '${options.expected}' in ${options.locator}`;
+    case 'assert-not-visible': return `Assert not visible: ${options.locator}`;
+    case 'assert-attribute': return `Assert ${options.locator} attribute`;
+    case 'assert-count': return `Assert count for ${options.locator}`;
     case 'tap': return `Tap (${options.x}, ${options.y})`;
     case 'type-text': return `Type text`;
     case 'swipe': return `Swipe ${options.direction ?? `(${options.x1},${options.y1})→(${options.x2},${options.y2})`}`;

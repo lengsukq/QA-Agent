@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { taskDirectory } from './project.ts';
 import { writeJsonAtomic, readJson } from './store.ts';
-import type { TestRun } from './types.ts';
+import type { PlannedTestStep, TestRun } from './types.ts';
 
 export const REGRESSION_STEPS_API_VERSION = 'qa-agent/regression-steps/v1';
 
@@ -40,8 +40,12 @@ const UI_ACTION_TO_CMD: Record<string, string> = {
 
 /**
  * Map a single source Run step to a regression step entry (cmd + params).
+ * When a pre-filled regressionStep is provided from the PlannedTestStep, it takes precedence.
  */
-export function stepToRegressionEntry(step: TestRun['steps'][number]): RegressionStepEntry {
+export function stepToRegressionEntry(step: TestRun['steps'][number], plannedRegressionStep?: { cmd: string; params: Record<string, unknown> }): RegressionStepEntry {
+  if (plannedRegressionStep) {
+    return { id: step.id, cmd: plannedRegressionStep.cmd, params: { ...plannedRegressionStep.params } };
+  }
   if (step.driverCommand) {
     return { id: step.id, cmd: step.driverCommand, params: { ...(step.driverParams ?? {}) } };
   }
@@ -51,9 +55,11 @@ export function stepToRegressionEntry(step: TestRun['steps'][number]): Regressio
 
 /**
  * Map an array of already-filtered source steps to regression step entries.
+ * When plannedSteps are provided, their pre-filled regressionStep takes precedence.
  */
-export function stepsFromSourceSteps(steps: TestRun['steps']): RegressionStepEntry[] {
-  return steps.map(stepToRegressionEntry);
+export function stepsFromSourceSteps(steps: TestRun['steps'], plannedSteps?: PlannedTestStep[]): RegressionStepEntry[] {
+  const plannedMap = new Map((plannedSteps ?? []).filter(p => p.regressionStep).map(p => [p.id, p.regressionStep!]));
+  return steps.map(step => stepToRegressionEntry(step, step.plannedStepId ? plannedMap.get(step.plannedStepId) : undefined));
 }
 
 /**

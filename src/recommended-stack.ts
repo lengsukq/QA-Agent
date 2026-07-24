@@ -1,4 +1,6 @@
 import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { readProject } from './project.ts';
 
 export type RecommendationLevel = 'recommended' | 'optional';
@@ -89,8 +91,9 @@ function commandCheck(input: {
   };
 }
 
-function pythonCheck(probe: CommandProbe): { tool: RecommendedToolCheck; command?: string } {
-  const candidates = [...new Set([process.env.QA_AGENT_PYTHON, 'python3.12', 'python3'].filter((item): item is string => Boolean(item)))];
+function pythonCheck(root: string, probe: CommandProbe): { tool: RecommendedToolCheck; command?: string } {
+  const venvPython = join(root, '.qa-agent', 'venv', 'bin', 'python');
+  const candidates = [...new Set([process.env.QA_AGENT_PYTHON, existsSync(venvPython) ? venvPython : undefined, 'python3.12', 'python3'].filter((item): item is string => Boolean(item)))];
   for (const command of candidates) {
     if (!commandPath(command, probe)) continue;
     const result = probe(command, ['--version']);
@@ -202,7 +205,7 @@ function iosStack(python: ReturnType<typeof pythonCheck>, probe: CommandProbe): 
 export function recommendedRegressionStackDiagnosis(root: string, requestedPlatforms?: string[], probe: CommandProbe = defaultProbe): RecommendedRegressionStackDiagnosis {
   const configured = requestedPlatforms?.length ? requestedPlatforms : readProject(root).platforms;
   const platforms = [...new Set(configured.filter(platform => platform === 'web' || platform === 'ios'))] as Array<'web' | 'ios'>;
-  const python = pythonCheck(probe);
+  const python = pythonCheck(root, probe);
   return {
     policy: 'recommended-not-required',
     message: platforms.length ? 'These are the built-in Runner prerequisites for the configured Web and iOS platforms. Missing prerequisites block the corresponding platform and Doctor reports the exact repair step.' : 'No Web or iOS platform is configured. QA Agent supports only Web and iOS Simulator.',

@@ -14,7 +14,7 @@ Both Quick and Guided modes use the same planning contract:
 
 1. Create the Task through `qa-agent check`; use `--mode guided` for human-led execution.
 2. Inspect relevant source, routes, configuration, tests, existing QA assets, and tools.
-3. Build and apply a structured PlanDraft. Every Scenario must have ordered `steps`; every step needs an operation and expected result.
+3. Build and apply a structured PlanDraft. Every Scenario must have ordered `steps`; every step needs an operation and expected result. Each step may optionally carry a `regressionStep` ({ cmd, params }) pre-filled for the unified executor; Runtime automatically backfills this field when the step passes during execution.
 4. Present the complete Runtime-written Task PRD and include its Runtime-provided clickable `userFacingArtifacts[].markdownLink` in the same reply.
 5. After the plan is generated, inspect source, configuration, entry points, installed targets, and capabilities to determine exactly one platform. Put `web` or `ios` in `PlanDraft.platformDeclaration.platform`, set `declaredBy` to `qa-agent`, make `scope.platforms` contain the same single platform, and apply the updated PlanDraft again. Ask the QA only when evidence leaves multiple platforms or no platform candidate.
 6. Resolve every `userQuestions` entry with the QA. Ask one concrete question at a time, store the answer under `confirmedDecisions`, remove the resolved question, and apply the updated PlanDraft again.

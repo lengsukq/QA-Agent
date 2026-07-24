@@ -30,7 +30,7 @@ For every UI operation:
 
 1. Describe exactly one proposed action and its expected result. Ask the QA whether to proceed.
 2. After the QA approves, persist that decision with `qa-agent run guide-approve`, using the matching PRD `--planned-step` when available. Do not use a UI tool before Runtime returns `uiExecutionAllowed=true`.
-3. Execute only that approved action. Persist it with `qa-agent run step`, including the real screenshot, actual locator, expected state, and actual state.
+3. Execute only that approved action. Persist it with `qa-agent run step`, including the real screenshot, actual locator, expected state, and actual state. When the QA verdict is `passed`, Runtime automatically backfills the step's `regressionStep` (cmd + params) into the corresponding PlannedTestStep.
 4. Present the observed result and ask whether it matches expectations.
 5. Persist the QA verdict with `qa-agent run guide-verdict`. Until that verdict is recorded, do not execute another UI action or complete the Run.
 

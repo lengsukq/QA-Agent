@@ -44,8 +44,11 @@ Format identifier: `qa-agent/regression-steps/v1`
 | `fill` | `locator`, `inputRef` or `value` | web |
 | `select` | `locator`, `value` | web |
 | `assert-text` | `locator`, `expected` | web, ios |
-| `assert-value` | `locator`, `expected` | ios |
+| `assert-value` | `locator`, `expected` | web, ios |
 | `assert-visible` | `locator` | web, ios |
+| `assert-not-visible` | `locator` | web, ios |
+| `assert-attribute` | `locator`, `attribute`, `expected` | web, ios |
+| `assert-count` | `locator`, `expected` | web, ios |
 | `tap` | `locator` or `x,y` | ios |
 | `type-text` | `inputRef` or `value` | ios |
 | `clear` | `locator`, optional `maxChars` | ios |
@@ -146,6 +149,8 @@ Environment variables set by Runtime:
 
 - `QA_AGENT_SCREENSHOT_DIR` — where screenshots are saved
 - `QA_AGENT_RESULT_PATH` — where `result.json` is written
+
+Python resolution order used by Runtime: `QA_AGENT_PYTHON` env > `.qa-agent/venv/bin/python` > `python3`.
 
 The runner captures a real screenshot after every UI step and writes a structured result using `qa-agent/python-regression-result/v1`.
 
