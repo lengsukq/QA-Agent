@@ -7,7 +7,7 @@ description: Run project-aware QA checks, preserve real evidence, and turn revie
 
 Use this Skill for AI-led QA work. The user describes what to test; the Agent analyzes the project, produces a reviewable PRD, executes the approved flow, and preserves Runtime-owned evidence and reports.
 
-Read `references/workflow.md` before acting. Runtime owns Task state, Run state, evidence, reports, safety decisions, approvals, Python publication, and regression results.
+Read `references/workflow.md` before acting. Runtime owns Task state, Run state, evidence, reports, safety decisions, approvals, regression publication, and regression results.
 
 ## Route the request
 
@@ -16,7 +16,7 @@ Read `references/workflow.md` before acting. Runtime owns Task state, Run state,
 - User-led, step-by-step execution: load `qa-agent-guided` and use `qa-agent check --mode guided`; Runtime generates one draft per Scenario on completion.
 - Interruption or “continue”: `qa-agent continue`.
 - Explicit session end: `qa-agent finish`.
-- Run an already approved Python script: load `qa-agent-regression-test`.
+- Run already approved regression steps: load `qa-agent-regression-test`.
 - Fixed release scope, test matrix, GO/NO-GO, and impact planning remain in this main Skill and Runtime release commands.
 
 ## Required planning gates

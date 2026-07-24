@@ -26,13 +26,25 @@ class WebDriver:
 
     def execute(self, cmd: str, params: dict[str, Any], step_id: str) -> dict[str, Any]:
         handler = getattr(self, f"_cmd_{cmd.replace('-', '_')}", None)
-        if handler is None:
-            return {"ok": False, "error": f"Unknown web command: {cmd}", "stepId": step_id}
-        actual = handler(params)
         screenshot_name = f"{step_id}.png"
         screenshot_path = self._screenshot_dir / screenshot_name
-        self._page.screenshot(path=str(screenshot_path))
+        if handler is None:
+            self._safe_screenshot(screenshot_path)
+            return {"ok": False, "error": f"Unknown web command: {cmd}", "screenshot": screenshot_name, "stepId": step_id}
+        try:
+            actual = handler(params)
+        except Exception as exc:
+            # Still capture a screenshot on failure for evidence
+            self._safe_screenshot(screenshot_path)
+            return {"ok": False, "error": str(exc), "screenshot": screenshot_name, "stepId": step_id}
+        self._safe_screenshot(screenshot_path)
         return {"ok": True, "screenshot": screenshot_name, "actual": actual, "stepId": step_id}
+
+    def _safe_screenshot(self, path: Path) -> None:
+        try:
+            self._page.screenshot(path=str(path))
+        except Exception:
+            pass
 
     # --- Locator resolution ---
 

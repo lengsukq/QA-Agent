@@ -85,7 +85,7 @@ test('documents the Guided QA action and verdict handshake', () => {
 
 test('keeps host guidance thin and routes published scripts to regression-test', () => {
   assert.ok(words(sharedGuidance) < 240, `shared host guidance is too large: ${words(sharedGuidance)} words`);
-  for (const phrase of ['references/workflow.md', 'qa-agent continue', 'QA_AGENT_SESSION_KEY', 'Task prd.md', '确认测试方案', '确认开始测试', 'qa-agent-guided', 'qa-agent-regression-test', 'Python draft']) assert.match(sharedGuidance, new RegExp(phrase, 'i'));
+  for (const phrase of ['references/workflow.md', 'qa-agent continue', 'QA_AGENT_SESSION_KEY', 'Task prd.md', '确认测试方案', '确认开始测试', 'qa-agent-guided', 'qa-agent-regression-test', 'regression-steps draft']) assert.match(sharedGuidance, new RegExp(phrase, 'i'));
   assert.doesNotMatch(sharedGuidance, /approved_unverified|planHash|resumeToken|contextHash/);
 });
 
@@ -163,9 +163,9 @@ test('requires clickable artifacts, Markdown-embedded screenshots, and an explic
   assert.match(readFileSync(join(repository, 'src', 'cli.ts'), 'utf8'), /mustAskUserQuestion/);
 });
 
-test('publishes v0.3.7 without source and lockfile implementation payloads', () => {
+test('publishes v0.3.91 without source and lockfile implementation payloads', () => {
   const pkg = JSON.parse(readFileSync(join(repository, 'package.json'), 'utf8')) as { version: string; files: string[] };
-  assert.equal(pkg.version, '0.3.7');
+  assert.equal(pkg.version, '0.3.91');
   assert.equal(pkg.files.includes('src/'), false);
   assert.equal(pkg.files.includes('package-lock.json'), false);
 });

@@ -1,8 +1,8 @@
 # Recommended Regression Stack
 
-This document is the single source of truth for QA Agent's recommended Python regression environment.
+This document is the single source of truth for QA Agent's recommended regression runner environment.
 
-The stack is **recommended, not mandatory**. A project may use another approved framework or Host Bridge as long as the formal Python script is directly runnable, writes the QA Agent result contract, captures required screenshots, and preserves only useful evidence.
+The stack is **recommended, not mandatory**. A project may use another approved framework or adapter as long as the formal regression steps are replayed by a directly runnable runner that writes the QA Agent result contract, captures required screenshots, and preserves only useful evidence.
 
 ## Web external testing
 
@@ -77,9 +77,9 @@ Recommended optional exploration tool:
 ios-simulator-mcp
 ```
 
-Use it to inspect available simulators, launch and explore the app, capture screenshots, and verify the business flow before generating Python.
+Use it to inspect available simulators, launch and explore the app, capture screenshots, and verify the business flow before exporting regression steps.
 
-Do not make it the only dependency of a formal regression script. The reviewed Python file should remain directly runnable from the command line through the selected adapter.
+Do not make it the only dependency of the regression runner. The reviewed steps file should remain replayable from the command line through the selected adapter.
 
 Project reference:
 
@@ -109,15 +109,15 @@ Required outputs:
 
 `evidence/` is optional. Use it only for a small number of diagnostic files that materially help explain a failure, such as a browser console error or an idb command error. Do not create extra formal artifact categories.
 
-## Agent generation rules
+## Execution environment rules
 
-When generating a Python regression draft:
+When preparing the regression runner environment:
 
 1. Read the source Run and this recommendation.
 2. Prefer pytest plus the platform adapter listed above when the project has no established framework.
-3. Reuse an existing project framework when it already satisfies direct command-line execution, `result.json`, screenshots, cleanup, and Runtime reporting.
+3. Reuse an existing project framework when it already satisfies direct command-line replay, `result.json`, screenshots, cleanup, and Runtime reporting.
 4. Do not introduce an unapproved dependency silently.
-5. Show required packages, commands, environment variables, and Host Bridge requirements with the draft.
+5. Provide required packages, commands, environment variables, and adapter requirements alongside the regression steps.
 6. Write all formal execution outputs to the Runtime-provided Task Run directories.
 7. Do not add unrelated reporting or diagnostic frameworks by default.
 

@@ -112,7 +112,7 @@ function resetSourceRunSlot(root: string, task: TestTask, previous: TestRun): vo
   const activeScripts = listPythonRegressions(root, task.metadata.moduleId, task.metadata.id)
     .filter(script => ['approved_unverified', 'validated'].includes(script.status));
   if (activeScripts.length) {
-    throw new Error(`Source Run ${previous.id} is frozen by formal Python regression script(s): ${activeScripts.map(script => script.id).join(', ')}. Run those scripts through regression-runs, or change the reviewed plan so Runtime marks them stale before creating a new Source Run.`);
+    throw new Error(`Source Run ${previous.id} is frozen by formal regression script(s): ${activeScripts.map(script => script.id).join(', ')}. Run those scripts through regression-runs, or change the reviewed plan so Runtime marks them stale before creating a new Source Run.`);
   }
   rmSync(taskSourceRunDirectory(root, task.metadata.moduleId, task.metadata.id), { recursive: true, force: true });
   clearTaskResultSection(root, task);

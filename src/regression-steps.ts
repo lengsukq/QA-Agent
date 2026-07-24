@@ -39,23 +39,45 @@ const UI_ACTION_TO_CMD: Record<string, string> = {
 };
 
 /**
+ * Map a single source Run step to a regression step entry (cmd + params).
+ */
+export function stepToRegressionEntry(step: TestRun['steps'][number]): RegressionStepEntry {
+  const cmd = UI_ACTION_TO_CMD[step.uiAction ?? ''] ?? step.uiAction ?? 'assert_visible';
+  return { id: step.id, cmd, params: buildStepParams(step, cmd) };
+}
+
+/**
+ * Map an array of already-filtered source steps to regression step entries.
+ */
+export function stepsFromSourceSteps(steps: TestRun['steps']): RegressionStepEntry[] {
+  return steps.map(stepToRegressionEntry);
+}
+
+/**
  * Export regression steps from a completed Run.
  * Only UI-source steps with passed status are included.
+ *
+ * When `sourceStepIds` is provided, the export is restricted to exactly those
+ * step ids (preserving Run order) so the resulting file matches the validated
+ * source flow precisely.
  */
-export function exportStepsFromRun(root: string, run: TestRun, id?: string): RegressionStepsFile {
+export function exportStepsFromRun(root: string, run: TestRun, id?: string, sourceStepIds?: string[]): RegressionStepsFile {
   const platform = (run.context?.platform ?? 'web') as 'web' | 'ios';
   const steps: RegressionStepEntry[] = [];
   const cleanup: RegressionStepEntry[] = [];
 
+  const allowedIds = sourceStepIds ? new Set(sourceStepIds) : undefined;
   for (const step of run.steps) {
+    if (allowedIds) {
+      if (!allowedIds.has(step.id)) continue;
+      steps.push(stepToRegressionEntry(step));
+      continue;
+    }
     // Only include UI steps that passed and have a uiAction
     if (step.source === 'internal' || step.source === 'recovery') continue;
     if (!['passed', 'adapted'].includes(step.status)) continue;
     if (!step.uiAction) continue;
-
-    const cmd = UI_ACTION_TO_CMD[step.uiAction] ?? step.uiAction;
-    const params = buildStepParams(step, cmd);
-    steps.push({ id: step.id, cmd, params });
+    steps.push(stepToRegressionEntry(step));
   }
 
   // Extract cleanup steps from cleanupFindings

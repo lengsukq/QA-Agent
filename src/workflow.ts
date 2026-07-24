@@ -66,7 +66,7 @@ function runningNextActions(task: NonNullable<ReturnType<typeof readTask>>, run:
   }
   const missingCleanup = active.flatMap(s => s.cleanup.map(cleanup => ({ s, cleanup }))).find(({ s, cleanup }) => !run.cleanupFindings.some(f => f.scenarioId === s.id && f.cleanup === cleanup));
   if (missingCleanup) return [{ id: 'record_cleanup', command: 'qa-agent run cleanup', description: `Execute and record cleanup for Scenario ${missingCleanup.s.id}: ${missingCleanup.cleanup}.`, requiresHuman: false, requiredActor: 'agent' }];
-  return [{ id: 'complete_run', command: 'qa-agent run complete', description: task.metadata.mode === 'guided' ? 'Complete the user-led Run, generate the authoritative report, and create one regression draft per Scenario.' : 'Complete the AI-led Run and let Runtime generate the authoritative report and Python-regression eligibility result.', requiresHuman: false, requiredActor: 'agent' }];
+  return [{ id: 'complete_run', command: 'qa-agent run complete', description: task.metadata.mode === 'guided' ? 'Complete the user-led Run, generate the authoritative report, and create one regression-steps draft per Scenario.' : 'Complete the AI-led Run and let Runtime generate the authoritative report and regression-steps eligibility result.', requiresHuman: false, requiredActor: 'agent' }];
 }
 
 function breadcrumb(input: { moduleId: string; taskId: string; taskState: string; phase: WorkflowPhase; runId?: string; blockingGates: string[]; allowedActions: string[]; forbiddenActions: string[]; nextAction?: NextAction }): string {

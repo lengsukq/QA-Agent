@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { taskSourceRunDirectory } from './project.ts';
+import { REGRESSION_STEPS_API_VERSION, stepsFromSourceSteps, type RegressionStepsFile } from './regression-steps.ts';
 import { now, writeJsonAtomic, writeTextAtomic } from './store.ts';
 import type { ScenarioRegressionDraft, TestRun, TestScenario, TestTask } from './types.ts';
 
@@ -40,82 +41,20 @@ function flowHash(task: TestTask, run: TestRun, scenario: TestScenario, steps: T
   }));
 }
 
-function renderScript(input: { scriptId: string; run: TestRun; scenario: TestScenario; steps: TestRun['steps']; sourceFlowHash: string }): string {
-  const metadata = JSON.stringify({
-    scriptId: input.scriptId,
+function buildScenarioStepsFile(input: { scriptId: string; run: TestRun; scenario: TestScenario; steps: TestRun['steps'] }): RegressionStepsFile {
+  const platform = (input.run.context?.platform ?? 'web') as 'web' | 'ios';
+  const cleanup = (input.run.cleanupFindings ?? [])
+    .filter(finding => finding.scenarioId === input.scenario.id && finding.status === 'passed')
+    .map((finding, index) => ({ id: `cleanup-${index + 1}`, cmd: 'click', params: { detail: finding.cleanup } }));
+  return {
+    apiVersion: REGRESSION_STEPS_API_VERSION,
+    id: input.scriptId,
+    platform,
     sourceRunId: input.run.id,
-    sourceStepIds: input.steps.map(step => step.id),
-    sourceFlowHash: input.sourceFlowHash,
-  });
-  const steps = input.steps.map(step => ({
-    id: step.id,
-    plannedStepId: step.plannedStepId,
-    action: step.uiAction ?? 'assert',
-    description: step.action,
-    locator: step.actualLocator ?? step.locator ?? null,
-    inputRefs: step.inputRefs ?? {},
-    expected: step.expectedState ?? '',
-  }));
-  return `# QA_AGENT_REGRESSION: ${metadata}
-"""Generated from a user-led QA scenario. Review the bridge contract before publication."""
-
-import json
-import os
-import subprocess
-from pathlib import Path
-
-STEPS = ${JSON.stringify(steps, null, 2)}
-SCENARIO_ID = ${JSON.stringify(input.scenario.id)}
-RESULT_API_VERSION = "qa-agent/python-regression-result/v1"
-
-
-def execute_step(bridge: str, step: dict, screenshot_dir: Path) -> dict:
-    screenshot = screenshot_dir / f"{step['id']}.png"
-    payload = json.dumps({"scenarioId": SCENARIO_ID, "step": step, "screenshot": str(screenshot)})
-    completed = subprocess.run([bridge, payload], capture_output=True, text=True, check=False)
-    actual = completed.stdout.strip() or completed.stderr.strip() or f"bridge exit code {completed.returncode}"
-    status = "passed" if completed.returncode == 0 and screenshot.exists() else "blocked"
-    return {
-        "id": step["id"],
-        "name": step["description"],
-        "status": status,
-        "expected": step.get("expected", ""),
-        "actual": actual,
-        "screenshot": str(screenshot),
-    }
-
-
-def main() -> None:
-    result_path = Path(os.environ["QA_AGENT_RESULT_PATH"])
-    screenshot_dir = Path(os.environ["QA_AGENT_SCREENSHOT_DIR"])
-    screenshot_dir.mkdir(parents=True, exist_ok=True)
-    bridge = os.environ.get("QA_AGENT_BRIDGE")
-    if not bridge:
-        results = [{
-            "id": step["id"],
-            "name": step["description"],
-            "status": "blocked",
-            "expected": step.get("expected", ""),
-            "actual": "QA_AGENT_BRIDGE is not configured.",
-            "screenshot": str(screenshot_dir / f"{step['id']}.png"),
-        } for step in STEPS]
-    else:
-        results = [execute_step(bridge, step, screenshot_dir) for step in STEPS]
-    status = "passed" if results and all(step["status"] == "passed" for step in results) else "blocked"
-    result = {
-        "apiVersion": RESULT_API_VERSION,
-        "status": status,
-        "contractStatus": "completed" if status == "passed" else "blocked",
-        "conclusion": f"Scenario {SCENARIO_ID}: {status}",
-        "steps": results,
-        "cleanup": [],
-    }
-    result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-if __name__ == "__main__":
-    main()
-`;
+    sourcePlanHash: input.run.planHash,
+    steps: stepsFromSourceSteps(input.steps),
+    cleanup,
+  };
 }
 
 export function generateGuidedScenarioRegressions(root: string, task: TestTask, run: TestRun): ScenarioRegressionDraft[] {
@@ -128,26 +67,27 @@ export function generateGuidedScenarioRegressions(root: string, task: TestTask, 
     if (!steps.length) throw new Error(`User-led Scenario ${scenario.id} has no human-approved and human-confirmed UI steps.`);
     const scriptId = `${safePart(task.metadata.id)}-${safePart(scenario.id)}`.slice(0, 63);
     const sourceFlowHash = flowHash(task, run, scenario, steps);
-    const script = renderScript({ scriptId, run, scenario, steps, sourceFlowHash });
+    const stepsFile = buildScenarioStepsFile({ scriptId, run, scenario, steps });
+    const serialized = `${JSON.stringify(stepsFile, null, 2)}\n`;
     const directory = join(runDirectory, 'scenario-regressions', safePart(scenario.id));
     mkdirSync(directory, { recursive: true });
-    const scriptPath = join(directory, 'script.py');
+    const scriptPath = join(directory, 'steps.json');
     const manifestPath = join(directory, 'manifest.json');
     const draft: ScenarioRegressionDraft = {
       scenarioId: scenario.id,
       scriptId,
-      scriptRef: `scenario-regressions/${safePart(scenario.id)}/script.py`,
+      scriptRef: `scenario-regressions/${safePart(scenario.id)}/steps.json`,
       manifestRef: `scenario-regressions/${safePart(scenario.id)}/manifest.json`,
       sourceStepIds: steps.map(step => step.id),
       sourceFlowHash,
-      scriptHash: hashText(script),
+      scriptHash: hashText(serialized),
       generatedAt,
     };
-    writeTextAtomic(scriptPath, script);
+    writeTextAtomic(scriptPath, serialized);
     writeJsonAtomic(manifestPath, { apiVersion: 'qa-agent/scenario-regression-draft/v1', kind: 'ScenarioRegressionDraft', runId: run.id, ...draft });
     return draft;
   });
   run.scenarioRegressionDrafts = drafts;
-  for (const draft of drafts) run.evidence.push({ type: 'scenario-regression-draft', path: draft.scriptRef, summary: `Generated user-led regression draft for Scenario ${draft.scenarioId}.` });
+  for (const draft of drafts) run.evidence.push({ type: 'scenario-regression-draft', path: draft.scriptRef, summary: `Generated user-led regression steps for Scenario ${draft.scenarioId}.` });
   return drafts;
 }

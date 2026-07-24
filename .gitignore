@@ -20,6 +20,9 @@ Thumbs.db
 # --- Dependencies ---
 node_modules/
 
+# --- Python cache ---
+**/__pycache__/
+
 # --- Build output ---
 dist/
 build/

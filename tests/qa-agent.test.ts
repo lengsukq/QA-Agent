@@ -174,10 +174,10 @@ function strictTaskWithRun(root: string, moduleId: string, taskId: string, risk:
   return { task: readTask(root, moduleId, taskId), run: completed };
 }
 
-test('initializes v0.3.7 without replay directories and exposes simplified help', () => {
+test('initializes v0.3.91 without replay directories and exposes simplified help', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-init-'));
   run(root, 'init', '--id', 'fixture');
-  assert.equal(run(root, '--version').trim(), '0.3.7');
+  assert.equal(run(root, '--version').trim(), '0.3.91');
   const help = run(root, 'help');
   for (const commandName of ['init', 'check', 'continue', 'finish', 'doctor', 'update']) assert.match(help, new RegExp(commandName));
   assert.doesNotMatch(help, /operation plan|operation replay/i);
@@ -197,7 +197,7 @@ test('initializes v0.3.7 without replay directories and exposes simplified help'
   assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'operation.schema.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'regression-suite.schema.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'skills', 'built-in', 'operation-replay.json')), false);
-  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.7');
+  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.91');
   assert.equal(validateProject(root).valid, true);
 });
 
@@ -412,12 +412,11 @@ test('User-led QA keeps one pending interaction and generates one regression scr
   const scenarioDraft = completed.scenarioRegressionDrafts![0]!;
   const scenarioScriptPath = join(taskSourceRunDirectory(root, task.metadata.moduleId, task.metadata.id), scenarioDraft.scriptRef);
   assert.ok(existsSync(scenarioScriptPath));
-  const scenarioScript = readFileSync(scenarioScriptPath, 'utf8');
-  const syntax = spawnSync('python3', ['-m', 'py_compile', scenarioScriptPath], { encoding: 'utf8' });
-  assert.equal(syntax.status, 0, syntax.stderr || syntax.stdout);
-  assert.match(scenarioScript, /QA_AGENT_BRIDGE/);
-  assert.match(scenarioScript, /QA_AGENT_RESULT_PATH/);
-  assert.match(scenarioScript, new RegExp(step.id));
+  assert.ok(scenarioDraft.scriptRef.endsWith('steps.json'));
+  const scenarioSteps = JSON.parse(readFileSync(scenarioScriptPath, 'utf8'));
+  assert.equal(scenarioSteps.apiVersion, 'qa-agent/regression-steps/v1');
+  assert.ok(Array.isArray(scenarioSteps.steps) && scenarioSteps.steps.length > 0);
+  assert.ok(scenarioSteps.steps.some((entry: { id: string }) => entry.id === step.id));
   const report = readFileSync(taskSourceRunReportPath(root, task.metadata.moduleId, task.metadata.id), 'utf8');
   assert.match(report, /User-led QA Decisions/);
   assert.match(report, /Scenario Regression Drafts/);

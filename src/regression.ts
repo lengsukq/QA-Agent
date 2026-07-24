@@ -106,8 +106,8 @@ function selectionBase(input: {
     kind: 'PythonRegressionSelection',
     id: input.id,
     ...partial,
-    name: input.name ?? `${input.moduleId} Python regression`,
-    purpose: input.purpose ?? 'Run approved Python business regression scripts and review their Runtime reports.',
+    name: input.name ?? `${input.moduleId} regression`,
+    purpose: input.purpose ?? 'Run approved business regression scripts and review their Runtime reports.',
     releaseGate: input.releaseGate ?? members.some(member => member.releaseGate),
     estimatedDurationMinutes: members.reduce((total, member) => total + member.estimatedDurationMinutes, 0),
     selectionReasons: input.selectionReasons,
@@ -126,8 +126,8 @@ export function buildTaskRegressionSelection(root: string, task: TestTask): Pyth
     moduleIds: [task.metadata.moduleId],
     taskId: task.metadata.id,
     members: taskMembers(root, task),
-    name: `${task.metadata.name} Python regression`,
-    purpose: `Run all validated Python scripts for ${task.metadata.name}.`,
+    name: `${task.metadata.name} regression`,
+    purpose: `Run all validated regression scripts for ${task.metadata.name}.`,
   });
 }
 
@@ -144,8 +144,8 @@ export function buildModuleRegressionSelection(root: string, moduleId: string, p
     moduleId: module.id,
     moduleIds: [module.id],
     members,
-    name: `${module.name} Python regression`,
-    purpose: `Run validated ${module.name} Python scripts up to priority ${priorityThreshold}.`,
+    name: `${module.name} regression`,
+    purpose: `Run validated ${module.name} regression scripts up to priority ${priorityThreshold}.`,
     selectionPolicy: priorityThreshold === 'p3' ? 'all-validated-python-regressions' : 'priority-filtered',
     priorityThreshold,
   });
@@ -175,7 +175,7 @@ export function buildReleaseRegressionSelection(root: string, impact: ImpactAnal
 
     let include = profile === 'full';
     const reasons: string[] = [];
-    if (profile === 'full') reasons.push('Full profile includes every validated Python regression script.');
+    if (profile === 'full') reasons.push('Full profile includes every validated regression script.');
     if (releaseGate) { include = true; reasons.push('Task is a release gate.'); }
     if (goldenPath) { include = true; reasons.push('Task is tagged golden-path.'); }
     if (everyRelease) { include = true; reasons.push('Task frequency is every-release.'); }
@@ -194,7 +194,7 @@ export function buildReleaseRegressionSelection(root: string, impact: ImpactAnal
     const members = taskMembers(root, task, reason);
     const assetRequired = releaseGate || goldenPath || everyRelease || (hasImpact && impactedTask && allowedPriority) || (!hasImpact && allowedPriority && profile !== 'full');
     if (!members.length && assetRequired) {
-      requiredAssetGaps.push({ moduleId: task.metadata.moduleId, taskId: task.metadata.id, priority: task.metadata.priority, releaseGate, goldenPath, reason: `${reason} No validated Python regression script exists for this required Task.` });
+      requiredAssetGaps.push({ moduleId: task.metadata.moduleId, taskId: task.metadata.id, priority: task.metadata.priority, releaseGate, goldenPath, reason: `${reason} No validated regression script exists for this required Task.` });
     } else selected.push(...members);
     reasons.forEach(item => selectionReasons.add(item));
   }
@@ -206,8 +206,8 @@ export function buildReleaseRegressionSelection(root: string, impact: ImpactAnal
     moduleId: 'release',
     moduleIds: [...new Set(selected.map(member => member.moduleId))],
     members: selected,
-    name: `${profile[0]!.toUpperCase()}${profile.slice(1)} release Python regression`,
-    purpose: `Validate release gates, golden paths, and impacted business flows using approved Python scripts and the ${profile} profile.`,
+    name: `${profile[0]!.toUpperCase()}${profile.slice(1)} release regression`,
+    purpose: `Validate release gates, golden paths, and impacted business flows using approved regression scripts and the ${profile} profile.`,
     selectionPolicy: profile === 'full' ? 'all-validated-python-regressions' : 'release-gate-plus-impact',
     priorityThreshold: threshold,
     impactedModules: [...impacted],

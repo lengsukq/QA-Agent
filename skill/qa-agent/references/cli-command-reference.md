@@ -146,8 +146,8 @@ Runtime exports structured steps from completed Runs. The Agent never writes Pyt
 | Command | Purpose |
 | --- | --- |
 | `qa-agent impact analyze` | Resolve changed-file impact. |
-| `qa-agent release check --profile fast|normal|full [--plan-only]` | Select and optionally run validated Python scripts for release. |
-| `qa-agent archive --module MODULE --task TASK` | Archive only after Python coverage, evidence, Cleanup, and memory gates pass. |
+| `qa-agent release check --profile fast|normal|full [--plan-only]` | Select and optionally run validated regression steps for release. |
+| `qa-agent archive --module MODULE --task TASK` | Archive only after regression coverage, evidence, Cleanup, and memory gates pass. |
 | `qa-agent session bind --module MODULE --task TASK` | Bind a Task to the current Session. |
 | `qa-agent validate` | Validate project assets. |
 | `qa-agent index rebuild` | Rebuild project indexes. |

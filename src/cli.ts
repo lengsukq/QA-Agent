@@ -30,7 +30,7 @@ import { bindTaskSession, clearTaskSession, clearTaskSessionIfMatches, listTaskS
 import { finalizeTask } from './task-finalizer.ts';
 import { finishCurrentTask } from './finish.ts';
 import {
-  createPythonRegressionDraft,
+  createStepsRegressionDraft,
   listPythonRegressionDrafts,
   listPythonRegressions,
   publishPythonRegression,
@@ -71,7 +71,7 @@ Commands:
   workflow bootstrap --request TEXT --module ID --task ID [--module-name NAME] [--task-name NAME] [--platforms web,android,ios] [--risk low|medium|high|critical]
   workflow status --module ID --task ID
   session bind --module MODULE --task TASK [--run RUN] [--session SESSION_KEY] [--session-host HOST] | session current|clear|list [--session SESSION_KEY]
-  regression draft --module MODULE --task TASK --run RUN_ID --file SCRIPT.py [--id SCRIPT_ID] [--session SESSION_KEY] [--python PYTHON]
+  regression export --module MODULE --task TASK --run RUN_ID [--id SCRIPT_ID] [--session SESSION_KEY]
   regression drafts [--session SESSION_KEY] | regression draft-show DRAFT_ID [--session SESSION_KEY]
   regression publish --module MODULE --task TASK --draft DRAFT_ID --confirmed-by HUMAN [--confirmation-source current-chat-explicit-approval] [--replace] [--session SESSION_KEY]
   regression list --module MODULE --task TASK | regression show SCRIPT_ID --module MODULE --task TASK
@@ -108,7 +108,7 @@ Common commands:
   update                  Refresh managed files for this exact Runtime version
 
 In an Agent conversation, you normally only need to say what to test, “continue”, or “finish”.
-Run qa-agent help --advanced for Python regression, release, and administration commands.
+Run qa-agent help --advanced for regression, release, and administration commands.
 `;
 
 function flag(name: string): string | undefined { const position = args.indexOf(name); return position === -1 ? undefined : args[position + 1]; }
@@ -196,7 +196,7 @@ function executionEnvelope(projectRoot: string, run: TestRun): Record<string, un
     ...(run.scenarioRegressionDrafts ?? []).map(draft => userFacingArtifact(
       projectRoot,
       join(taskDirectory(projectRoot, run.moduleId, run.taskId), 'source-run', draft.scriptRef),
-      `查看场景回归脚本：${draft.scenarioId}`,
+      `查看场景回归步骤：${draft.scenarioId}`,
       'scenario-regression-draft',
     )),
   ];
@@ -209,7 +209,7 @@ function executionEnvelope(projectRoot: string, run: TestRun): Record<string, un
     && publishedRegressions.length === 0,
   );
   const requiredUserQuestion = shouldOfferPythonRegression
-    ? '测试已完成，并且本次流程符合生成回归脚本的条件。是否基于本次已验证流程生成 Python 回归脚本草稿？'
+    ? '测试已完成，并且本次流程符合导出回归步骤的条件。是否基于本次已验证流程导出可一键重放的回归步骤脚本（steps.json）？'
     : undefined;
   const next = run.guidedPending?.type === 'execute_action'
     ? `Execute only the approved action: ${run.guidedPending.action}`
@@ -240,10 +240,10 @@ function executionEnvelope(projectRoot: string, run: TestRun): Record<string, un
     mustAskUserQuestion: shouldOfferPythonRegression,
     requiredUserQuestion,
     nextUserDecision: shouldOfferPythonRegression ? {
-      id: 'offer_python_regression',
+      id: 'offer_regression_steps',
       question: requiredUserQuestion,
-      choices: ['生成回归脚本', '暂不生成'],
-      consequence: '同意后只生成草稿；正式发布仍需要单独审核和批准。',
+      choices: ['导出回归步骤', '暂不导出'],
+      consequence: '同意后只导出步骤草稿；正式发布仍需要单独审核和批准。',
     } : undefined,
     assetContract: { taskDirectory: taskDirectoryRelative, runDirectory, runJson: `${runDirectory}/run.json`, report: `${runDirectory}/report.md`, screenshotsDirectory: `${runDirectory}/screenshots/`, evidenceDirectory: `${runDirectory}/evidence/` },
     forbiddenActions: uiAllowed ? ['manual-report.write', 'pass.claim-before-run-complete'] : ['ui.execute', 'manual-report.write', 'pass.claim'],
@@ -560,20 +560,18 @@ ${advancedUsage}`);
   }
   if (group === 'regression') {
     const projectRoot = root();
-    if (action === 'draft') {
-      const result = createPythonRegressionDraft(projectRoot, {
+    if (action === 'export') {
+      const result = createStepsRegressionDraft(projectRoot, {
         moduleId: requiredFlag('--module'),
         taskId: requiredFlag('--task'),
         runId: requiredFlag('--run'),
         scriptId: flag('--id'),
-        scriptFile: requiredFlag('--file'),
         sessionKey: flag('--session'),
-        pythonCommand: flag('--python'),
       });
       output({
         ...result,
         approvalRequired: true,
-        next: 'Show the complete script or diff to the user. Publish only after explicit approval.',
+        next: 'Show the exported regression steps (steps.json) or diff to the user. Publish only after explicit approval.',
       });
       return;
     }
@@ -600,7 +598,7 @@ ${advancedUsage}`);
         replace: args.includes('--replace'),
       });
       rebuildIndexes(projectRoot);
-      output({ ...result, next: 'Run the approved Python script once. Runtime will mark the script validated when its execution contract completes.' });
+      output({ ...result, next: 'Run the approved regression steps once. Runtime will mark the steps validated when its execution contract completes.' });
       return;
     }
     if (action === 'list') {
@@ -608,12 +606,12 @@ ${advancedUsage}`);
       return;
     }
     if (action === 'show') {
-      if (!subject || subject.startsWith('--')) throw new Error('Python regression script id is required.');
+      if (!subject || subject.startsWith('--')) throw new Error('Regression script id is required.');
       output(readPythonRegression(projectRoot, requiredFlag('--module'), requiredFlag('--task'), subject));
       return;
     }
     if (action === 'run') {
-      if (!subject || subject.startsWith('--')) throw new Error('Python regression script id is required.');
+      if (!subject || subject.startsWith('--')) throw new Error('Regression script id is required.');
       const timeoutSeconds = flag('--timeout-seconds');
       const timeoutMs = timeoutSeconds === undefined ? undefined : Number(timeoutSeconds) * 1000;
       if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) throw new Error('--timeout-seconds must be a positive number.');

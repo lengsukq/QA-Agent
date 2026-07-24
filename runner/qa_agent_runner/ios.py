@@ -93,7 +93,8 @@ class IosDriver:
     def execute(self, cmd: str, params: dict[str, Any], step_id: str) -> dict[str, Any]:
         handler = getattr(self, f"_cmd_{cmd.replace('-', '_')}", None)
         if handler is None:
-            return {"ok": False, "error": f"Unknown iOS command: {cmd}", "stepId": step_id}
+            screenshot_name = self._take_screenshot(step_id)
+            return {"ok": False, "error": f"Unknown iOS command: {cmd}", "screenshot": screenshot_name, "stepId": step_id}
         try:
             actual = handler(params)
         except Exception as exc:
