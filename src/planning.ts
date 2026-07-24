@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import type { ModuleSnapshot, ProjectMemory, QaModule, TestRequirements, TestScenario, TestTask } from './types.ts';
 import { platformCapabilities } from './capabilities.ts';
 import { approvalIsCurrent, planReviewIsCurrent, requiresTestPlanApproval, testPlanHash } from './approval.ts';
+import { normalizeSupportedPlatforms } from './platform.ts';
 
 const coverageDimensions = [
   ['core-flow', '完成核心业务流程'], ['boundary', '覆盖输入、金额、数量、时间等边界'], ['permission', '覆盖不同角色的可见性和操作权限'],
@@ -23,6 +24,7 @@ export function planModule(module: QaModule, existingTaskIds: string[], memories
 }
 
 export function createTaskSkeleton(module: QaModule, id: string, name?: string): TestTask {
+  const platforms = normalizeSupportedPlatforms(module.platforms, ['web'], `module ${module.id} platforms`);
   const timestamp = now();
   const businessObjectives = [...module.businessGoals, ...(module.coreFlows ?? [])];
   const businessRules = module.businessRules ?? [];
@@ -38,7 +40,7 @@ export function createTaskSkeleton(module: QaModule, id: string, name?: string):
     ],
     visualAssertions: [{ id: 'business-outcome', expected: businessRules.length ? `${module.name} 符合已知业务规则：${businessRules.join('；')}` : `${module.name} 的核心业务结果、关键状态和可见反馈符合预期。`, importance: module.riskLevel }],
   };
-  const snapshotSeed = { moduleId: module.id, moduleName: module.name, moduleRevision: module.revision ?? 1, platforms: module.platforms, roles: module.roles, businessGoals: module.businessGoals, coreFlows: module.coreFlows ?? [], businessRules: module.businessRules ?? [], keyStates: module.keyStates ?? [], regressionFocus: module.regressionFocus ?? [] };
+  const snapshotSeed = { moduleId: module.id, moduleName: module.name, moduleRevision: module.revision ?? 1, platforms, roles: module.roles, businessGoals: module.businessGoals, coreFlows: module.coreFlows ?? [], businessRules: module.businessRules ?? [], keyStates: module.keyStates ?? [], regressionFocus: module.regressionFocus ?? [] };
   const moduleSnapshot: ModuleSnapshot = { $schema: '../../../../schemas/module-snapshot.schema.json', apiVersion: 'qa-agent/v2', kind: 'ModuleSnapshot', ...snapshotSeed, snapshotHash: createHash('sha256').update(JSON.stringify(snapshotSeed)).digest('hex'), capturedAt: timestamp };
   const requirements: TestRequirements = { $schema: '../../../../schemas/requirements.schema.json', apiVersion: 'qa-agent/v2', kind: 'TestRequirements', taskId: id, moduleId: module.id, businessGoals: businessObjectives.length ? businessObjectives : [`完成 ${module.name} 核心业务流程`], actors: module.roles, flows: module.coreFlows ?? [], rules: businessRules.map((statement, index) => ({ id: `rule-${index + 1}`, statement, knowledgeLevel: 'inferred' as const, source: 'module definition' })), scope: { included: businessObjectives, excluded: [] }, preconditions: [], testDataRefs: [], environments: ['local'], sourceRefs: module.sourceHints ?? [], risks: [], userQuestions: [], confirmedDecisions: [], requirementTrace: [{ requirementId: 'requirement-1', scenarioIds: ['happy-path'], assertionIds: ['business-outcome'], sourceRefs: module.sourceHints ?? [], status: 'covered' }], createdAt: timestamp, updatedAt: timestamp };
   return {
@@ -46,8 +48,8 @@ export function createTaskSkeleton(module: QaModule, id: string, name?: string):
     metadata: { id, name: name ?? `${module.name} 核心流程`, moduleId: module.id, version: 1, status: 'draft', priority: module.riskLevel === 'critical' ? 'p0' : 'p1', tags: [module.id, 'regression'], mode: 'regression', approvalPolicy: 'test-plan-and-side-effects', frequency: ['critical', 'high'].includes(module.riskLevel) ? 'every-release' : 'manual', releaseGate: module.riskLevel === 'critical', estimatedDurationMinutes: 5 },
     moduleSnapshotRef: 'module-snapshot.json', requirementsRef: 'requirements.json', testPlanRef: 'test-plan.json', scenarioRefs: ['scenarios/happy-path.json'],
     description: `验证 ${module.name} 的核心业务目标。`, objectives: businessObjectives.length ? businessObjectives : [`完成 ${module.name} 核心业务流程`],
-    scope: { platforms: module.platforms, environments: ['local'], roles: module.roles }, preconditions: module.entryPoints?.length ? [`Entry points: ${module.entryPoints.join(', ')}`] : [], memoryRefs: [], scenarios: [scenario],
-    requiredSkills: ['execution.contract', 'evidence.record', 'python.regression'], capabilities: { required: [...new Set(module.platforms.flatMap(platformCapabilities))], optional: ['network.read', 'source.readonly', 'logs.read'] },
+    scope: { platforms, environments: ['local'], roles: module.roles }, preconditions: module.entryPoints?.length ? [`Entry points: ${module.entryPoints.join(', ')}`] : [], memoryRefs: [], scenarios: [scenario],
+    requiredSkills: ['execution.contract', 'evidence.record', 'python.regression'], capabilities: { required: [...new Set(platforms.flatMap(platformCapabilities))], optional: ['network.read', 'source.readonly', 'logs.read'] },
     safety: { safeMode: true, stopBefore: ['payment.submit', 'refund.submit', 'data.delete', 'notification.send'] }, evidence: { required: scenario.evidence },
     evidencePolicy: { capture: 'every-action', visual: 'adaptive', required: ['baseline', 'key-business-state', 'failure', 'final-result'] },
     recoveryPolicy: { maxRecoveryAttempts: 3, allowSandboxDataReset: true }, regression: { triggers: [] }, createdAt: timestamp, updatedAt: timestamp,

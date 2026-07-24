@@ -7,6 +7,7 @@ import type { ModuleSnapshot, ProjectConfig, QaModule, TestPlan, TestRequirement
 import { approvalIsCurrent, requiresTestPlanApproval, testPlanHash } from './approval.ts';
 import { syncManagedRuntimeAssets } from './managed-assets.ts';
 import { writeTaskPlanningPrd } from './task-prd.ts';
+import { normalizeSupportedPlatforms } from './platform.ts';
 
 export const QA_DIRECTORY = '.qa-agent';
 
@@ -38,7 +39,7 @@ export function initializeProject(root: string, options: { id?: string; name?: s
   const project: ProjectConfig = {
     $schema: './schemas/project.schema.json', version: 1,
     project: { id, name: options.name ?? basename(resolve(root)), description: options.description ?? '', businessGoals: [], crossModuleFlows: [] },
-    platforms: options.platforms?.length ? options.platforms : ['web'], environments: ['local'], roles: ['default'], defaultContext: { environment: 'local', platform: options.platforms?.[0] ?? 'web', role: 'default' },
+    platforms: normalizeSupportedPlatforms(options.platforms), environments: ['local'], roles: ['default'], defaultContext: { environment: 'local', platform: options.platforms?.[0] ?? 'web', role: 'default' },
     source: { mode: 'host-provided', root: '' }, storage: { format: 'json' }, createdAt: timestamp, updatedAt: timestamp,
   };
   writeJsonAtomic(existing, project);
@@ -87,7 +88,7 @@ export function createModule(root: string, input: Pick<QaModule, 'id' | 'name' |
     const timestamp = now();
     const module: QaModule = {
       $schema: '../../schemas/module.schema.json', version: 1, revision: 1, id: input.id, name: input.name, description: input.description,
-      status: 'active', riskLevel: input.riskLevel ?? 'medium', platforms: input.platforms ?? ['web'], roles: input.roles ?? ['default'],
+      status: 'active', riskLevel: input.riskLevel ?? 'medium', platforms: normalizeSupportedPlatforms(input.platforms), roles: input.roles ?? ['default'],
       dependencies: input.dependencies ?? [], businessGoals: input.businessGoals ?? [], sourceHints: input.sourceHints ?? [], entryPoints: input.entryPoints ?? [], coreFlows: input.coreFlows ?? [], businessRules: input.businessRules ?? [], keyStates: input.keyStates ?? [], regressionFocus: input.regressionFocus ?? [], createdAt: timestamp, updatedAt: timestamp,
     };
     writeJsonAtomic(path, module);

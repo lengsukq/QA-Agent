@@ -175,10 +175,10 @@ function strictTaskWithRun(root: string, moduleId: string, taskId: string, risk:
   return { task: readTask(root, moduleId, taskId), run: completed };
 }
 
-test('initializes v0.3.92 with the managed Runner and exposes simplified help', () => {
+test('initializes v0.3.93 with the bundled Runner and exposes simplified help', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-init-'));
   run(root, 'init', '--id', 'fixture');
-  assert.equal(run(root, '--version').trim(), '0.3.92');
+  assert.equal(run(root, '--version').trim(), '0.3.93');
   const help = run(root, 'help');
   for (const commandName of ['init', 'check', 'continue', 'finish', 'doctor', 'update']) assert.match(help, new RegExp(commandName));
   assert.doesNotMatch(help, /operation plan|operation replay/i);
@@ -198,19 +198,24 @@ test('initializes v0.3.92 with the managed Runner and exposes simplified help', 
   assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'operation.schema.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'regression-suite.schema.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'skills', 'built-in', 'operation-replay.json')), false);
-  assert.ok(existsSync(join(root, '.qa-agent', 'runner', 'qa_agent_runner', '__main__.py')));
-  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.92');
+  assert.equal(existsSync(join(root, '.qa-agent', 'runner')), false);
+  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.93');
   assert.equal(validateProject(root).valid, true);
 });
 
 test('reports a missing managed Runner during project validation', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-runner-validation-'));
   initializeProject(root, { id: 'runner-validation' });
-  const runner = join(root, '.qa-agent', 'runner', 'qa_agent_runner');
-  rmSync(runner, { recursive: true, force: true });
-  const result = validateProject(root);
-  assert.equal(result.valid, false);
-  assert.match(result.errors.join('\n'), /managed Python Runner is missing/i);
+  const previous = process.env.QA_AGENT_RUNNER_DIR;
+  process.env.QA_AGENT_RUNNER_DIR = join(root, 'missing-runner');
+  try {
+    const result = validateProject(root);
+    assert.equal(result.valid, false);
+    assert.match(result.errors.join('\n'), /Unified Runner is missing|does not contain qa_agent_runner/i);
+  } finally {
+    if (previous === undefined) delete process.env.QA_AGENT_RUNNER_DIR;
+    else process.env.QA_AGENT_RUNNER_DIR = previous;
+  }
 });
 
 test('Quick Check completes with report, PRD, and direct Python eligibility', () => {

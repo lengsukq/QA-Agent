@@ -5,9 +5,9 @@ description: Run project-aware QA checks, preserve real evidence, and turn revie
 
 # QA Agent
 
-Use this Skill for AI-led QA work. The user describes what to test; the Agent analyzes the project, produces a reviewable PRD, executes the approved flow, and preserves Runtime-owned evidence and reports.
+Use this Skill for AI-led QA work. The Agent analyzes the project, produces a reviewable PRD, executes the approved flow, and preserves Runtime-owned evidence and reports.
 
-Before the first real check, or when the environment is uncertain, load `qa-agent-doctor` to initialize and verify the project, host, managed Python Runner, and platform capabilities.
+Before the first real check, or when the environment is uncertain, load `qa-agent-doctor` to initialize and verify the project, the global/bundled QA Agent Runner, Python, and the selected Web or iOS Simulator adapter.
 
 Read `references/workflow.md` before acting. Runtime owns Task state, Run state, evidence, reports, safety decisions, approvals, regression publication, and regression results.
 
@@ -19,7 +19,6 @@ Read `references/workflow.md` before acting. Runtime owns Task state, Run state,
 - Interruption or “continue”: `qa-agent continue`.
 - Explicit session end: `qa-agent finish`.
 - Run already approved JSON regression steps: load `qa-agent-regression-test`.
-- Fixed release scope, test matrix, GO/NO-GO, and impact planning remain in this main Skill and Runtime release commands.
 
 ## Required planning gates
 
@@ -36,15 +35,16 @@ Do not treat “可以”, “继续”, or “没问题” as either PRD confir
 
 ## Execution and result
 
-1. Use `qa-agent act` commands for all UI interactions. Never use external browser/device tools directly.
-2. Each `act` command auto-screenshots and auto-records. No manual step reporting needed.
-3. Record every declared business/visual assertion via `qa-agent act assert-text` or `act assert-visible`.
-4. Once all assertions and Cleanup are recorded, call `qa-agent run complete` in the same turn. NEVER end a turn while a Run remains `running`.
-5. Follow `nextAction`; ask at most one user-owned question per turn.
-6. Use only the Runtime report. Formal reports must embed real screenshots with Markdown image syntax. Include clickable report and finalized PRD links.
-7. After completion, if eligible, Runtime exports regression steps automatically. Publish with `qa-agent regression publish` only after separate explicit approval.
-8. Reruns use `qa-agent-regression-test` and `regression-runs/`. Formal regression reports embed every checkpoint screenshot.
-9. Call `qa-agent finish` only on explicit closure. Session finish is not Task archive.
+1. Only Web and iOS Simulator are supported. Use `qa-agent act` → Driver → `qa_agent_runner.server`; the Runner owns Playwright or `xcrun simctl` plus `idb`. Never call MCP, Playwright, xcrun, idb, ADB, or another UI tool directly.
+2. On a platform mismatch, stop; run `qa-agent doctor --platforms <web|ios>`, reapply the correct PlanDraft, repeat normal confirmations, then run `qa-agent test --platform <web|ios>`. Never use MCP as a bridge.
+3. Each `act` command auto-screenshots and auto-records. No manual step reporting needed.
+4. Record every declared business/visual assertion via `qa-agent act assert-text` or `act assert-visible`.
+5. Once all assertions and Cleanup are recorded, call `qa-agent run complete` in the same turn. NEVER end a turn while a Run remains `running`.
+6. Follow `nextAction`; ask at most one user-owned question per turn.
+7. Use only the Runtime report; embed real screenshots with Markdown image syntax, never paths alone, and include clickable report/PRD links.
+8. After completion, if eligible, Runtime exports only `.steps.json` regression steps. Publish with `qa-agent regression publish` only after separate explicit approval.
+9. Reruns use `qa-agent-regression-test`; replay always goes through `qa-agent regression run` and the unified Python Runner.
+10. Call `qa-agent finish` only on explicit closure. Session finish is not Task archive.
 
 ## Safety
 

@@ -1,5 +1,13 @@
 # 更新日志
 
+## v0.3.93
+
+- 锁定 Web/iOS Simulator 的内置 Runner，移除 MCP 作为 UI 执行路径。
+- 新增平台不匹配时先运行 Doctor、重新应用 PlanDraft 的引导。
+- 支持全局环境变量和 npm 包内 Runner 解析，`init` 不再复制 Runner 到项目。
+- 简化执行契约哈希：标题、描述和模块展示快照变化不再让回归步骤失效。
+- 增加 v0.3.92 项目的兼容升级逻辑。
+
 ## v0.3.92
 
 - npm 包包含统一 Python 执行器，初始化或更新项目时复制到 `.qa-agent/runner`；

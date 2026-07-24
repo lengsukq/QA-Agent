@@ -45,6 +45,7 @@ import { QA_AGENT_VERSION } from './version.ts';
 import { planningPrdIsCurrent } from './task-prd.ts';
 import { artifactLinksSentence, userFacingArtifact } from './user-facing-artifacts.ts';
 import { executeAct, killDriver } from './act.ts';
+import { isSupportedPlatform, normalizeSupportedPlatforms } from './platform.ts';
 
 const args = process.argv.slice(2);
 const hostFlags = supportedHosts.map(host => `--${HOST_PLATFORMS[host].cliFlag}`).join(' ');
@@ -53,22 +54,22 @@ const advancedUsage = `qa-agent — local-first QA Agent MVP
 
 Commands:
   --help, -h, help | --version, -v, version
-  init [--id ID] [--name NAME] [--description TEXT] [--platforms web,android,ios] [${hostFlags}] [--force]
+  init [--id ID] [--name NAME] [--description TEXT] [--platforms web,ios] [${hostFlags}] [--force]
   configure --project PROJECT_DIRECTORY --host <${hostNames}> [--scope project|user] [init options] [--force]
   install-host <${hostNames}> [--scope project|user] [--project PROJECT_DIRECTORY] [--path SKILLS_DIRECTORY] [--force]
   doctor [--platforms web,ios] | validate | index rebuild
   update [--force]
-  check --request TEXT [--mode quick|guided] [--module ID] [--task ID] [--session SESSION_KEY] [--platforms web,android,ios] [--risk low|medium|high|critical]
+  check --request TEXT [--mode quick|guided] [--module ID] [--task ID] [--session SESSION_KEY] [--platforms web,ios] [--risk low|medium|high|critical]
   continue [--session SESSION_KEY]
   finish [--session SESSION_KEY]
   plan apply --file PLAN_DRAFT.json | --stdin
   plan review --module MODULE --task TASK --approve --confirmed-by USER --confirmation-text "确认测试方案" [--session SESSION_KEY]
-  start --request TEXT --module ID --task ID [--session SESSION_KEY] [--module-name NAME] [--task-name NAME] [--platforms web,android,ios] [--risk low|medium|high|critical]
+  start --request TEXT --module ID --task ID [--session SESSION_KEY] [--module-name NAME] [--task-name NAME] [--platforms web,ios] [--risk low|medium|high|critical]
   review --module MODULE --task TASK --approve --confirmed-by USER --confirmation-text "确认开始测试" [--session SESSION_KEY] [--confirmation-source current-chat-explicit-approval]
   test --module MODULE --task TASK [--session SESSION_KEY] [--scenario SCENARIO] [execution context flags]
   archive --module MODULE --task TASK
   Advanced and administration:
-  workflow bootstrap --request TEXT --module ID --task ID [--module-name NAME] [--task-name NAME] [--platforms web,android,ios] [--risk low|medium|high|critical]
+  workflow bootstrap --request TEXT --module ID --task ID [--module-name NAME] [--task-name NAME] [--platforms web,ios] [--risk low|medium|high|critical]
   workflow status --module ID --task ID
   session bind --module MODULE --task TASK [--run RUN] [--session SESSION_KEY] [--session-host HOST] | session current|clear|list [--session SESSION_KEY]
   regression export --module MODULE --task TASK --run RUN_ID [--id SCRIPT_ID] [--session SESSION_KEY]
@@ -79,9 +80,9 @@ Commands:
   impact analyze [--base REF] [--head REF] [--changed-files FILE1,FILE2]
   release check [--profile fast|normal|full] [--base REF] [--head REF] [--changed-files FILE1,FILE2] [--plan-only] [execution context flags]
   release list | release show|report CHECK_ID
-  host list | host attest --id ID --capabilities CAP1,CAP2 --permission-status verified|missing|unknown [--host HOST] [--version VERSION] | host import --file HOST_CAPABILITIES.json | host doctor [--platform android|ios]
+  host list | host attest --id ID --capabilities CAP1,CAP2 --permission-status verified|missing|unknown [--host HOST] [--version VERSION] | host import --file HOST_CAPABILITIES.json | host doctor [--platform web|ios]
   context module MODULE
-  module list | module create ID --name NAME [--description TEXT] [--platforms web,android,ios] [--source-hints PATHS] [--entry-points PATHS] [--dependencies MODULES] | module update ID [--name NAME] [--description TEXT] [--risk LEVEL] [same mapping flags] | module archive ID | module plan ID | module coverage ID
+  module list | module create ID --name NAME [--description TEXT] [--platforms web,ios] [--source-hints PATHS] [--entry-points PATHS] [--dependencies MODULES] | module update ID [--name NAME] [--description TEXT] [--risk LEVEL] [same mapping flags] | module archive ID | module plan ID | module coverage ID
   task list | task create ID --module MODULE [metadata flags] | task update ID --module MODULE [metadata flags] | task plan|finalize|archive ID --module MODULE | task regression show|run ID --module MODULE
   module regression show|run MODULE [--priority p0|p1|p2|p3]
   memory list | memory search TEXT | memory add ID --module MODULE [--task TASK] --title TEXT --content TEXT | memory review ID --module MODULE [--task TASK] --approve|--reject
@@ -90,7 +91,7 @@ Commands:
   run step RUN --action TEXT --detail TEXT --screenshot PATH [--ui-action launch|navigate|click|input|fill|swipe|back|wait|assert|screenshot|reset|restart-app] [--safety-action ACTION] [--scenario SCENARIO] [--status passed|failed|paused|blocked|adapted] [--visual-inspection performed|not-required|skipped] [--execution-mode host-automated|user-assisted|system-component-blocked|preseeded-test-data] [--locator-strategy STRATEGY] [--locator-value VALUE] [--actual-locator-strategy STRATEGY] [--actual-locator-value VALUE] [--input-refs key=ref,key=ref] [--expected-state TEXT] [--actual-state TEXT] [--adaptation TEXT]
   run evidence RUN --type TYPE --summary TEXT [--file PATH]
   run cleanup RUN --scenario ID --cleanup TEXT --actual TEXT --status passed|failed|blocked|paused|inconclusive [--screenshot PATH]
-  run recover RUN --action wait|refresh|back|restart-app|reset-sandbox-data|reconnect-mcp|fallback-locator|resume-checkpoint --reason TEXT --detail TEXT --outcome continued|blocked|paused|failed [--failed-step STEP]
+  run recover RUN --action wait|refresh|back|restart-app|reset-sandbox-data|fallback-locator|resume-checkpoint --reason TEXT --detail TEXT --outcome continued|blocked|paused|failed [--failed-step STEP]
   run guide-verdict RUN --step STEP_ID --status passed|failed|blocked|paused|inconclusive|adapted --confirmed-by HUMAN --confirmation-text TEXT [--note TEXT]
   run observe RUN --scenario ID --assertion ID --expected TEXT --actual TEXT --status passed|failed|paused|blocked [--screenshot PATH]
   run complete RUN | run show RUN | run report RUN
@@ -351,11 +352,12 @@ async function main(): Promise<void> {
     const initialized = existsSync(projectFile);
     if (initialized) assertManagedRuntimeVersion(qaPath(projectRoot));
     const project = initialized ? readProject(projectRoot) : initializeProject(projectRoot, { id: flag('--id'), name: flag('--name'), description: flag('--description'), platforms: listFlag('--platforms') });
+    const managedAssets = initialized ? syncManagedRuntimeAssets(qaPath(projectRoot)) : undefined;
     const requestedHosts = hostsFromFlags(args); const selectedHosts = requestedHosts.length ? requestedHosts : (process.stdin.isTTY && process.stdout.isTTY ? detectConfiguredHosts(projectRoot) : []);
     const managedHosts = Object.keys(configuredHostRecords(projectRoot));
     const hosts = args.includes('--force') ? selectedHosts : selectedHosts.filter(host => !managedHosts.includes(host));
     const integrations = hosts.map(host => { const result = installHostIntegration({ host, projectPath: projectRoot, scope: 'project', force: args.includes('--force') }); recordHostInstall(projectRoot, result); return result; });
-    output({ message: initialized ? 'QA project already initialized' : 'Initialized .qa-agent', project: project.project, path: qaPath(projectRoot), hosts, integrations }); return;
+    output({ message: initialized ? 'QA project already initialized and managed assets refreshed' : 'Initialized .qa-agent', project: project.project, path: qaPath(projectRoot), managedAssets, hosts, integrations }); return;
   }
   if (group === 'configure') {
     const projectPath = resolve(requiredFlag('--project'));
@@ -386,10 +388,13 @@ async function main(): Promise<void> {
     assertManagedRuntimeVersion(qaPath(projectRoot));
     const available = availableCapabilities(projectRoot);
     const projectPlatforms = listFlag('--platforms') ?? readProject(projectRoot).platforms;
+    const unsupportedPlatforms = projectPlatforms.filter(platform => !isSupportedPlatform(platform));
+    if (unsupportedPlatforms.length) return output({ ok: false, projectRoot, configuredPlatforms: projectPlatforms, supportedPlatforms: ['web', 'ios'], unsupportedPlatforms, message: `QA Agent currently supports only Web and iOS Simulator. Run qa-agent doctor --platforms web or ios after changing the Task or project platform.` });
+    normalizeSupportedPlatforms(projectPlatforms, ['web']);
     const requiredCapabilities = [...new Set(projectPlatforms.flatMap(platformCapabilities))];
     const missingCapabilities = requiredCapabilities.filter(capability => !available.includes(capability));
     output({
-      ok: true,
+      ok: missingCapabilities.length === 0,
       projectRoot,
       configuredPlatforms: projectPlatforms,
       availableCapabilities: available,
@@ -857,7 +862,6 @@ ${advancedUsage}`);
   if (group === 'skill') {
     const skillRoot = join(process.cwd(), 'skill', 'qa-agent');
     const projectRoot = findProjectRoot();
-    if (projectRoot) assertManagedRuntimeVersion(qaPath(projectRoot));
     if (action === 'list') return output(projectRoot ? readIndex(projectRoot, 'skills') : [{ name: 'qa-agent', path: skillRoot }]);
     if (action === 'validate') { const result = validateSkill(skillRoot); output(result); if (!result.valid) process.exitCode = 1; return; }
   }

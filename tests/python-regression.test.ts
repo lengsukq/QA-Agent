@@ -54,6 +54,7 @@ result_path.parent.mkdir(parents=True, exist_ok=True)
 result_path.write_text(json.dumps(result))
 sys.exit(0)
 `, 'utf8');
+  process.env.QA_AGENT_RUNNER_DIR = join(root, '.qa-agent', 'runner');
 }
 
 test('exports a reviewed regression steps draft, publishes it into the Task, and replays it from the command line', () => {
@@ -181,4 +182,5 @@ test('exports a reviewed regression steps draft, publishes it into the Task, and
   assert.ok(report.includes(`screenshots/${sourceStepId}.png`));
   assert.equal(readPythonRegression(root, task.metadata.moduleId, task.metadata.id, scriptId).status, 'validated');
   assert.equal(JSON.parse(run(root, 'validate')).valid, true);
+  delete process.env.QA_AGENT_RUNNER_DIR;
 });

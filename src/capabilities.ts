@@ -1,17 +1,27 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { qaPath } from './project.ts';
-import { projectRunnerDir } from './runner-path.ts';
+import { resolveRunner } from './runner-path.ts';
+import { assertSupportedPlatform, isSupportedPlatform, platformMismatchAdvice, SUPPORTED_PLATFORMS, type SupportedPlatform } from './platform.ts';
 import { readJson } from './store.ts';
 import type { CapabilityStatus, ExecutionSnapshot, PermissionStatus } from './types.ts';
 
 type HostConnection = { id: string; status: 'available' | 'unavailable'; capabilities: string[]; version?: string; permissionStatus?: PermissionStatus };
+export { assertSupportedPlatform, isSupportedPlatform, platformMismatchAdvice, SUPPORTED_PLATFORMS } from './platform.ts';
+export type { SupportedPlatform } from './platform.ts';
+
+function localRunnerCapabilities(root: string): string[] {
+  const diagnosis = runnerDiagnosis(root);
+  const capabilities: string[] = [];
+  if (diagnosis.adapters.web.available) capabilities.push('browser.interact', 'browser.inspect');
+  if (diagnosis.adapters.ios.available) capabilities.push('ios.simulator.interact', 'ios.screenshot');
+  return capabilities;
+}
 
 export function availableCapabilities(root: string): string[] {
-  const connections = readJson<{ connections?: HostConnection[] }>(qaPath(root, 'mcp.json')).connections ?? [];
-  const attested = connections.filter(item => item.status === 'available').flatMap(item => item.capabilities ?? []);
-  return [...new Set(attested)].sort();
+  // mcp.json is retained as compatibility data only. It must never satisfy
+  // an execution capability or allow a UI run to bypass the local Runner.
+  return [...new Set(localRunnerCapabilities(root))].sort();
 }
 
 export function checkCapabilities(root: string, required: string[], optional: string[] = []): CapabilityStatus {
@@ -21,11 +31,12 @@ export function checkCapabilities(root: string, required: string[], optional: st
 }
 
 export function capabilitySnapshot(root: string, platform: string): Pick<ExecutionSnapshot, 'mcpSnapshot' | 'permissionSnapshot'> {
+  assertSupportedPlatform(platform);
   const connections = readJson<{ connections?: HostConnection[] }>(qaPath(root, 'mcp.json')).connections ?? [];
   const mcpSnapshot = connections.map(item => ({ id: item.id, status: item.status, capabilities: item.capabilities ?? [], version: item.version, permissionStatus: item.permissionStatus ?? 'unknown' as PermissionStatus }));
   const required = platformCapabilities(platform);
-  const relevant = mcpSnapshot.filter(item => item.status === 'available' && required.some(capability => item.capabilities.includes(capability)));
-  const permissionStatus: PermissionStatus = relevant.length === 0 ? 'unknown' : relevant.every(item => item.permissionStatus === 'verified') ? 'verified' : relevant.some(item => item.permissionStatus === 'missing') ? 'missing' : 'unknown';
+  const localReady = localRunnerCapabilities(root).some(capability => required.includes(capability));
+  const permissionStatus: PermissionStatus = localReady ? 'verified' : 'missing';
   return { mcpSnapshot, permissionSnapshot: { status: permissionStatus, permissions: [
     { name: 'Screen Recording', status: permissionStatus, detail: 'Required for screenshots and visual evidence.' },
     { name: 'Accessibility', status: permissionStatus, detail: 'Required for UI interaction and simulator control.' },
@@ -35,21 +46,20 @@ export function capabilitySnapshot(root: string, platform: string): Pick<Executi
 
 export function capabilityAdvice(missing: string[]): string[] {
   return missing.map(capability => {
-    if (capability.startsWith('browser.')) return `${capability}: have the host Agent attach a browser-tool capability snapshot.`;
-    if (capability === 'android.adb' || capability === 'android.screenshot') return `${capability}: have the host Agent attach an Android emulator/device capability snapshot after user approval.`;
-    if (capability.startsWith('ios.')) return `${capability}: have the host Agent attach an iOS Simulator/Appium capability snapshot after user approval.`;
-    return `${capability}: have the host Agent attach an available capability snapshot.`;
+    if (capability.startsWith('browser.')) return `${capability}: install Python Playwright and ensure the packaged QA Agent Runner is available; execute through qa-agent act.`;
+    if (capability.startsWith('ios.')) return `${capability}: ensure Python, xcrun simctl, idb, a booted iOS Simulator, and the packaged QA Agent Runner are available; execute through qa-agent act.`;
+    return `${capability}: this capability is not supported by the built-in Web/iOS Runner.`;
   });
 }
 
 export function platformCapabilities(platform: string): string[] {
-  if (platform === 'android') return ['android.adb', 'android.screenshot'];
   if (platform === 'ios') return ['ios.simulator.interact', 'ios.screenshot'];
-  return platform === 'web' ? ['browser.interact', 'browser.inspect'] : [];
+  if (platform === 'web') return ['browser.interact', 'browser.inspect'];
+  return [];
 }
 
 export function hostCapabilityDiagnosis(root: string, platform: string): object {
-  if (!['android', 'ios'].includes(platform)) throw new Error('--platform must be android or ios.');
+  assertSupportedPlatform(platform);
   const required = platformCapabilities(platform);
   const status = checkCapabilities(root, required);
   const snapshot = capabilitySnapshot(root, platform);
@@ -57,18 +67,21 @@ export function hostCapabilityDiagnosis(root: string, platform: string): object 
   return {
     platform, ready: status.missing.length === 0 && permissionStatus === 'verified', requiredCapabilities: required, available: status.available, missing: status.missing, permissionStatus,
     userDecisionRequired: status.missing.length > 0 || permissionStatus !== 'verified',
-    macOSPermissions: ['Screen Recording (for screenshots/visual evidence)', 'Accessibility (for UI interaction)', ...(platform === 'ios' ? ['Developer Mode / Simulator automation where required'] : [])],
-    permissionNote: 'The runtime cannot grant or verify macOS permissions. The host Agent must submit a fresh capability snapshot after the user grants them.',
-    requestToUser: status.missing.length || permissionStatus !== 'verified' ? `APP testing needs an approved least-privilege ${platform === 'android' ? 'Android Emulator/ADB' : 'iOS Simulator/Appium'} MCP with interaction and screenshot access, plus verified macOS permissions.` : undefined,
-    nextSteps: status.missing.length || permissionStatus !== 'verified' ? [`Ask the user to approve connecting or installing the MCP.`, `Ask the user to grant Screen Recording and Accessibility permissions in macOS System Settings → Privacy & Security.`, `Have the host Agent import its fresh capability snapshot with qa-agent host import --file <snapshot.json>.`, `qa-agent host doctor --platform ${platform}`] : ['Mobile capability preflight passed; start an Agent-guided Run.'],
+    macOSPermissions: platform === 'ios' ? ['Developer Mode / Simulator automation where required'] : [],
+    permissionNote: 'The built-in Runner owns UI execution. Resolve local simulator/browser permissions and rerun Doctor; do not attach an MCP or call external UI tools.',
+    requestToUser: status.missing.length || permissionStatus !== 'verified' ? `${platform} execution requires the built-in QA Agent Runner and its local adapter prerequisites.` : undefined,
+    nextSteps: status.missing.length || permissionStatus !== 'verified' ? [`Run qa-agent doctor --platforms ${platform}.`, `Install or enable only the missing local Runner prerequisite reported by Doctor.`, `Rerun qa-agent doctor --platforms ${platform}.`] : ['Built-in Runner preflight passed; start qa-agent test and use qa-agent act for every UI action.'],
   };
 }
 
 export interface RunnerDiagnosis {
   python3: { available: boolean; version?: string };
   playwright: { available: boolean };
+  xcrun: { available: boolean };
+  simctl: { available: boolean; booted: boolean };
   idb: { available: boolean };
-  runnerDir: { available: boolean; path?: string };
+  runnerDir: { available: boolean; path?: string; source?: string; error?: string };
+  adapters: { web: { available: boolean; missing: string[] }; ios: { available: boolean; missing: string[] } };
 }
 
 /**
@@ -78,18 +91,26 @@ export function runnerDiagnosis(root: string): RunnerDiagnosis {
   const check = (cmd: string, args: string[]): string | undefined => {
     try { return execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 }).trim(); } catch { return undefined; }
   };
+  const command = process.platform === 'win32' ? 'where' : 'which';
 
-  const pythonVersion = check('python3', ['--version']);
-  const playwrightCheck = check('python3', ['-c', 'import playwright; print(playwright.__version__)']);
-  const idbCheck = check('which', ['idb']);
-
-  const candidate = projectRunnerDir(root);
-  const runnerPath = existsSync(join(candidate, 'qa_agent_runner')) ? candidate : undefined;
+  const python = process.env.QA_AGENT_PYTHON?.trim() || 'python3';
+  const pythonVersion = check(python, ['--version']);
+  const playwrightCheck = check(python, ['-c', 'import playwright; print(getattr(playwright, "__version__", "available"))']);
+  const xcrunCheck = check('xcrun', ['--find', 'simctl']);
+  const idbCheck = check(command, ['idb']);
+  const simctlDevices = xcrunCheck ? check('xcrun', ['simctl', 'list', 'devices', '--json']) : undefined;
+  const runner = resolveRunner(root);
+  const webMissing = [!runner.available ? 'runner' : '', !pythonVersion ? 'python3' : '', !playwrightCheck ? 'playwright' : ''].filter(Boolean);
+  const simctlBooted = Boolean(simctlDevices && /"state"\s*:\s*"Booted"/i.test(simctlDevices));
+  const iosMissing = [!runner.available ? 'runner' : '', !pythonVersion ? 'python3' : '', !xcrunCheck ? 'xcrun simctl' : '', !idbCheck ? 'idb' : '', !simctlBooted ? 'booted-simulator' : ''].filter(Boolean);
 
   return {
     python3: { available: !!pythonVersion, version: pythonVersion?.replace('Python ', '') },
     playwright: { available: !!playwrightCheck },
+    xcrun: { available: !!xcrunCheck },
+    simctl: { available: !!simctlDevices, booted: simctlBooted },
     idb: { available: !!idbCheck },
-    runnerDir: { available: !!runnerPath, path: runnerPath },
+    runnerDir: { available: runner.available, path: runner.path, source: runner.source, error: runner.error },
+    adapters: { web: { available: webMissing.length === 0, missing: webMissing }, ios: { available: iosMissing.length === 0, missing: iosMissing } },
   };
 }

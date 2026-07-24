@@ -35,9 +35,19 @@ export function assertHumanApprover(value: string): void {
 /** Hash only the user-reviewed execution contract, never mutable run metadata. */
 export function testPlanHash(task: TestTask): string {
   const contract = {
-    id: task.metadata.id, moduleId: task.metadata.moduleId, name: task.metadata.name,
-    description: task.description, objectives: task.objectives, scope: task.scope, preconditions: task.preconditions, moduleSnapshot: task.moduleSnapshot, requirements: task.requirements,
-    scenarios: task.scenarios.map(scenario => ({ id: scenario.id, title: scenario.title, input: scenario.input, preconditions: scenario.preconditions, intent: scenario.intent, expected: scenario.expected, evidence: scenario.evidence, cleanup: scenario.cleanup, risk: scenario.risk, planningStatus: scenario.planningStatus, priority: scenario.priority, requirementRefs: scenario.requirementRefs, sourceRefs: scenario.sourceRefs, plannedSteps: scenario.plannedSteps, visualAssertions: scenario.visualAssertions })),
+    // Keep identity and execution semantics stable, while allowing ordinary
+    // display edits (title, description, module labels and snapshots) without
+    // invalidating a reviewed execution contract.
+    id: task.metadata.id, moduleId: task.metadata.moduleId,
+    scope: { platforms: task.scope.platforms, environments: task.scope.environments, roles: task.scope.roles },
+    preconditions: task.preconditions,
+    requirements: {
+      testDataRefs: task.requirements?.testDataRefs ?? [],
+      environments: task.requirements?.environments ?? [],
+      confirmedDecisions: task.requirements?.confirmedDecisions ?? [],
+      risks: task.requirements?.risks ?? [],
+    },
+    scenarios: task.scenarios.map(scenario => ({ id: scenario.id, input: scenario.input, preconditions: scenario.preconditions, expected: scenario.expected, evidence: scenario.evidence, cleanup: scenario.cleanup, risk: scenario.risk, planningStatus: scenario.planningStatus, plannedSteps: scenario.plannedSteps, visualAssertions: scenario.visualAssertions })),
     requiredSkills: task.requiredSkills, capabilities: task.capabilities, safety: task.safety, evidence: task.evidence, evidencePolicy: task.evidencePolicy, recoveryPolicy: task.recoveryPolicy, regression: task.regression,
   };
   return createHash('sha256').update(JSON.stringify(canonicalize(contract))).digest('hex');

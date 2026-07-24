@@ -1,15 +1,19 @@
-import { cpSync, existsSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { builtInSkills } from './built-in-skills.ts';
 import { schemas } from './schemas.ts';
 import { listFiles, now, readJson, writeJsonAtomic } from './store.ts';
-import { bundledRunnerDir } from './runner-path.ts';
+import { resolveRunner, type RunnerResolution } from './runner-path.ts';
 import { QA_AGENT_VERSION } from './version.ts';
+import { testPlanHash } from './approval.ts';
+import type { TestTask } from './types.ts';
+
+const LEGACY_COMPATIBLE_VERSIONS = new Set(['0.3.92']);
 
 export interface ManagedAssetSyncResult {
   synchronizedSchemas: number;
   synchronizedBuiltInSkills: number;
-  synchronizedRunner: boolean;
+  runner: RunnerResolution;
   updatedProjectVersion: number;
 }
 
@@ -31,18 +35,48 @@ function skillIndexEntries(): Array<Record<string, unknown>> {
 export function assertManagedRuntimeVersion(qaRoot: string): { initializedAt?: string; version?: string } | undefined {
   const versionPath = join(qaRoot, '.version');
   const existing = existsSync(versionPath) ? readJson<{ initializedAt?: string; version?: string }>(versionPath) : undefined;
-  if (existing?.version && existing.version !== QA_AGENT_VERSION) {
+  if (existing?.version && existing.version !== QA_AGENT_VERSION && !LEGACY_COMPATIBLE_VERSIONS.has(existing.version)) {
     throw new Error(`Project Runtime version ${existing.version} is not supported by ${QA_AGENT_VERSION}. Remove .qa-agent and run qa-agent init to create a fresh project.`);
   }
   return existing;
 }
 
+function migrateLegacyExecutionContracts(qaRoot: string): void {
+  for (const taskPath of listFiles(join(qaRoot, 'modules'), path => basename(path) === 'task.json')) {
+    try {
+      const task = readJson<TestTask>(taskPath);
+      const directory = dirname(taskPath);
+      task.scenarios = (task.scenarioRefs ?? []).map(ref => readJson<TestTask['scenarios'][number]>(join(directory, ref)));
+      if (task.moduleSnapshotRef) task.moduleSnapshot = readJson<NonNullable<TestTask['moduleSnapshot']>>(join(directory, task.moduleSnapshotRef));
+      if (task.requirementsRef) task.requirements = readJson<NonNullable<TestTask['requirements']>>(join(directory, task.requirementsRef));
+      const planPath = join(directory, task.testPlanRef ?? 'test-plan.json');
+      if (existsSync(planPath)) {
+        const plan = readJson<NonNullable<TestTask['testPlan']>>(planPath);
+        plan.planHash = testPlanHash(task);
+        writeJsonAtomic(planPath, plan);
+      }
+      for (const manifestPath of listFiles(join(directory, 'regression'), path => path.endsWith('.json') && !path.endsWith('.steps.json'))) {
+        const manifest = readJson<Record<string, unknown>>(manifestPath);
+        if (['approved_unverified', 'validated'].includes(String(manifest.status))) {
+          manifest.status = 'stale';
+          manifest.staleReason = 'Runtime 0.3.93 execution contract migration; regenerate or reapprove only if execution semantics changed.';
+          manifest.updatedAt = now();
+          writeJsonAtomic(manifestPath, manifest);
+        }
+      }
+    } catch {
+      // Malformed legacy assets are reported by validate; migration remains safe.
+    }
+  }
+}
+
 export function syncManagedRuntimeAssets(qaRoot: string): ManagedAssetSyncResult {
   const existing = assertManagedRuntimeVersion(qaRoot);
+  if (existing?.version && LEGACY_COMPATIBLE_VERSIONS.has(existing.version)) migrateLegacyExecutionContracts(qaRoot);
   const result: ManagedAssetSyncResult = {
     synchronizedSchemas: 0,
     synchronizedBuiltInSkills: 0,
-    synchronizedRunner: false,
+    runner: resolveRunner(join(qaRoot, '..')),
     updatedProjectVersion: existing?.version === QA_AGENT_VERSION ? 0 : 1,
   };
 
@@ -69,24 +103,7 @@ export function syncManagedRuntimeAssets(qaRoot: string): ManagedAssetSyncResult
     updatedAt: now(),
   });
 
-  // Sync runner directory if available
-  result.synchronizedRunner = syncRunnerAssets(qaRoot);
-
   return result;
-}
-
-function syncRunnerAssets(qaRoot: string): boolean {
-  const bundled = bundledRunnerDir();
-  const source = existsSync(join(bundled, 'qa_agent_runner')) ? bundled : undefined;
-  if (!source) return false;
-
-  const target = join(qaRoot, 'runner');
-  try {
-    cpSync(source, target, { recursive: true, force: true });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function sameJson(left: unknown, right: unknown): boolean {
@@ -134,8 +151,8 @@ export function inspectManagedRuntimeAssets(qaRoot: string): string[] {
     if (!expectedSkills.has(basename(path))) errors.push(`${path}: unsupported managed built-in Skill is present; create a fresh .qa-agent project.`);
   }
 
-  const runnerDirectory = join(qaRoot, 'runner');
-  if (!existsSync(join(runnerDirectory, 'qa_agent_runner'))) errors.push(`${runnerDirectory}: managed Python Runner is missing; run qa-agent update.`);
+  const runner = resolveRunner(join(qaRoot, '..'));
+  if (!runner.available) errors.push(`${runner.error ?? 'Unified Runner is missing.'} Run qa-agent update or configure QA_AGENT_RUNNER_DIR.`);
 
   const indexPath = join(qaRoot, 'index', 'skills.json');
   if (!existsSync(indexPath)) errors.push(`${indexPath}: managed Skill index is missing.`);

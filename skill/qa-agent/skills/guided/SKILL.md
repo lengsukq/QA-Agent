@@ -9,6 +9,8 @@ Use this Skill when a human QA wants to direct the test one step at a time, expl
 
 Read `references/workflow.md` from the main `qa-agent` Skill before acting. Runtime owns the shared Task/Run/Step core, evidence, safety, reports, and Scenario regression drafts. User-led control keeps only one pending interaction; completed approvals and verdicts live on their Step.
 
+Guided UI execution is limited to Web and iOS Simulator through `qa-agent act` and the built-in Runner. Never call MCP, Playwright, xcrun, idb, ADB, or another UI tool directly. If the selected platform is wrong, stop and run `qa-agent doctor --platforms <web|ios>` before reapplying the PlanDraft.
+
 ## Prepare the Case
 
 1. Create or resume it with `qa-agent check --mode guided --request "<request>"`.

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { capabilityAdvice, capabilitySnapshot, checkCapabilities, platformCapabilities } from './capabilities.ts';
+import { assertSupportedPlatform, platformMismatchAdvice } from './platform.ts';
 import { checkpointRun, gitMetadata, qaPath, readRunById, readTask, saveRun, saveTask, taskSourceEvidenceDirectory, taskSourceRunDirectory, taskSourceRunPath } from './project.ts';
 import { rebuildIndexes } from './indexer.ts';
 import { appendTaskEvent } from './events.ts';
@@ -20,6 +21,7 @@ type RunContextInput = Partial<ExecutionSnapshot> & { scenarioId?: string };
 
 export function buildExecutionSnapshot(root: string, task: TestTask, input: RunContextInput = {}): ExecutionSnapshot {
   const platform = input.platform ?? task.scope.platforms[0] ?? 'web';
+  assertSupportedPlatform(platform);
   const snapshot = capabilitySnapshot(root, platform);
   return {
     environment: input.environment ?? task.scope.environments[0] ?? 'local', platform, role: input.role ?? task.scope.roles[0] ?? 'default',
@@ -138,6 +140,12 @@ function resetSourceRunSlot(root: string, task: TestTask, previous: TestRun): vo
 }
 
 function beginAgentGuidedRunUnlocked(root: string, task: TestTask, context: RunContextInput = {}): TestRun {
+  const requestedPlatform = context.platform ?? task.scope.platforms[0] ?? 'web';
+  assertSupportedPlatform(requestedPlatform);
+  if (!task.scope.platforms.includes(requestedPlatform)) {
+    const run = newRun(root, task, context);
+    return block(root, task, run, platformMismatchAdvice(task.scope.platforms[0], requestedPlatform), 'agent');
+  }
   const current = currentSourceRun(root, task);
   if (current?.status === 'running') {
     if (!executionContractIsCurrent(task, current.planHash)) return block(root, task, current, `Task plan changed after active Source Run ${current.id} started. Stop execution and obtain a new TestPlan approval before resuming.`, 'human');
@@ -155,7 +163,7 @@ function beginAgentGuidedRunUnlocked(root: string, task: TestTask, context: RunC
   const required = [...new Set([...task.capabilities.required, ...platformCapabilities(run.context.platform)])];
   const capabilities = checkCapabilities(root, required, task.capabilities.optional);
   if (capabilities.missing.length) return block(root, task, run, `Missing required capabilities: ${capabilities.missing.join(', ')}. ${capabilityAdvice(capabilities.missing).join(' ')}`, 'host');
-  if (run.context.platform !== 'web' && run.context.permissionSnapshot.status !== 'verified') return block(root, task, run, 'macOS/MCP permissions are not verified. Run host doctor --platform android|ios, grant Screen Recording and Accessibility, then retry.', 'host');
+  if (run.context.platform === 'ios' && run.context.permissionSnapshot.status !== 'verified') return block(root, task, run, 'iOS Simulator capability or permission is not verified. Run qa-agent doctor --platforms ios, fix the reported local Runner prerequisite, then retry qa-agent test. Do not call MCP or direct UI tools.', 'host');
   run.status = 'running';
   run.steps.push({ id: 'agent-guided-preflight', action: 'Agent-guided test preflight', status: 'passed', detail: 'Required capabilities are available. Persist every real UI action, screenshot, assertion, and cleanup.', at: now(), source: 'internal' });
   task.sourceRunRef = 'source-run/run.json';

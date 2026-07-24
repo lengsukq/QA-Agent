@@ -2,17 +2,17 @@
 
 QA Agent is a project-local AI testing runtime. Developers can request real UI checks in natural language while the Runtime persists Tasks, Runs, screenshots, business observations, cleanup, and reports.
 
-Current version: **v0.3.92**
+Current version: **v0.3.93**
 
-### What's new in v0.3.92
+### What's new in v0.3.93
 
-- **Packaged unified Python executor** — npm now ships `runner/`; project initialization copies it to `.qa-agent/runner` and JSON replay uses that managed executor.
+- **Locked built-in Runner** — npm ships the unified Runner; Web and iOS Simulator UI actions and JSON replay use it exclusively.
 - **qa-agent-doctor** — New first-run environment Skill that separates blocking capabilities from advisory tools and guides one repair step at a time.
 - **Regression step export** — `qa-agent regression export` extracts validated steps from a Source Run into a JSON replay draft.
 - **Capability detection** — `qa-agent doctor` now auto-detects browser, simulator, device, and Python regression environment readiness.
 - **UI interaction primitives** — New `act` / `driver` modules unify how host Agent UI operations are invoked and verdicts recorded.
 - **Task lifecycle management** — Engine refactored with Source Run freeze, regression run isolation, and automatic `stale` marking when TestPlan changes.
-- **Migration framework removed** — Cross-version upgrade migration is no longer supported; fresh init only, simplifying project structure.
+- **0.3.92 compatibility upgrade** — `qa-agent update` migrates the old execution contract and preserves existing project data and Runner copies.
 
 v0.3.91 puts AI-led and user-led execution on one Task, Plan, Run, Step, Evidence, and Report core. The modes differ only in who controls the next action:
 
@@ -36,14 +36,14 @@ v0.3.91 puts AI-led and user-led execution on one Task, Plan, Run, Step, Evidenc
 
 Use QA Agent to:
 
-- test Web, Android, or iOS features;
+- test Web or iOS Simulator features;
 - let an Agent inspect source before selecting test entry points;
 - persist actual actions, screenshots, and business results;
 - resume interrupted testing;
 - promote a proven flow into reusable regression;
 - run impact-aware release GO/NO-GO checks.
 
-QA Agent does not replace browser, simulator, or device tooling. The host Agent calls tools such as Playwright, ADB, or iOS Simulator MCP. QA Agent owns state, safety, evidence, reports, and regression assets.
+QA Agent supports only Web and iOS Simulator through its built-in Runner. The Agent may call `qa-agent act` and Runtime commands only; direct MCP, Playwright, ADB, xcrun, idb, and other UI tools are forbidden.
 
 ## Install
 
@@ -68,7 +68,7 @@ qa-agent --version
 Expected output:
 
 ```text
-0.3.92
+0.3.93
 ```
 
 ## Initialize a project
@@ -143,7 +143,7 @@ Install QA Agent
 
 ## Recommended regression stack
 
-This is QA Agent's default recommendation, not a mandatory dependency. An existing automation framework may remain in use when it can run directly from the command line, write the QA Agent `result.json`, produce the Runtime report, and preserve required screenshots.
+The built-in Runner is the only UI execution path. Doctor reports these setup requirements; it does not install third-party packages or modify system permissions.
 
 ### Web external testing
 
@@ -161,9 +161,9 @@ Python 3.12+ + pytest + xcrun simctl + fb-idb CLI + idb_companion
 
 Use `simctl` for simulator, app, permission, and screenshot management; use `fb-idb` with `idb_companion` for UI automation; use pytest for fixtures, assertions, parameterization, and cleanup.
 
-### Agent-assisted exploration
+### Platform mismatch
 
-`ios-simulator-mcp` may assist the first exploratory run and screenshots, but it is not the only dependency of a formal regression replay.
+If the selected platform is wrong, stop and run `qa-agent doctor --platforms <web|ios>`, reapply the correct PlanDraft, repeat the normal confirmations, and then resume through `qa-agent act`. Do not use MCP to bridge a platform mismatch.
 
 ### Formal output
 
@@ -301,7 +301,7 @@ A Task no longer keeps multiple `runs/<run-id>/` histories. Before formal regres
 
 When the TestPlan changes, the old regression steps first become `stale`, while existing approval remains valid for ordinary plan or platform adjustments. Runtime may create a replacement Source Run without repeating both confirmations; new unresolved business questions still require QA confirmation.
 
-v0.3.92 does not create duplicate `summary.md`, Quick observed-Scenario JSON, Source Run history indexes, or Session Journal files.
+v0.3.93 does not create duplicate `summary.md`, Quick observed-Scenario JSON, Source Run history indexes, or Session Journal files.
 
 ## Regression steps and the unified Runner
 
@@ -364,13 +364,12 @@ Formal assets are stored under:
         └── evidence/
 ```
 
-Run the published steps from the command line. Runtime starts the managed executor copied to `.qa-agent/runner`:
+Run the published steps from the command line. Runtime resolves the global or npm-packaged unified Runner:
 
 ```bash
 qa-agent regression run <script-id> \
   --module <module> \
   --task <task> \
-  --bridge '<host bridge command>'
 ```
 
 The replay path is always the unified executor:
@@ -379,7 +378,7 @@ The replay path is always the unified executor:
 qa-agent regression run → python3 -m qa_agent_runner replay <steps-file>
 ```
 
-Python fixes the execution order and the host bridge performs real browser, simulator, or device operations. Runtime stores the structured result and report. The Agent reviews the result, screenshots, stdout, stderr, and cleanup without replanning the steps.
+The unified Runner fixes execution order and performs Web operations through Playwright or iOS Simulator operations through `xcrun simctl` and `idb`. Runtime stores the structured result and report. The Agent reviews the result, screenshots, stdout, stderr, and cleanup without replanning the steps.
 
 A completed script contract becomes `validated`. A genuine business assertion may fail while the script contract remains valid; the Run still records the business FAIL.
 
@@ -442,22 +441,21 @@ Show strict regression, release, and administration commands with:
 qa-agent help --advanced
 ```
 
-## Initialize v0.3.92 from scratch
+## Initialize or upgrade to v0.3.93
 
 Install the CLI:
 
 ```bash
-npm install -g qa-agent-skill@0.3.92
+npm install -g qa-agent-skill@0.3.93
 ```
 
-v0.3.92 has no cross-version migration path and does not read or transform an older `.qa-agent` directory. Initialize the project with this version. To keep previous results as ordinary backup files, move the old directory aside first:
+Projects initialized with v0.3.92 can be upgraded in place. Run:
 
 ```bash
-mv .qa-agent .qa-agent.backup
-qa-agent init
+qa-agent update
 ```
 
-`qa-agent update` refreshes managed files, including the packaged Runner, created by the same 0.3.92 Runtime. A version mismatch is rejected.
+`qa-agent update` refreshes managed files, migrates the execution-contract hash, keeps existing `.qa-agent/runner` data, and resolves the global/npm Runner. Unsupported older versions must be backed up and initialized again.
 
 ## Validate a project
 
@@ -476,7 +474,7 @@ npm run pack:check
 
 ## Four Skills
 
-v0.3.92 installs:
+v0.3.93 installs:
 
 ```text
 qa-agent

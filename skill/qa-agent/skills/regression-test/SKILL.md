@@ -12,11 +12,13 @@ Do not create, edit, approve, or publish steps. Do not rediscover the business f
 ## Run
 
 1. Resolve the Task and formal steps. Use `qa-agent regression list --module <module> --task <task>` when needed.
-2. Run:
+2. Run only through Runtime:
 
 ```bash
 qa-agent regression run <script-id> --module <module> --task <task>
 ```
+
+The Runtime invokes `python3 -m qa_agent_runner replay` from the resolved unified Runner. Do not call MCP, Playwright, xcrun, idb, ADB, or a generated Python test directly.
 
 3. Let the steps file control the fixed sequence.
 4. Inspect every screenshot-backed checkpoint together with its expected and actual state. Do not decide the business result from `result.json` alone.

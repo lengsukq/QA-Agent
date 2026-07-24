@@ -12,7 +12,7 @@
 | `qa-agent doctor` | Inspect project and host-tool readiness. |
 | `qa-agent update` | Refresh managed files for a project created by the same Runtime version. |
 
-`qa-agent doctor` also reports the advisory Web and iOS regression stack from `references/recommended-regression-stack.md`. Missing recommended tools do not block QA Agent when another approved adapter satisfies the result contract.
+`qa-agent doctor --platforms web|ios` reports the local unified Runner and selected adapter prerequisites. Missing Python/Playwright blocks Web; missing Python/`xcrun simctl`/`idb`/a booted Simulator blocks iOS. Run Doctor again after each repair.
 
 ## Planning and approval
 
@@ -42,7 +42,7 @@ Before both exact confirmations, `qa-agent test` fails without creating a Run an
 
 ## UI execution (act commands)
 
-All UI interactions use `qa-agent act` commands. Each command auto-screenshots and auto-records to the active Run.
+Only Web and iOS Simulator are supported. All UI interactions use `qa-agent act` through the built-in Runner; each command auto-screenshots and auto-records to the active Run. Direct MCP, Playwright, xcrun, idb, ADB, and other UI tools are forbidden.
 
 | Command | Purpose |
 | --- | --- |

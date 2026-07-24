@@ -1,7 +1,7 @@
 import { qaPath } from './project.ts';
 import { readJson } from './store.ts';
 
-export const allowedRecoveryActions = ['wait', 'refresh', 'back', 'restart-app', 'reset-sandbox-data', 'reconnect-mcp', 'fallback-locator', 'resume-checkpoint'] as const;
+export const allowedRecoveryActions = ['wait', 'refresh', 'back', 'restart-app', 'reset-sandbox-data', 'fallback-locator', 'resume-checkpoint'] as const;
 export type RecoveryAction = typeof allowedRecoveryActions[number];
 
 export function assertSafeAction(root: string, action: string, safetyAction?: string): void {

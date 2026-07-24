@@ -1,8 +1,8 @@
 # Recommended Regression Stack
 
-This document is the single source of truth for QA Agent's recommended regression runner environment.
+This document is the single source of truth for QA Agent's built-in regression Runner prerequisites.
 
-The stack is **recommended, not mandatory**. A project may use another approved framework or adapter as long as the formal regression steps are replayed by a directly runnable runner that writes the QA Agent result contract, captures required screenshots, and preserves only useful evidence.
+The UI execution stack is fixed. The stack is recommended as a setup guide, not a project policy; selected-platform prerequisites are execution gates. Agents may record reviewed JSON steps, but formal replay must use `qa-agent regression run` and the packaged `qa_agent_runner`.
 
 ## Web external testing
 
@@ -69,22 +69,6 @@ Official reference:
 
 - <https://fbidb.io/docs/installation/>
 
-## Agent-assisted iOS exploration
-
-Recommended optional exploration tool:
-
-```text
-ios-simulator-mcp
-```
-
-Use it to inspect available simulators, launch and explore the app, capture screenshots, and verify the business flow before exporting regression steps.
-
-Do not make it the only dependency of the regression runner. The reviewed steps file should remain replayable from the command line through the selected adapter.
-
-Project reference:
-
-- <https://github.com/joshuayoes/ios-simulator-mcp>
-
 ## Formal output contract
 
 The official regression assets remain inside the corresponding Task:
@@ -111,21 +95,19 @@ Required outputs:
 
 ## Execution environment rules
 
-When preparing the regression runner environment:
+When preparing the regression Runner environment:
 
 1. Read the source Run and this recommendation.
-2. Prefer pytest plus the platform adapter listed above when the project has no established framework.
-3. Reuse an existing project framework when it already satisfies direct command-line replay, `result.json`, screenshots, cleanup, and Runtime reporting.
-4. Do not introduce an unapproved dependency silently.
-5. Provide required packages, commands, environment variables, and adapter requirements alongside the regression steps.
-6. Write all formal execution outputs to the Runtime-provided Task Run directories.
-7. Do not add unrelated reporting or diagnostic frameworks by default.
+2. Use the packaged Runner adapters: Playwright for Web; `xcrun simctl` plus `idb` for iOS Simulator.
+3. Do not introduce MCP, ADB, another browser/device driver, or a competing executor.
+4. Provide required packages, commands, environment variables, and adapter requirements alongside the regression steps.
+5. Write all formal execution outputs to the Runtime-provided Task Run directories.
 
 ## Doctor behavior
 
 `qa-agent doctor` reports the recommended stack for the project's configured Web and iOS platforms.
 
-Tool states are advisory:
+Runner prerequisites are execution gates:
 
 ```text
 available
@@ -134,4 +116,4 @@ incompatible
 unknown
 ```
 
-Missing recommended or optional tools must not block QA Agent when another approved execution adapter and the result contract are available.
+Missing Python/Playwright blocks Web. Missing Python/`xcrun simctl`/`idb`/a booted Simulator blocks iOS. Run `qa-agent doctor --platforms <web|ios>` for the next repair command.

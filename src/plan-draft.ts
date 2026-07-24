@@ -9,6 +9,7 @@ import { readModule, readTask, saveTask, taskDirectory, taskPrdPath } from './pr
 import { assertSafeId, hasSecrets, isSafeId, now } from './store.ts';
 import type { PlannedTestStep, PlanDraft, PlanDraftScenario, RequirementTrace, RiskLevel, TestScenario, TestTask, VisualAssertion } from './types.ts';
 import { taskState as resolveTaskState, transitionTaskState } from './workflow-model.ts';
+import { normalizeSupportedPlatforms } from './platform.ts';
 
 export interface PlanDraftApplyResult {
   changed: boolean;
@@ -156,11 +157,11 @@ export function applyPlanDraft(root: string, draft: PlanDraft): PlanDraftApplyRe
   if (!task.objectives.length) throw new Error('PlanDraft objectives must not be empty.');
   task.preconditions = stringArray(draft.preconditions, 'PlanDraft preconditions');
   task.scope = {
-    platforms: stringArray(draft.scope?.platforms, 'PlanDraft scope.platforms', task.scope.platforms),
+    platforms: normalizeSupportedPlatforms(stringArray(draft.scope?.platforms, 'PlanDraft scope.platforms', task.scope.platforms), ['web'], 'PlanDraft scope.platforms'),
     environments: stringArray(draft.scope?.environments, 'PlanDraft scope.environments', task.scope.environments),
     roles: stringArray(draft.scope?.roles, 'PlanDraft scope.roles', task.scope.roles),
   };
-  const platformCapabilityNames = new Set(['browser.interact', 'browser.inspect', 'android.adb', 'android.screenshot', 'ios.simulator.interact', 'ios.screenshot']);
+  const platformCapabilityNames = new Set(['browser.interact', 'browser.inspect', 'ios.simulator.interact', 'ios.screenshot']);
   task.capabilities.required = [...new Set([
     ...task.capabilities.required.filter(capability => !platformCapabilityNames.has(capability)),
     ...task.scope.platforms.flatMap(platformCapabilities),
@@ -196,7 +197,7 @@ export function applyPlanDraft(root: string, draft: PlanDraft): PlanDraftApplyRe
   if (needsFreshConfirmation) invalidateApproval(task);
   if (!approvalIsCurrent(task)) {
     if (fromState !== 'awaiting_approval') transitionTaskState(root, task, 'awaiting_approval', 'test_plan_changed', needsFreshConfirmation ? 'new_qa_question_requires_confirmation' : 'plan_draft_applied', { actor: { type: 'agent', id: 'qa-agent' }, artifactHash: planHash, idempotencyKey: `plan-draft-state:${task.metadata.id}:${planHash}` });
-  } else if (['planning', 'awaiting_approval'].includes(fromState)) {
+  } else if (['planning', 'awaiting_approval', 'blocked'].includes(fromState)) {
     transitionTaskState(root, task, 'ready', 'test_plan_updated', 'existing_approval_preserved', { actor: { type: 'agent', id: 'qa-agent' }, artifactHash: planHash, idempotencyKey: `plan-draft-ready:${task.metadata.id}:${planHash}` });
   }
   appendTaskEvent(root, {
