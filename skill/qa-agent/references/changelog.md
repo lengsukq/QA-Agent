@@ -1,5 +1,12 @@
 # 更新日志
 
+## v0.3.97
+
+- PlanDraft 步骤新增 `regressionStep` 字段，执行通过后 Runtime 自动回填统一执行器 JSON 片段。
+- 新增 check 命令：Web `assert-value/assert-not-visible/assert-attribute/assert-count`；iOS `assert-not-visible/assert-attribute/assert-count`。
+- 新增高频命令：Web `check/uncheck/get-text/upload/accept-dialog/dismiss-dialog`；iOS `toggle/get-text/accept-dialog/dismiss-dialog`。
+- 虚拟环境管理：Doctor 引导在 `.qa-agent/venv/` 下创建 venv；Runtime 解析优先级 `QA_AGENT_PYTHON` > `.qa-agent/venv/bin/python` > `python3`。
+
 ## v0.3.96
 
 - 平台声明改为 Agent 基于源码、配置和可用能力自动判断；只有平台证据不明确时才询问 QA。

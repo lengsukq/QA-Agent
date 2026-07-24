@@ -36,7 +36,7 @@ Do not treat “可以”, “继续”, or “没问题” as PRD confirmation 
 
 ## Execution and result
 
-1. Web/iOS only. `qa-agent act` uses the built-in Runner server. Web: `navigate/click/fill/select/assert/scroll/hover/wait/screenshot/assert-value/assert-not-visible/assert-attribute/assert-count`; iOS: `launch/tap/type-text/swipe/describe/assert/wait/screenshot/assert-value/assert-not-visible/assert-attribute/assert-count`. Never call MCP or direct UI tools. Runner venv: `.qa-agent/venv/` (Doctor-created); Runtime resolves it automatically.
+1. Web/iOS only. `qa-agent act` uses the built-in Runner server. Web: `navigate/click/fill/select/check/uncheck/get-text/upload/accept-dialog/dismiss-dialog/assert*/scroll/hover/wait/screenshot/key`; iOS: `launch/tap/type-text/fill/clear/toggle/get-text/accept-dialog/dismiss-dialog/assert*/swipe/scroll/back/home/describe/wait/screenshot/key`. Never call MCP or direct UI tools. Runner venv: `.qa-agent/venv/` (Doctor-created); Runtime resolves it automatically.
 2. On mismatch, stop; run `qa-agent doctor --platforms <web|ios>`, reapply the correct Agent-inferred PlanDraft, repeat the computed confirmation, then run `qa-agent test --platform <web|ios>`. Ask only if the source remains ambiguous. Never use MCP as a bridge.
 3. Each `act` command auto-screenshots and auto-records. When a step passes, Runtime backfills its `regressionStep` into the matching PlannedTestStep.
 4. Record every declared business/visual assertion via `qa-agent act assert-text` or `act assert-visible`.

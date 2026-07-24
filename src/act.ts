@@ -6,8 +6,8 @@ import type { Locator, TestRun, UiAction } from './types.ts';
 import { isSupportedPlatform } from './platform.ts';
 
 const PLATFORM_COMMANDS: Record<'web' | 'ios', Set<string>> = {
-  web: new Set(['navigate', 'click', 'fill', 'select', 'assert-text', 'assert-visible', 'assert-value', 'assert-not-visible', 'assert-attribute', 'assert-count', 'wait', 'screenshot', 'scroll', 'hover', 'key']),
-  ios: new Set(['launch', 'terminate', 'install', 'tap', 'type-text', 'fill', 'clear', 'swipe', 'scroll', 'back', 'home', 'assert-visible', 'assert-text', 'assert-value', 'assert-not-visible', 'assert-attribute', 'assert-count', 'wait', 'screenshot', 'describe', 'key']),
+  web: new Set(['navigate', 'click', 'fill', 'select', 'check', 'uncheck', 'assert-text', 'assert-visible', 'assert-value', 'assert-not-visible', 'assert-attribute', 'assert-count', 'get-text', 'accept-dialog', 'dismiss-dialog', 'upload', 'wait', 'screenshot', 'scroll', 'hover', 'key']),
+  ios: new Set(['launch', 'terminate', 'install', 'tap', 'type-text', 'fill', 'clear', 'toggle', 'swipe', 'scroll', 'back', 'home', 'assert-visible', 'assert-text', 'assert-value', 'assert-not-visible', 'assert-attribute', 'assert-count', 'get-text', 'accept-dialog', 'dismiss-dialog', 'wait', 'screenshot', 'describe', 'key']),
 };
 
 function platformCommandError(platform: 'web' | 'ios', command: string): string | undefined {
@@ -49,6 +49,13 @@ const CMD_TO_UI_ACTION: Record<string, UiAction> = {
   'assert-not-visible': 'assert',
   'assert-attribute': 'assert',
   'assert-count': 'assert',
+  'get-text': 'assert',
+  'accept-dialog': 'click',
+  'dismiss-dialog': 'click',
+  check: 'click',
+  uncheck: 'click',
+  toggle: 'click',
+  upload: 'input',
   tap: 'click',
   'type-text': 'input',
   clear: 'input',
@@ -86,6 +93,8 @@ export interface ActOptions {
   keycode?: string;
   maxChars?: string;
   exact?: string;
+  filePath?: string;
+  checked?: string;
   scenario?: string;
   platform?: string;
   deviceUdid?: string;
@@ -201,6 +210,8 @@ function buildDriverCommand(command: string, options: ActOptions): Record<string
     params.keycode = options.keycode;
     params.key = options.keycode;
   }
+  if (options.filePath) params.filePath = options.filePath;
+  if (options.checked !== undefined) params.checked = options.checked !== 'false';
 
   return { cmd: driverName, params };
 }
@@ -233,6 +244,13 @@ function buildActionDescription(command: string, options: ActOptions, result: Dr
     case 'assert-not-visible': return `Assert not visible: ${options.locator}`;
     case 'assert-attribute': return `Assert ${options.locator} attribute`;
     case 'assert-count': return `Assert count for ${options.locator}`;
+    case 'get-text': return `Get text from ${options.locator}`;
+    case 'check': return `Check ${options.locator}`;
+    case 'uncheck': return `Uncheck ${options.locator}`;
+    case 'toggle': return `Toggle ${options.locator}`;
+    case 'accept-dialog': return 'Accept dialog';
+    case 'dismiss-dialog': return 'Dismiss dialog';
+    case 'upload': return `Upload ${options.filePath}`;
     case 'tap': return `Tap (${options.x}, ${options.y})`;
     case 'type-text': return `Type text`;
     case 'swipe': return `Swipe ${options.direction ?? `(${options.x1},${options.y1})→(${options.x2},${options.y2})`}`;

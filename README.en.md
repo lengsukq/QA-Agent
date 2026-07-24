@@ -2,9 +2,9 @@
 
 QA Agent is a project-local AI testing runtime. Developers can request real UI checks in natural language while the Runtime persists Tasks, Runs, screenshots, business observations, cleanup, and reports.
 
-Current version: **v0.3.96**
+Current version: **v0.3.97**
 
-### What's new in v0.3.96
+### What's new in v0.3.97
 
 - **Agent-inferred platform** — after the detailed TestPlan is generated, the Agent infers the unique Web or iOS platform from source/configuration and asks the QA only when the evidence is ambiguous.
 - **Risk-based confirmation** — eligible read-only checks use one `confirm test and start execution` reply; state-changing or high-risk flows retain separate plan and start confirmations.
@@ -15,7 +15,7 @@ Current version: **v0.3.96**
 - **Capability detection** — `qa-agent doctor` now auto-detects browser, simulator, device, and Python regression environment readiness.
 - **UI interaction primitives** — New `act` / `driver` modules unify how host Agent UI operations are invoked and verdicts recorded.
 - **Task lifecycle management** — Engine refactored with Source Run freeze, regression run isolation, and automatic `stale` marking when TestPlan changes.
-- **Fresh initialization** — v0.3.96 does not migrate older Runtime assets; initialize the project again and let Runner resolution use the global/npm package.
+- **Fresh initialization** — v0.3.97 does not migrate older Runtime assets; initialize the project again and let Runner resolution use the global/npm package.
 
 v0.3.91 puts AI-led and user-led execution on one Task, Plan, Run, Step, Evidence, and Report core. The modes differ only in who controls the next action:
 
@@ -71,7 +71,7 @@ qa-agent --version
 Expected output:
 
 ```text
-0.3.96
+0.3.97
 ```
 
 ## Initialize a project
@@ -315,7 +315,7 @@ A Task no longer keeps multiple `runs/<run-id>/` histories. Before formal regres
 
 When the TestPlan changes, the old regression steps first become `stale`. A platform selection change invalidates platform-bound approvals; Runtime reports the confirmation mode needed after the corrected PlanDraft is applied. New unresolved business questions still require QA confirmation.
 
-v0.3.96 does not create duplicate `summary.md`, Quick observed-Scenario JSON, Source Run history indexes, or Session Journal files.
+v0.3.97 does not create duplicate `summary.md`, Quick observed-Scenario JSON, Source Run history indexes, or Session Journal files.
 
 ## Regression steps and the unified Runner
 
@@ -455,22 +455,22 @@ Show strict regression, release, and administration commands with:
 qa-agent help --advanced
 ```
 
-## Initialize v0.3.96
+## Initialize v0.3.97
 
 Install the CLI:
 
 ```bash
-npm install -g qa-agent-skill@0.3.96
+npm install -g qa-agent-skill@0.3.97
 ```
 
-For a clean v0.3.96 setup, back up the old Runtime directory if needed, then initialize again:
+For a clean v0.3.97 setup, back up the old Runtime directory if needed, then initialize again:
 
 ```bash
 mv .qa-agent .qa-agent.backup
 qa-agent init
 ```
 
-`qa-agent update` refreshes managed files only for an already initialized v0.3.96 project and resolves the global/npm Runner. Unsupported older versions must be backed up and initialized again.
+`qa-agent update` refreshes managed files only for an already initialized v0.3.97 project and resolves the global/npm Runner. Unsupported older versions must be backed up and initialized again.
 
 ## Validate a project
 
@@ -489,7 +489,7 @@ npm run pack:check
 
 ## Four Skills
 
-v0.3.96 installs:
+v0.3.97 installs:
 
 ```text
 qa-agent

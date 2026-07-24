@@ -57,6 +57,13 @@ Only Web and iOS Simulator are supported. All UI interactions use `qa-agent act`
 | `qa-agent act assert-not-visible --run RUN --locator "strategy=value"` | Assert element does not exist or is not visible. |
 | `qa-agent act assert-attribute --run RUN --locator "strategy=value" --attribute ATTR --expected TEXT` | Assert a specific element attribute value. |
 | `qa-agent act assert-count --run RUN --locator "strategy=value" --expected N` | Assert the number of matching elements. |
+| `qa-agent act check --run RUN --locator "strategy=value"` | Check a checkbox or radio button (web). |
+| `qa-agent act uncheck --run RUN --locator "strategy=value"` | Uncheck a checkbox (web). |
+| `qa-agent act toggle --run RUN --locator "strategy=value" [--checked true\|false]` | Toggle a UISwitch/checkmark to desired state (iOS). |
+| `qa-agent act get-text --run RUN --locator "strategy=value"` | Extract element text/value for downstream use. |
+| `qa-agent act accept-dialog --run RUN [--locator "strategy=value"] [--text TEXT]` | Accept a JS dialog (web) or tap the allow button on a system alert (iOS). |
+| `qa-agent act dismiss-dialog --run RUN [--locator "strategy=value"]` | Dismiss a JS dialog (web) or tap cancel on a system alert (iOS). |
+| `qa-agent act upload --run RUN --locator "strategy=value" --file-path PATH` | Set files on an `<input type=file>` element (web). |
 | `qa-agent act tap --run RUN --locator "strategy=value"` | Semantically tap an iOS element from the current accessibility tree. |
 | `qa-agent act tap --run RUN --x N --y N` | Tap coordinates (iOS fallback only). |
 | `qa-agent act type-text --run RUN --text TEXT` | Type text (iOS). |

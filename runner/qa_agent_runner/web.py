@@ -17,6 +17,8 @@ class WebDriver:
         self._browser = self._pw.chromium.launch(headless=True)
         self._page = self._browser.new_page()
         self._page.set_default_timeout(30_000)
+        self._pending_dialogs: list = []
+        self._page.on("dialog", lambda d: self._pending_dialogs.append(d))
 
     def close(self) -> None:
         try:
@@ -207,6 +209,53 @@ class WebDriver:
         key = params.get("key", "Enter")
         self._page.keyboard.press(key)
         return f"Pressed {key}"
+
+    def _cmd_check(self, params: dict[str, Any]) -> str:
+        """Check a checkbox or radio button."""
+        loc = self._resolve(params.get("locator"))
+        loc.check(timeout=params.get("timeout", 30_000))
+        return f"Checked {params.get('locator', {}).get('value', 'element')}"
+
+    def _cmd_uncheck(self, params: dict[str, Any]) -> str:
+        """Uncheck a checkbox."""
+        loc = self._resolve(params.get("locator"))
+        loc.uncheck(timeout=params.get("timeout", 30_000))
+        return f"Unchecked {params.get('locator', {}).get('value', 'element')}"
+
+    def _cmd_get_text(self, params: dict[str, Any]) -> str:
+        """Extract element text and return it for downstream use."""
+        loc = self._resolve(params.get("locator"))
+        return loc.inner_text(timeout=params.get("timeout", 30_000))
+
+    def _cmd_accept_dialog(self, params: dict[str, Any]) -> str:
+        """Accept the next JavaScript dialog (alert/confirm/prompt)."""
+        prompt_text = params.get("text")
+        if not self._pending_dialogs:
+            self._page.wait_for_timeout(int(params.get("timeout", 3000)))
+        if not self._pending_dialogs:
+            raise AssertionError("No dialog appeared within timeout.")
+        dialog = self._pending_dialogs.pop(0)
+        dialog.accept(prompt_text or "")
+        return f"Accepted {dialog.type} dialog"
+
+    def _cmd_dismiss_dialog(self, params: dict[str, Any]) -> str:
+        """Dismiss the next JavaScript dialog."""
+        if not self._pending_dialogs:
+            self._page.wait_for_timeout(int(params.get("timeout", 3000)))
+        if not self._pending_dialogs:
+            raise AssertionError("No dialog appeared within timeout.")
+        dialog = self._pending_dialogs.pop(0)
+        dialog.dismiss()
+        return f"Dismissed {dialog.type} dialog"
+
+    def _cmd_upload(self, params: dict[str, Any]) -> str:
+        """Set files on an <input type=file> element."""
+        loc = self._resolve(params.get("locator"))
+        file_path = params.get("filePath", "")
+        if not file_path:
+            raise ValueError("upload requires a filePath.")
+        loc.set_input_files(file_path, timeout=params.get("timeout", 30_000))
+        return f"Uploaded {file_path}"
 
     # Keep the public act command name aligned with the iOS command surface.
     def _cmd_key(self, params: dict[str, Any]) -> str:

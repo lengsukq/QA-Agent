@@ -49,6 +49,13 @@ Format identifier: `qa-agent/regression-steps/v1`
 | `assert-not-visible` | `locator` | web, ios |
 | `assert-attribute` | `locator`, `attribute`, `expected` | web, ios |
 | `assert-count` | `locator`, `expected` | web, ios |
+| `check` | `locator` | web |
+| `uncheck` | `locator` | web |
+| `toggle` | `locator`, optional `checked` | ios |
+| `get-text` | `locator` | web, ios |
+| `accept-dialog` | optional `locator`, `text` | web, ios |
+| `dismiss-dialog` | optional `locator` | web, ios |
+| `upload` | `locator`, `filePath` | web |
 | `tap` | `locator` or `x,y` | ios |
 | `type-text` | `inputRef` or `value` | ios |
 | `clear` | `locator`, optional `maxChars` | ios |

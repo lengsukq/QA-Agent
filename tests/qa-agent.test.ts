@@ -179,10 +179,10 @@ function strictTaskWithRun(root: string, moduleId: string, taskId: string, risk:
   return { task: readTask(root, moduleId, taskId), run: completed };
 }
 
-test('initializes v0.3.96 with the bundled Runner and exposes simplified help', () => {
+test('initializes v0.3.97 with the bundled Runner and exposes simplified help', () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-agent-init-'));
   run(root, 'init', '--id', 'fixture');
-  assert.equal(run(root, '--version').trim(), '0.3.96');
+  assert.equal(run(root, '--version').trim(), '0.3.97');
   const help = run(root, 'help');
   for (const commandName of ['init', 'check', 'continue', 'finish', 'doctor', 'update']) assert.match(help, new RegExp(commandName));
   assert.doesNotMatch(help, /operation plan|operation replay/i);
@@ -203,7 +203,7 @@ test('initializes v0.3.96 with the bundled Runner and exposes simplified help', 
   assert.equal(existsSync(join(root, '.qa-agent', 'schemas', 'regression-suite.schema.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'skills', 'built-in', 'operation-replay.json')), false);
   assert.equal(existsSync(join(root, '.qa-agent', 'runner')), false);
-  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.96');
+  assert.equal(JSON.parse(readFileSync(join(root, '.qa-agent', '.version'), 'utf8')).version, '0.3.97');
   assert.equal(validateProject(root).valid, true);
 });
 

@@ -616,3 +616,65 @@ class IosDriver:
     def _cmd_describe(self, params: dict[str, Any]) -> dict[str, Any]:
         tree = self._read_tree()
         return {"action": "describe", "tree": tree, "count": len(tree), "screen": self._screen_bounds(tree)}
+
+    def _cmd_toggle(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Toggle a UISwitch or checkmark element to the desired state."""
+        locator = params.get("locator")
+        desired = params.get("checked")  # True/False/None; None = just toggle
+        element, resolved = self._resolve_element(locator, exact=True)
+        current = self._text(element.get("AXValue"))
+        is_on = current in ("1", "true", "True", "on")
+        if desired is not None:
+            target = bool(desired)
+            if is_on == target:
+                return {"action": "toggle", "already": target, "resolvedLocator": resolved}
+        x, y = self._center(element)
+        self._idb("ui", "tap", str(x), str(y))
+        self._wait_for_settle()
+        return {"action": "toggle", "resolvedLocator": resolved}
+
+    def _cmd_get_text(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Extract element text/value for downstream use."""
+        element, resolved = self._resolve_element(params.get("locator"), exact=bool(params.get("exact", True)))
+        actual = self._text(element.get("AXValue")) or self._text(element.get("AXLabel"))
+        return {"action": "get-text", "text": actual, "resolvedLocator": resolved}
+
+    def _cmd_accept_dialog(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Tap the accept/confirm button on a system alert."""
+        locator = params.get("locator")
+        if locator and locator.get("value"):
+            element, resolved = self._resolve_element(locator, exact=True)
+            x, y = self._center(element)
+            self._idb("ui", "tap", str(x), str(y))
+            self._wait_for_settle()
+            return {"action": "accept-dialog", "resolvedLocator": resolved}
+        for candidate in ["Allow", "OK", "Confirm", "\u5141\u8bb8", "\u597d", "\u786e\u5b9a"]:
+            try:
+                element, resolved = self._resolve_element({"strategy": "text", "value": candidate}, exact=True)
+                x, y = self._center(element)
+                self._idb("ui", "tap", str(x), str(y))
+                self._wait_for_settle()
+                return {"action": "accept-dialog", "button": candidate}
+            except (AssertionError, ValueError):
+                continue
+        raise AssertionError("No system dialog accept button found.")
+
+    def _cmd_dismiss_dialog(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Tap the dismiss/cancel button on a system alert."""
+        locator = params.get("locator")
+        if locator and locator.get("value"):
+            element, resolved = self._resolve_element(locator, exact=True)
+            x, y = self._center(element)
+            self._idb("ui", "tap", str(x), str(y))
+            self._wait_for_settle()
+            return {"action": "dismiss-dialog", "resolvedLocator": resolved}
+        for candidate in ["Don't Allow", "Cancel", "Dismiss", "\u4e0d\u5141\u8bb8", "\u53d6\u6d88"]:
+            try:
+                element, resolved = self._resolve_element({"strategy": "text", "value": candidate}, exact=True)
+                x, y = self._center(element)
+                self._idb("ui", "tap", str(x), str(y))
+                self._wait_for_settle()
+                return {"action": "dismiss-dialog", "button": candidate}
+            except (AssertionError, ValueError):
+                continue
+        raise AssertionError("No system dialog dismiss button found.")

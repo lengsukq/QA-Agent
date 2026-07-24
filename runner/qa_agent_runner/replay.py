@@ -53,6 +53,18 @@ def run_replay(steps_file: str) -> None:
             return f"Assert {params.get('attribute', '')}={params.get('expected', '')}".strip()
         if cmd == "assert_count":
             return f"Assert count {params.get('expected', '')} for {loc_val or ''}".strip()
+        if cmd in ("check", "uncheck"):
+            return f"{cmd.title()} {loc_val or ''}".strip()
+        if cmd == "toggle":
+            return f"Toggle {loc_val or ''}".strip()
+        if cmd == "get_text":
+            return f"Get text {loc_val or ''}".strip()
+        if cmd == "accept_dialog":
+            return f"Accept dialog {loc_val or ''}".strip()
+        if cmd == "dismiss_dialog":
+            return f"Dismiss dialog {loc_val or ''}".strip()
+        if cmd == "upload":
+            return f"Upload {params.get('filePath', '')}".strip()
         if cmd == "swipe":
             return f"Swipe {params.get('direction', '')}".strip()
         return f"{cmd} {loc_val or params.get('detail', '')}".strip() or (cmd or "step")
